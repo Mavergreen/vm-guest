@@ -122,11 +122,11 @@ excuse later._
 | Resolution changes | **none — 1280x720 only** | See below; the most informative finding here. |
 | Sleep | offered in the Apple menu | Not yet exercised. |
 | Shutdown | offered in the Apple menu | |
-| Reboot | | |
+| Reboot | **clean** | Hits the OpenCore picker, which defaults to Mavericks and auto-selects after a few seconds. Roughly 30 s to the desktop by eye; a measured figure comes from a timed boot on a clone. |
 | Networking | **works** | `usb-net` + slirp. `dig` resolves and `curl` completes an HTTP request. No configuration was needed. |
 | ICMP / `ping` | **fails, and cannot work here** | Not a guest problem — see below. |
 | DNS | **works out of the box** | Notable: Kostarelas needed to set the resolver to 1.1.1.1 and khronokernel documents a `scutil` recipe for the same problem. Neither was necessary here. Do not carry that step forward into P4 without re-testing whether it is still needed. |
-| Clock accuracy across a reboot | | |
+| Clock accuracy across a reboot | | To check on the next boot. |
 | Safari / TLS against a modern site | | Kostarelas found the modern web mostly broken |
 | Pointer feel | **fine enough** (user's words) | Relative `usb-mouse`, so a grab is required. `usb-tablet` does nothing on 10.9 without pmj's kext. |
 | Window drag / resize | **smooth enough to use** (user's words) | P5 baseline. Notable given there is no graphics acceleration at all: the CPU is drawing everything. |
