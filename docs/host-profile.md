@@ -66,6 +66,10 @@ survives reboot, and how to revert.
 
 ## 4. Generalization ledger
 
+Other hosts are available to test these against — see `docs/test-hosts.md`,
+which says which machine can settle which entry. **Each row below is a
+hypothesis, not a fact, until a second host has tried to falsify it.**
+
 Every assumption specific to this host. Populate as phases proceed.
 
 | # | Assumption | Phase | What another host would need |
