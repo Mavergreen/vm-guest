@@ -39,3 +39,41 @@ Conclusions:
   oddly.
 
 Not yet done: `kvm.ignore_msrs=1`, which needs `sudo` and therefore an ask.
+
+---
+
+## 2026-09-17 — P0 — preconditions
+
+Built `lib/preconditions.sh` (fact-judging verdict functions), `bin/preconditions.sh`
+(fact-gathering executable), and `tests/preconditions.bats`. Ran the check
+against this host:
+
+```
+STATUS  CHECK                     DETAIL
+------  -----                     ------
+PASS    cpu-vendor                Intel: the documented KVM path
+PASS    vmx                       VT-x present
+PASS    kvm-device                /dev/kvm is writable by this user
+WARN    ignore-msrs               kvm.ignore_msrs is 'N'; required by prior art. Needs sudo: ask before running 'echo 1 | sudo tee /sys/module/kvm/parameters/ignore_msrs'
+PASS    ovmf                      4M split CODE/VARS found in /usr/share/OVMF
+PASS    tool:qemu-system-x86_64   /usr/bin/qemu-system-x86_64
+PASS    tool:qemu-img             /usr/bin/qemu-img
+PASS    tool:dmg2img              /usr/bin/dmg2img
+PASS    tool:kpartx               /usr/sbin/kpartx
+PASS    tool:sgdisk               /usr/sbin/sgdisk
+PASS    tool:rsync                /usr/bin/rsync
+PASS    tool:xxd                  /usr/bin/xxd
+PASS    tool:openssl              /usr/bin/openssl
+PASS    tool:curl                 /usr/bin/curl
+PASS    tool:unzip                /usr/bin/unzip
+PASS    tool:python3              /usr/bin/python3
+PASS    tool:mkfs.hfsplus         /usr/sbin/mkfs.hfsplus
+PASS    tool:bats                 /usr/bin/bats
+
+mqg: preconditions: GO
+```
+
+Conclusion: this host is a GO. Everything passes except `ignore-msrs`, which
+warns rather than fails because setting it needs a `sudo` ask that hasn't
+happened yet -- not a blocker for further P0/P1 work, but must be done before
+first boot.
