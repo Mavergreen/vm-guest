@@ -38,11 +38,26 @@ Penryn,+ssse3,+sse4.1,+sse4.2
 
 # q35 provides no USB bus of its own, so the controller must be explicit --
 # the first boot attempt failed with "No 'usb-bus' bus found". UTM adds one
-# implicitly, which is why the bundle's config does not mention it. xhci
-# because the bundle sets InputLegacy false; 10.9 has AppleUSBXHCI. If this
-# proves unhappy, usb-ehci is the fallback.
+# implicitly, which is why the bundle's config does not mention it.
+#
+# EHCI with UHCI companions, NOT qemu-xhci. With xhci, OpenCore booted from
+# the USB image perfectly -- OVMF drives xhci fine -- but once Mavericks took
+# over, neither keyboard nor mouse produced any input at all. 10.9's
+# AppleUSBXHCI cannot drive QEMU's controller. This is the chipset layout a
+# real Mac of the era has, and the drivers are correspondingly solid.
+#
+# All three UHCI functions are needed: EHCI only speaks high speed, and
+# usb-kbd/usb-mouse are full-speed devices that get routed to a companion.
+# masterbus ties them into one logical usb.0, so devices still just say
+# bus=usb.0 and QEMU routes by speed.
 -device
-qemu-xhci,id=usb
+ich9-usb-ehci1,id=usb,bus=pcie.0,addr=0x1d.7,multifunction=on
+-device
+ich9-usb-uhci1,masterbus=usb.0,firstport=0,bus=pcie.0,addr=0x1d.0,multifunction=on
+-device
+ich9-usb-uhci2,masterbus=usb.0,firstport=2,bus=pcie.0,addr=0x1d.1
+-device
+ich9-usb-uhci3,masterbus=usb.0,firstport=4,bus=pcie.0,addr=0x1d.2
 
 # OpenCore over USB, as in the bundle. This image is byte-identical to
 # khronokernel's published EFI-LEGACY.img, so we use his directly.
@@ -91,11 +106,20 @@ user,id=net0
 -device
 usb-net,bus=usb.0,netdev=net0
 
-# Input. The bundle passes -usbdevice keyboard and sets InputLegacy false.
+# Input. usb-mouse, NOT usb-tablet.
+#
+# OS X cannot drive QEMU's usb-tablet natively -- that is exactly why
+# pmj/QemuUSBTablet-OSX exists as a third-party kext, and Somlo's KVM guide
+# specifies usb-kbd + usb-mouse. Wiring a tablet here produced a guest
+# cursor pinned at the top-left that received no motion events at all.
+#
+# Absolute positioning (no pointer-grab, cursor follows the host) is a P5
+# integration question, not something to fake with a device the guest has no
+# driver for.
 -device
 usb-kbd,bus=usb.0
 -device
-usb-tablet,bus=usb.0
+usb-mouse,bus=usb.0
 
 # DEVIATION FROM THE BUNDLE: it uses virtio-vga-gl, which wants a GL-capable
 # local display. Starting with plain VGA so the guest can run headless and be

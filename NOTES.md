@@ -271,3 +271,54 @@ OpenCore sets `DummyPowerManagement`.
   which is an odd pairing that 10.9 evidently tolerates.
 - Whether the e1000 NIC would work as DarwinKVM claims. Still on `usb-net`,
   per the bundle.
+
+## 2026-09-17 — P1 — input: EHCI, not XHCI; usb-mouse, not usb-tablet
+
+Two input failures after reaching the GUI, both mine, both worth recording
+because neither is mentioned in any of the prior art.
+
+### usb-tablet does not work on OS X without a third-party kext
+
+I wired `-device usb-tablet` for absolute positioning. The guest drew a cursor
+at the top-left and it never moved.
+
+This is documented in our own prior art and I missed it:
+**pmj/QemuUSBTablet-OSX exists precisely because OS X cannot drive QEMU's
+usb-tablet natively.** Somlo's guide correspondingly specifies
+`usb-kbd` + `usb-mouse`. A relative `usb-mouse` needs a pointer grab, which is
+less pleasant than absolute positioning — making that tablet kext a concrete,
+already-identified win for the deferred integration phase (M0), rather than a
+speculative one.
+
+### 10.9 cannot drive QEMU's XHCI controller
+
+After switching to `usb-mouse`, **neither mouse nor keyboard produced any
+input at all**. That ruled out the pointing device and implicated the
+controller.
+
+`qemu-xhci` is driven perfectly well by OVMF — OpenCore booted from a USB mass
+storage device on it, so the firmware half worked throughout, which is exactly
+what made this confusing. But once Mavericks takes over, `AppleUSBXHCI` in
+10.9 cannot drive it.
+
+Replaced it with the ICH9 EHCI + three UHCI companions, which is the chipset
+layout a real Mac of the era has:
+
+```
+-device ich9-usb-ehci1,id=usb,bus=pcie.0,addr=0x1d.7,multifunction=on
+-device ich9-usb-uhci1,masterbus=usb.0,firstport=0,bus=pcie.0,addr=0x1d.0,multifunction=on
+-device ich9-usb-uhci2,masterbus=usb.0,firstport=2,bus=pcie.0,addr=0x1d.1
+-device ich9-usb-uhci3,masterbus=usb.0,firstport=4,bus=pcie.0,addr=0x1d.2
+```
+
+All three UHCI functions are needed: EHCI only speaks high speed, and
+full-speed devices get routed to a companion. `masterbus` ties them into one
+logical `usb.0`, so devices still just say `bus=usb.0`.
+
+Confirmed working: pointer moves, `AppleUSBCDCECMData` loads for the `usb-net`
+NIC, and `info usb` shows keyboard and mouse at 480 Mb/s with no spurious hub.
+
+**This is a KVM-specific finding the reference configuration could not have
+given us.** UTM supplies its own USB controller implicitly, so the bundle's
+`config.plist` never mentions one at all — the setting was invisible precisely
+because something else was making the choice.
