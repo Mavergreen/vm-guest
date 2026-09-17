@@ -4,12 +4,28 @@ setup() {
     REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 }
 
-@test "repository has the expected top-level directories" {
-    for d in lib bin tests vm vm/profiles boot media vendor docs; do
-        [ -d "$REPO/$d" ] || { echo "missing directory: $d"; return 1; }
+@test "the Tier 2 quarantine ignores blobs placed in it" {
+    run git -C "$REPO" check-ignore -q vendor/reference/some-firmware.img
+    [ "$status" -eq 0 ]
+}
+
+@test "the Tier 2 quarantine does not ignore its own .gitignore" {
+    run git -C "$REPO" check-ignore -q vendor/reference/.gitignore
+    [ "$status" -ne 0 ]
+}
+
+@test "disk images are ignored wherever they appear" {
+    for f in work/scratch.qcow2 golden/base.qcow2 media/images/installer.img \
+             media/images/installer.dmg some.iso; do
+        run git -C "$REPO" check-ignore -q "$f"
+        [ "$status" -eq 0 ] || { echo "not ignored: $f"; return 1; }
     done
 }
 
-@test "the Tier 2 quarantine ignores its own contents" {
-    [ -f "$REPO/vendor/reference/.gitignore" ]
+@test "source files are not ignored" {
+    for f in lib/common.sh vm/run.sh boot/build-opencore.sh; do
+        run git -C "$REPO" check-ignore -q "$f"
+        [ "$status" -eq 0 ] && { echo "wrongly ignored: $f"; return 1; }
+    done
+    return 0
 }

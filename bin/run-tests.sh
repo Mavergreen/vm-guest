@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # Run the whole test suite. shellcheck is optional: it is not installed on
 # every host, and needing a package install to run tests is a bad trade.
+# bats is mandatory: it is how this script runs the suite at all.
 set -euo pipefail
-# Globs below (lib/*.sh etc.) may not match anything yet; without nullglob
-# an unmatched glob is passed to shellcheck as a literal, nonexistent
-# filename and it exits nonzero.
-shopt -s nullglob
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
@@ -13,21 +10,35 @@ cd "$repo_root"
 status=0
 
 echo "== bats =="
-if ! bats tests/; then
+if ! command -v bats >/dev/null 2>&1; then
+    echo "bats not found. Install bats-core (e.g. 'sudo apt install bats'," \
+        "or see https://github.com/bats-core/bats-core) and re-run." >&2
+    status=1
+elif ! bats tests/; then
     status=1
 fi
 
 echo
 echo "== shellcheck =="
 if command -v shellcheck >/dev/null 2>&1; then
+    # Collect scripts by walking the tree rather than a hardcoded glob list,
+    # so new script directories are picked up automatically and the check
+    # still runs on files that exist but aren't `git add`ed yet. Prune the
+    # quarantine and disk-image work areas: they hold third-party or
+    # generated content, not our shell code.
+    mapfile -t sh_files < <(
+        find . \( -path ./.git -o -path ./vendor/reference -o -path ./work \
+                  -o -path ./golden \) -prune -o -name '*.sh' -print
+    )
     # SC1091: shellcheck cannot follow dynamically-computed source paths.
-    if ! shellcheck -e SC1091 \
-        lib/*.sh bin/*.sh vm/*.sh boot/*.sh media/*.sh 2>/dev/null; then
-        status=1
+    if [ "${#sh_files[@]}" -gt 0 ]; then
+        if ! shellcheck -e SC1091 "${sh_files[@]}"; then
+            status=1
+        fi
     fi
 else
     echo "shellcheck not installed; skipping."
-    echo "To enable: sudo apt install shellcheck  (requires an ask)"
+    echo "Install it to lint shell scripts locally: sudo apt install shellcheck"
 fi
 
 exit "$status"
