@@ -1303,3 +1303,61 @@ evidence, not on the filename arithmetic I used before, which was wrong.
 Read the ESP log of a **successful** boot before explaining the log of a
 failing one. I had the successful boots and never looked. The control run
 that settles this took ninety seconds.
+
+## 2026-09-17 — P3 — p3-full verified, and a lesson about instruments
+
+**`./vm/run.sh p3-full` boots 10.9.5 to the desktop on a boot stack with no
+Tier 2 component in it.** Verified independently: 1280x800, 185,798 colours,
+99.8% of pixels lit. OpenCore 1.0.7 and OVMF both built offline from the same
+pinned EDK II tree, our own `config.plist`, `OpenHfsPlus.efi` mounting the
+volume.
+
+### It is not unattended, and that matters
+
+`Misc > Boot > Timeout = 5` with an empty NVRAM store means the picker's
+default entry is `EFI (external)` — the OpenCore disk itself. Left alone, it
+times out, re-enters `BOOTx64.efi`, and hangs. **A key must be pressed.**
+Sending `2` to the monitor every 0.6 s from t=0 works.
+
+This is a real constraint for later phases, not a detail: **P4's unattended
+pipeline and P6's CI both need a boot that requires no keypress.** Fixing it
+is a `config.plist` change — a remembered default, or hiding the auxiliary
+entry — and is the next experiment rather than something to leave discovered.
+
+### Counting colours was the wrong instrument
+
+I spent roughly an hour concluding that stock OVMF was broken, that our
+OpenCore was broken, and that `p3-full` did not boot. Every one of those
+conclusions came from `vm/screenshot.sh` reporting **"2 colours"**, which I
+read as "black screen".
+
+**A screen of white-on-black text has exactly two colours. A blank screen has
+one.** Every "black screen" I recorded was a correctly-rendered OpenCore
+picker. The difference between "working fine" and "completely dead" was a
+single integer, in the opposite direction from the intuitive reading.
+
+What it cost: a firmware bisection, four CPU-model tests, quirk flipping,
+renderer swaps, and a stop-and-ask to the user — all investigating a failure
+that was not happening.
+
+`vm/screenshot.sh` now reports **lit-pixel percentage and a verdict**
+(`blank` / `text (a menu or console)` / `graphical`) instead of leaving a
+colour count to be interpreted. ~0% is blank, a fraction of a percent is
+text, ~100% is a drawn desktop. That says what it means.
+
+The general lesson, which is worth more than the specific fix: **when an
+instrument produces a number, make it produce the conclusion instead.** A
+metric that requires interpretation will eventually be interpreted wrongly,
+and the wrong interpretation is indistinguishable from evidence.
+
+### Also corrected: the "Already started" log
+
+Both log lines come from **one** Bootstrap call, not two instances as I
+guessed. `OcLog` starts its TSC clock on first entry, so line one always
+reads `00:000` whenever it happens — the timestamps I used to reject the
+subagent's explanation prove nothing. And `PcdFixedDebugPrintErrorLevel`
+compiles `DEBUG_INFO` out of RELEASE builds, so **a successful boot logs
+nothing at all**; those two lines are what a *failed* boot leaves.
+
+I was reading a failing boot's log without ever having looked at a
+successful one's for comparison.

@@ -46,6 +46,33 @@ from PIL import Image
 base = sys.argv[1]
 im = Image.open(base + ".ppm")
 im.save(base + ".png")
+
+# Report lit pixels, not just the colour count.
+#
+# Counting distinct colours is a trap, and it cost an hour of P3: a screen
+# of white-on-black text has exactly TWO colours, which reads as "black
+# screen" if you are treating a low colour count as blank. A genuinely
+# blank screen has ONE. The difference between "the bootloader menu is
+# rendering fine" and "nothing is on screen" was a single integer, in the
+# wrong direction from the intuitive reading.
+#
+# Lit-pixel percentage says what it means: ~0% is blank, a fraction of a
+# percent is text, ~100% is a drawn desktop.
+g = im.convert("L")
+lit = sum(1 for px in g.getdata() if px > 20)
+total = im.size[0] * im.size[1]
+colours = len(set(im.convert("RGB").getdata()))
+pct = 100.0 * lit / total
+if pct < 0.01:
+    verdict = "blank"
+elif pct < 5:
+    verdict = "text (a menu or console)"
+else:
+    verdict = "graphical"
+sys.stderr.write(
+    "  %dx%d  %d colours  %d lit px (%.2f%%) -- %s\n"
+    % (im.size[0], im.size[1], colours, lit, pct, verdict)
+)
 PY
     rm -f "$base.ppm"
     log "saved $base.png"
