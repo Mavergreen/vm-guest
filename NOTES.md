@@ -1625,3 +1625,54 @@ non-interactive shell with "Error opening current controlling terminal". The
 unmount succeeds and the loop device detaches with the backing file, so this
 is cosmetic here — but a pipeline that loops many images should clean up
 deliberately rather than relying on that.
+
+## 2026-09-17 — P4 — `lib/hfs.sh`, and three corrections to the rootless probe
+
+Task 1 of the P4 plan. The probe's headline finding holds — no step needs
+root — but three of its details were wrong or incomplete, and each one would
+have leaked something.
+
+**1. `udisksctl loop-delete` is not merely cosmetic, and its exit status is
+not evidence.** With `--no-user-interaction` (which the probe did not pass)
+it works fine and does not want a polkit agent. But:
+
+- On a device that is **still mounted** it returns **0 and does not detach**.
+  `losetup -a` still lists it afterwards. It appears to arm a deferred
+  detach that fires at unmount instead.
+- After a successful unmount of such a device it returns
+  `NotAuthorized` — for a device that has already gone away.
+
+So the exit status means nothing in either direction. `hfs_detach` ignores it
+and polls `losetup -n -O BACK-FILE <dev>` until the device is really gone,
+warning only if it is not.
+
+**2. The loop device does *not* detach at unmount.** The probe recorded that
+it "detaches with the backing file", so cleanup could be left implicit.
+Measured: after `udisksctl unmount`, `losetup -a` still lists the device.
+Unmount then `loop-delete` is what frees it, in that order.
+
+**3. Parsing `udisksctl mount`'s message is a trap.** The output here is
+`Mounted /dev/loop0 at /media/schmonz/MQGTEST` — no trailing period on
+udisks 2.10.1, so the sed the plan sketched strips nothing. Worse, its `.*`
+is greedy: a volume named `Weird. at Name.` parses as `Name`. And two volumes
+with the same name get a numeric suffix — `/media/schmonz/OS X Base System`
+and `…/OS X Base System1` — which Task 3 will hit, since both BaseSystem and
+the target volume are called `OS X Base System`. `hfs_mount` asks
+`findmnt -n -f -o TARGET --source <dev>` instead, with the message-parse kept
+only as a fallback for a namespace where findmnt cannot see udisks' mount.
+
+### Measurements
+
+| Thing | Result |
+|---|---|
+| `mkfs.hfsplus` on a 6,550,020,096-byte sparse file | 0.09 s, 21 MB actually allocated |
+| `file(1)` on the result | `Apple HFS Plus version 4 data` — not `Macintosh HFS Extended`, which the plan's test expected; the test accepts all three spellings now |
+| Two images mounted at once, same volume name | works; separate loop devices, separate mountpoints |
+| `hfs_with_mounted` nested inside another | works, and both clean up |
+| Loop devices before/after `bats tests/hfs.bats` | 0 / 0, and `/media/schmonz/` left empty |
+
+**One caveat for Task 3.** `hfs_create` takes whole MiB, per the plan's
+signature. The reference size is 6,550,020,096 bytes = 6246.09375 MiB, so
+Task 3 cannot ask for a byte-exact image through that interface. Either
+round up or teach `hfs_create` a byte-sized argument — a decision for the
+task that actually needs it.
