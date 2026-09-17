@@ -9,6 +9,11 @@ else and see".
 Nothing here is scheduled. It exists so the hypotheses are attached to the
 hardware that can settle them.
 
+**Two axes, not one.** The machines below test *same software, different
+hardware*. The hypervisors at the end test *same guest disk, different
+virtualization stack* — a different question, and one nothing else here
+asks.
+
 ## The hosts
 
 ### Mac mini 2018 (`Macmini8,1`) — Linux Mint 22.3 — **primary**
@@ -111,3 +116,59 @@ in this design — P6 runs the same image pipeline under TCG.
 Not "it worked" or "it didn't", but **an updated ledger**. Every entry it
 touches should end up either confirmed host-specific, demoted to portable,
 or corrected. An entry nobody has tried to falsify is not knowledge.
+
+## Other hypervisors as targets
+
+Raised by the user: "Besides qemu and VBox, how else do people like to run
+full VM guests these days? Would be great to be able to cook for any of
+those targets."
+
+The useful split is **QEMU-family or not**, because it decides how much of
+this project ports.
+
+### QEMU underneath — the whole stack ports
+
+OpenCore, OVMF, the device model and the profiles all apply; only the
+configuration format differs.
+
+| Target | Notes |
+|---|---|
+| **Proxmox VE** | The homelab default. Already in our prior art via `proxmox-mac-guest`. Our QEMU arguments map nearly line-for-line onto a Proxmox VM config. |
+| **libvirt / virt-manager** | The Linux standard. The design says not to *depend* on libvirt, and that stands — but *emitting* a domain XML is a different thing entirely, and costs nothing at runtime. |
+| **UTM** | macOS/iOS QEMU front-end. Closes a loop: our reference configuration *came from* a UTM bundle, so emitting a `.utm` is mostly writing a plist whose shape `docs/utm-bundle-config.md` already documents. |
+
+### Not QEMU — only the disk ports
+
+Each brings its own EFI and SMC emulation, so our entire boot stack is
+bypassed and the macOS disk is the only artifact that crosses.
+
+| Target | Notes |
+|---|---|
+| **VMware Fusion / Workstation** | Free for personal use now, real macOS guest support on Apple hardware. Already required for the user's `ModernMavericks/container-tools` goal — see `decisions/0005`. |
+| **VirtualBox** | Prior art exists: the perf brief's `VMQemuVGA` and `virtio-net-osx` measurements were taken under it. |
+| **Parallels** | macOS host only, commercial. |
+
+### Build tooling worth knowing
+
+- **Packer** builds images for many of these from one template — and
+  `timsutton/osx-vm-templates`, already in our prior art for its first-boot
+  payload, *is* a Packer template.
+- **Vagrant** still wraps VirtualBox, libvirt and VMware.
+
+### Why this is cheaper than it sounds
+
+**The profiles are already a canonical, parameterised description of a
+machine.** Emitting libvirt XML, a Proxmox config or a `.utm` bundle from
+the same source is a format-mapping exercise, not a re-derivation. The
+non-QEMU family is genuinely different work, because there you swap our boot
+stack for theirs and carry only the disk.
+
+Which also sharpens the VirtualBox test: its value is proving **the macOS
+disk is a portable artifact, independent of our boot machinery.** That is the
+same question VMware and Parallels ask, so answering it once answers it for
+the whole non-QEMU family.
+
+### When
+
+After P4. "Emit config for target X" is much cheaper once one command
+produces the image, and pointless before then.
