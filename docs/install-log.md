@@ -118,17 +118,56 @@ excuse later._
 
 | Capability | State | Notes |
 |---|---|---|
-| Sound | | `intel-hda` is in the bundle but not yet in our profile |
-| Resolution changes | | which are offered? does 10.9 see `vgamem_mb=64`? |
-| Sleep | | |
-| Shutdown from the Apple menu | | |
+| Sound | **absent** | No output device at all. Expected: `intel-hda` is in the reference bundle but deliberately left out of our profile to reduce variables. Cheap to add. |
+| Resolution changes | **none — 1280x720 only** | See below; the most informative finding here. |
+| Sleep | offered in the Apple menu | Not yet exercised. |
+| Shutdown | offered in the Apple menu | |
 | Reboot | | |
-| Networking | | `usb-net`; `AppleUSBCDCECMData` loads during boot |
-| DNS | | Kostarelas needed 1.1.1.1 |
+| Networking | partly verified | `usb-net`, `AppleUSBCDCECMData` loads at boot. The guest discovered an AirPlay device on the LAN, so the stack is alive. |
+| ICMP / `ping` | **fails, and cannot work here** | Not a guest problem — see below. |
+| DNS | | |
 | Clock accuracy across a reboot | | |
 | Safari / TLS against a modern site | | Kostarelas found the modern web mostly broken |
-| Pointer feel | | P5 baseline. Relative `usb-mouse`, so a grab is required |
-| App Store / Apple ID | | |
+| Pointer feel | **fine enough** (user's words) | Relative `usb-mouse`, so a grab is required. `usb-tablet` does nothing on 10.9 without pmj's kext. |
+| Window drag / resize | **smooth enough to use** (user's words) | P5 baseline. Notable given there is no graphics acceleration at all: the CPU is drawing everything. |
+| App Store / Apple ID | | Deliberately not signed in. |
+
+### `ping` failing is a host artifact, not a guest limitation
+
+Both `ping 1.1.1.1` and `ping apple.com` fail. The obvious reading is "the
+guest has no network", and it would have gone into this table as such.
+
+It is wrong. QEMU's user-mode networking (slirp) can only forward ICMP if the
+host lets the QEMU process open unprivileged ICMP sockets, and on this host:
+
+```
+$ sysctl -n net.ipv4.ping_group_range
+1	0
+```
+
+That is an **empty** range — start 1, end 0 — so no group at all may open
+them. QEMU runs as the user, so slirp cannot carry ping under any
+circumstances here. Meanwhile the guest discovered an AirPlay device on the
+LAN, which needs a working network stack.
+
+Recorded because it is a trap: anyone debugging guest networking with `ping`
+on this host will chase a fault that is not there. Use a TCP test instead.
+
+### 10.9 offers exactly one resolution, and VRAM is not why
+
+System Preferences → Displays offers **only 1280x720**.
+
+This is worth more than it looks. Kostarelas saw about 3 MB of VRAM under UTM
+and could not pass a parameter to change it; the design took that as the
+constraint and made "try `vgamem_mb=64` and see whether 10.9 notices" an early
+experiment. We gave it 64 MB — twenty times what he had — and 10.9 still
+offers a single mode.
+
+So **VRAM was never the limiting factor**. The limit is that stock `-vga std`
+has no 10.9 driver capable of mode-setting. That reframes P5's display phase:
+raising VRAM is not the lever, and the real work is a display driver
+(VMQemuVGA or VMsvga2), or the resize-to-window path in the deferred
+integration milestone M5.
 
 ## Deferred post-install changes
 
