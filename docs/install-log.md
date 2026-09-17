@@ -64,9 +64,20 @@ Verified afterwards from the Disk Utility footer:
 
 ## First boot and Setup Assistant
 
-_To be filled in. Every screen and every field — this is the part P4 replaces
-with `.AppleSetupDone` and a first-boot payload, so the list of what Setup
-Assistant actually asks is the specification for it._
+**Decided in advance**, so the baseline is deliberate rather than whatever got
+clicked: a **minimal local account**, skipping everything skippable.
+
+- Account short name: **`mavsuser`**
+- **No Apple ID**, skip iCloud, skip registration, decline diagnostics
+
+Rationale: golden #1 is the baseline every P5 experiment is measured against,
+so it should carry as little incidental state as possible. An Apple ID would
+also bake credentials into an image the project rule says must never be
+published, and would complicate every clone made from it.
+
+Every screen and field below — this is the part P4 replaces with
+`.AppleSetupDone` and a first-boot payload, so the list of what Setup
+Assistant actually asks *is* the specification for it.
 
 | # | Screen | Action | Notes |
 |---|---|---|---|

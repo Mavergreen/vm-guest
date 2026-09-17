@@ -435,9 +435,11 @@ shared folders (use SMB, NFS, or sshfs), and a virtio block driver.
    P1's reference image to diff against — the reason Approach C runs first.
 2. **Unattended install on 10.9 is unproven.** Two candidate mechanisms,
    timeboxed; documented degradation to semi-automatic if both fail.
-3. **OVMF mismatch (P3).** Mint ships 4M split CODE/VARS only; the UTM bundle
-   most likely carries a combined older image. May force building EDK II or
-   sourcing a 2M package.
+3. **OVMF mismatch (P3) — CONFIRMED, 2026-09-17.** The bundle carries a
+   ~1.9 MB EDK II build passed via `-bios`, not a pflash pair; Mint ships 4 MB
+   split CODE/VARS only. P1 runs on the bundle's firmware, which means EFI
+   variables do not persist. P3 must find out whether a current 4 MB OVMF
+   boots this configuration at all.
 4. **The `t2` kernel is unusual.** Patched for Apple T2 hardware; any KVM or
    IOMMU oddity will be hard to distinguish from a guest bug.
 5. **No local parity with GitHub's runners (P6).** The Apple Silicon Mac is
@@ -445,6 +447,14 @@ shared folders (use SMB, NFS, or sshfs), and a virtio block driver.
 6. **10.9's unsigned-kext behavior is unverified** and matters in P5 for
    virtio-net, VMQemuVGA, and VMsvga2. The belief that 10.9 only warns is
    explicitly unconfirmed.
+7. **OpenCore's `Kernel > Block` had no observable effect (P1).** Enabling the
+   shipped block for `AppleTyMCEDriver` did not prevent the panic; changing
+   SMBIOS did. P3 builds its own OpenCore and should not assume `Block` works
+   until it has been demonstrated to.
+8. **Absolute pointing needs a kext.** `usb-tablet` does nothing on 10.9, so
+   the guest requires a pointer grab. This makes integration milestone M0
+   (`pmj/QemuUSBTablet-OSX`) a concrete, already-justified win rather than a
+   speculative one — worth reconsidering the decision to defer all of P7.
 
 ## 9. Stop and ask
 
