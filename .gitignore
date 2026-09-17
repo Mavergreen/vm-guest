@@ -1,0 +1,13 @@
+# Disk images are large and, in the case of guest images, must never be
+# published. See the "never publish the guest image" rule in the design.
+golden/
+work/
+vendor/cache/
+*.qcow2
+*.img
+*.dmg
+*.iso
+*.zip
+
+# Run log: machine-generated, append-only, noisy.
+run.log
