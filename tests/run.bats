@@ -39,9 +39,10 @@ setup() {
 
 @test "tier-check names a profile that references the quarantine" {
     mkdir -p "$BATS_TEST_TMPDIR/profiles"
-    printf '%s\n' '-drive' 'file=%REPO%/vendor/reference/efi.img' \
+    printf '%s\n' '-drive' 'file=%VENDOR%/efi.img' \
         > "$BATS_TEST_TMPDIR/profiles/dirty.args"
     run env MQG_TIER_PROFILE_DIR="$BATS_TEST_TMPDIR/profiles" \
+        MQG_VENDOR_DIR="$BATS_TEST_TMPDIR/vendor-reference" \
         "$REPO/bin/tier-check.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"dirty"* ]]
@@ -49,9 +50,10 @@ setup() {
 
 @test "tier-check --strict fails when a profile references the quarantine" {
     mkdir -p "$BATS_TEST_TMPDIR/profiles"
-    printf '%s\n' '-drive' 'file=%REPO%/vendor/reference/efi.img' \
+    printf '%s\n' '-drive' 'file=%VENDOR%/efi.img' \
         > "$BATS_TEST_TMPDIR/profiles/dirty.args"
     run env MQG_TIER_PROFILE_DIR="$BATS_TEST_TMPDIR/profiles" \
+        MQG_VENDOR_DIR="$BATS_TEST_TMPDIR/vendor-reference" \
         "$REPO/bin/tier-check.sh" --strict
     [ "$status" -ne 0 ]
 }
@@ -106,22 +108,24 @@ setup() {
 
 @test "tier-check checks a profile whose name contains a space, instead of silently skipping it" {
     mkdir -p "$BATS_TEST_TMPDIR/profiles"
-    printf '%s\n' '-drive' 'file=%REPO%/vendor/reference/x.img' \
+    printf '%s\n' '-drive' 'file=%VENDOR%/x.img' \
         > "$BATS_TEST_TMPDIR/profiles/with space.args"
     run env MQG_TIER_PROFILE_DIR="$BATS_TEST_TMPDIR/profiles" \
+        MQG_VENDOR_DIR="$BATS_TEST_TMPDIR/vendor-reference" \
         "$REPO/bin/tier-check.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"with space"* ]]
 }
 
-@test "tier-check catches a relative-path reference to the quarantine, not just an absolute one" {
+@test "tier-check catches a reference to the quarantine that spells out the resolved path directly, not just one that goes through %VENDOR%" {
     mkdir -p "$BATS_TEST_TMPDIR/profiles"
-    printf '%s\n' '-drive' 'file=vendor/reference/x.img' \
-        > "$BATS_TEST_TMPDIR/profiles/rel.args"
+    printf '%s\n' '-drive' "file=$BATS_TEST_TMPDIR/vendor-reference/x.img" \
+        > "$BATS_TEST_TMPDIR/profiles/direct.args"
     run env MQG_TIER_PROFILE_DIR="$BATS_TEST_TMPDIR/profiles" \
+        MQG_VENDOR_DIR="$BATS_TEST_TMPDIR/vendor-reference" \
         "$REPO/bin/tier-check.sh"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"rel"* ]]
+    [[ "$output" == *"direct"* ]]
 }
 
 @test "tier-check warns, but does not fail --strict, when there are no profiles at all" {

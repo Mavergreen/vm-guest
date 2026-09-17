@@ -4,16 +4,6 @@ setup() {
     REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 }
 
-@test "the Tier 2 quarantine ignores blobs placed in it" {
-    run git -C "$REPO" check-ignore -q vendor/reference/some-firmware.img
-    [ "$status" -eq 0 ]
-}
-
-@test "the Tier 2 quarantine does not ignore its own .gitignore" {
-    run git -C "$REPO" check-ignore -q vendor/reference/.gitignore
-    [ "$status" -ne 0 ]
-}
-
 @test "disk images are ignored wherever they appear" {
     for f in work/scratch.qcow2 golden/base.qcow2 media/images/installer.img \
              media/images/installer.dmg some.iso; do

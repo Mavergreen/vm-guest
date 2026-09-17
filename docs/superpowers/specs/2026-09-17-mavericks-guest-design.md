@@ -79,11 +79,13 @@ generalize to another host.
 - **Tier 1 — vanilla upstream, version-pinned and checksummed.** A distro
   package or an official upstream release artifact: not built by us, but
   publicly buildable from source on demand. Acceptable in the shipped path.
-- **Tier 2 — someone's custom blob.** Quarantined under `vendor/reference/`.
-  Permitted only as de-risking scaffolding in P1 and P2. Never shipped.
+- **Tier 2 — someone's custom blob.** Quarantined under `$MQG_VENDOR_DIR`,
+  local disk, not the repo (the repo sits on NFS; see
+  `docs/decisions/0003-vm-images-on-local-btrfs.md`). Permitted only as
+  de-risking scaffolding in P1 and P2. Never shipped.
 
 **P3's exit gate is mechanically checkable: no run profile and no part of the
-image pipeline references anything under `vendor/reference/`.**
+image pipeline references anything under `$MQG_VENDOR_DIR`.**
 
 Per component:
 
@@ -119,8 +121,10 @@ vm/
 bench/                         benchmark suite
 ci/mavericks/                  GitHub Actions phase
 vendor/
-  MANIFEST.sha256
-  reference/                   Tier 2 quarantine; never shipped
+  sources.tsv                  third-party artifact URLs and pinned checksums
+                                (Tier 2 blobs themselves live under
+                                $MQG_VENDOR_DIR, local disk, not the repo --
+                                see docs/decisions/0003-vm-images-on-local-btrfs.md)
 NOTES.md                       append-only lab log
 ```
 
@@ -183,7 +187,7 @@ change one thing at a time.
   `InstallMacOSXMavericks.dmg`; `dmg2img` it to a reference installer image.
   Record its checksum. This is installer Approach C, the path Kostarelas
   proved.
-- Fetch and unpack Kostarelas's UTM bundle into `vendor/reference/`. Parse its
+- Fetch and unpack Kostarelas's UTM bundle into `$MQG_VENDOR_DIR`. Parse its
   `config.plist` and document **every** setting in `docs/prior-art.md`:
   architecture, machine type, CPU model and flags, extra QEMU arguments,
   memory, cores, every drive with its interface and image type, NIC model,
@@ -243,7 +247,7 @@ stock component fails, it is unambiguous which one failed.
   comparison only.
 
 **Exit:** no run profile and no part of the image pipeline references
-`vendor/reference/`. Checked by a test, not by assertion.
+`$MQG_VENDOR_DIR`. Checked by a test, not by assertion.
 
 ### P4 — Unattended pipeline (goal #2)
 
@@ -417,7 +421,7 @@ shared folders (use SMB, NFS, or sshfs), and a virtio block driver.
   attributes, and HFS+ compression fidelity diffed against P1's Mac-produced
   reference image.
 - **The tier rule is a test**, not a promise: nothing shipped references
-  `vendor/reference/`.
+  `$MQG_VENDOR_DIR`.
 - **The image pipeline is validated by building twice and comparing.**
 - **The benchmark suite is the guest-side regression test**; golden clones
   keep experiments isolated.

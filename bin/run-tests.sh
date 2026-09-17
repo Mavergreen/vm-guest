@@ -24,10 +24,12 @@ if command -v shellcheck >/dev/null 2>&1; then
     # Collect scripts by walking the tree rather than a hardcoded glob list,
     # so new script directories are picked up automatically and the check
     # still runs on files that exist but aren't `git add`ed yet. Prune the
-    # quarantine and disk-image work areas: they hold third-party or
-    # generated content, not our shell code.
+    # disk-image work areas: they hold generated content, not our shell
+    # code. The Tier 2 quarantine no longer lives under the repo at all
+    # (see docs/decisions/0003-vm-images-on-local-btrfs.md), so there is
+    # nothing left to prune for it.
     mapfile -t sh_files < <(
-        find . \( -path ./.git -o -path ./vendor/reference -o -path ./work \
+        find . \( -path ./.git -o -path ./work \
                   -o -path ./golden \) -prune -o -name '*.sh' -print
     )
     # SC1091: shellcheck cannot follow dynamically-computed source paths.

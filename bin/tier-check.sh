@@ -15,6 +15,8 @@ export MQG_REPO_ROOT
 
 MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 export MQG_IMAGE_DIR
+MQG_VENDOR_DIR=${MQG_VENDOR_DIR:-$MQG_IMAGE_DIR/vendor-reference}
+export MQG_VENDOR_DIR
 PROFILE_DIR=${MQG_TIER_PROFILE_DIR:-$MQG_REPO_ROOT/vm/profiles}
 
 strict=0
@@ -39,26 +41,24 @@ fi
 
 dirty=0
 for name in "${names[@]}"; do
-    # Grepped against the EXPANDED profile (after %REPO%/%IMAGES%
-    # substitution), matching the bare "vendor/reference/" substring rather
-    # than requiring a leading '/' -- a profile that reaches the quarantine
-    # through a relative path (no %REPO% token) would otherwise slip past a
-    # leading-slash-anchored pattern. This is still a textual heuristic: it
-    # will not catch a symlink that points into vendor/reference/ under a
-    # different name, or a copy of a quarantined blob placed elsewhere, or
-    # path text assembled so that the literal substring never appears
-    # (e.g. "vendor/refere" + "nce" split across two profile lines is not
-    # possible in this format, but a differently-spelled indirection would
-    # still evade it). It is a reasonable gate for accidental references,
-    # not a proof against deliberate evasion.
-    if profile_expand "$name" 2>/dev/null | grep -q 'vendor/reference/'; then
+    # Grepped against the EXPANDED profile (after %REPO%/%IMAGES%/%VENDOR%
+    # substitution), matching the resolved $MQG_VENDOR_DIR path rather than
+    # a textual convention like "vendor/reference/". This is stronger than
+    # matching a substring: it catches any route into the quarantine
+    # directory that actually configures, not just one particular spelling
+    # of it. It is still a textual heuristic: it will not catch a symlink
+    # that points into $MQG_VENDOR_DIR under a different name, or a copy of
+    # a quarantined blob placed elsewhere, or path text assembled so that
+    # the literal path never appears in one piece. It is a reasonable gate
+    # for accidental references, not a proof against deliberate evasion.
+    if profile_expand "$name" 2>/dev/null | grep -qF "$MQG_VENDOR_DIR/"; then
         printf 'TIER2  %s\n' "$name"
         dirty=1
     fi
 done
 
 if [ "$dirty" -eq 0 ]; then
-    log "no profile references vendor/reference/ -- Tier 2 clean"
+    log "no profile references $MQG_VENDOR_DIR -- Tier 2 clean"
     exit 0
 fi
 

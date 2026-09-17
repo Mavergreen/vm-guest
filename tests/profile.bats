@@ -9,6 +9,7 @@ setup() {
     PROFILE_DIR="$BATS_TEST_TMPDIR/profiles"
     MQG_REPO_ROOT="/fake/repo"
     MQG_IMAGE_DIR="/fake/images"
+    MQG_VENDOR_DIR="/fake/vendor-reference"
     mkdir -p "$PROFILE_DIR"
 }
 
@@ -75,9 +76,9 @@ setup() {
 }
 
 @test "profile_expand substitutes %REPO% with the repository root" {
-    printf '%s\n' '-drive' 'file=%REPO%/vendor/reference/efi.img' > "$PROFILE_DIR/a.args"
+    printf '%s\n' '-drive' 'file=%REPO%/boot/opencore.efi' > "$PROFILE_DIR/a.args"
     run profile_expand a
-    [ "${lines[1]}" = "file=/fake/repo/vendor/reference/efi.img" ]
+    [ "${lines[1]}" = "file=/fake/repo/boot/opencore.efi" ]
 }
 
 @test "profile_expand substitutes %IMAGES% with the image directory" {
@@ -86,10 +87,16 @@ setup() {
     [ "${lines[1]}" = "file=/fake/images/work/disk.qcow2" ]
 }
 
-@test "profile_expand substitutes both tokens on one line" {
-    printf '%s\n' 'a=%REPO%/x,b=%IMAGES%/y' > "$PROFILE_DIR/a.args"
+@test "profile_expand substitutes %VENDOR% with the vendor quarantine directory" {
+    printf '%s\n' '-drive' 'file=%VENDOR%/opencore-legacy/EFI-LEGACY.img' > "$PROFILE_DIR/a.args"
     run profile_expand a
-    [ "${lines[0]}" = "a=/fake/repo/x,b=/fake/images/y" ]
+    [ "${lines[1]}" = "file=/fake/vendor-reference/opencore-legacy/EFI-LEGACY.img" ]
+}
+
+@test "profile_expand substitutes all three tokens on one line" {
+    printf '%s\n' 'a=%REPO%/x,b=%IMAGES%/y,c=%VENDOR%/z' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "${lines[0]}" = "a=/fake/repo/x,b=/fake/images/y,c=/fake/vendor-reference/z" ]
 }
 
 @test "profile_expand resolves @include with trailing whitespace after the name" {
@@ -151,6 +158,21 @@ setup() {
 @test "profile_expand still fails for an unset MQG_IMAGE_DIR when %IMAGES% is used" {
     unset MQG_IMAGE_DIR
     printf '%s\n' 'file=%IMAGES%/work/disk.qcow2' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "$status" -ne 0 ]
+}
+
+@test "profile_expand does not require MQG_VENDOR_DIR for a profile that never uses %VENDOR%" {
+    unset MQG_VENDOR_DIR
+    printf '%s\n' '-enable-kvm' '-m' '4096' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 3 ]
+}
+
+@test "profile_expand still fails for an unset MQG_VENDOR_DIR when %VENDOR% is used" {
+    unset MQG_VENDOR_DIR
+    printf '%s\n' 'file=%VENDOR%/opencore-legacy/EFI-LEGACY.img' > "$PROFILE_DIR/a.args"
     run profile_expand a
     [ "$status" -ne 0 ]
 }

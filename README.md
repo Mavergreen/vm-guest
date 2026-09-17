@@ -25,6 +25,7 @@ Apple's license contemplates: virtualizing OS X on Apple hardware.
 - **Never publish the guest image.**
 - **No unreproducible blobs in the shipped boot path.** Everything is Tier 0
   (built from pinned source) or Tier 1 (vanilla upstream, pinned and
-  checksummed). Tier 2 blobs live in `vendor/reference/` and are de-risking
-  scaffolding only.
+  checksummed). Tier 2 blobs live under `$MQG_VENDOR_DIR` (local disk, not
+  the repo — see `docs/decisions/0003-vm-images-on-local-btrfs.md`) and are
+  de-risking scaffolding only.
 - **Write down the failures.** `NOTES.md` is append-only.

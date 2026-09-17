@@ -4,14 +4,16 @@
 # One argument per line, so quoting never enters the picture. Full-line
 # comments start with '#'. '@include <name>' pulls in another profile.
 # '%REPO%' expands to the repository root, '%IMAGES%' to the image
-# directory -- which is deliberately NOT under the repo, because the repo
-# is on NFS and a guest disk must not be.
+# directory, '%VENDOR%' to the Tier 2 quarantine directory -- all three
+# deliberately NOT under the repo except %REPO% itself, because the repo
+# is on NFS and neither a guest disk nor a blob QEMU reads on every boot
+# belongs there.
 #
 # The point of the format is that an experiment is a diff. Changing one
 # variable at a time is only verifiable if the change is a file change.
 #
-# Requires lib/common.sh. Callers set PROFILE_DIR, MQG_REPO_ROOT and
-# MQG_IMAGE_DIR.
+# Requires lib/common.sh. Callers set PROFILE_DIR, MQG_REPO_ROOT,
+# MQG_IMAGE_DIR and MQG_VENDOR_DIR.
 
 profile_path() {
     printf '%s/%s.args\n' "${PROFILE_DIR:?PROFILE_DIR is unset}" "$1"
@@ -57,6 +59,9 @@ profile_expand() {
                 esac
                 case $line in *'%IMAGES%'*)
                     line="${line//'%IMAGES%'/${MQG_IMAGE_DIR:?MQG_IMAGE_DIR is unset}}" ;;
+                esac
+                case $line in *'%VENDOR%'*)
+                    line="${line//'%VENDOR%'/${MQG_VENDOR_DIR:?MQG_VENDOR_DIR is unset}}" ;;
                 esac
                 printf '%s\n' "$line" ;;
         esac
