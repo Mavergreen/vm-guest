@@ -120,13 +120,13 @@ excuse later._
 |---|---|---|
 | Sound | **absent** | No output device at all. Expected: `intel-hda` is in the reference bundle but deliberately left out of our profile to reduce variables. Cheap to add. |
 | Resolution changes | **none — 1280x720 only** | See below; the most informative finding here. |
-| Sleep | offered in the Apple menu | Not yet exercised. |
-| Shutdown | offered in the Apple menu | |
+| Sleep | offered, not exercised | Deliberately untested: sleep/wake is a good way to corrupt a guest, and there is no reason to risk it before a golden exists. P5's job. |
+| Shutdown | **works, promptly** | Both from the Apple menu and via ACPI `system_powerdown` from the QEMU monitor, which matters for scripted use in P4/P6. |
 | Reboot | **clean** | Hits the OpenCore picker, which defaults to Mavericks and auto-selects after a few seconds. Roughly 30 s to the desktop by eye; a measured figure comes from a timed boot on a clone. |
 | Networking | **works** | `usb-net` + slirp. `dig` resolves and `curl` completes an HTTP request. No configuration was needed. |
 | ICMP / `ping` | **fails, and cannot work here** | Not a guest problem — see below. |
 | DNS | **works out of the box** | Notable: Kostarelas needed to set the resolver to 1.1.1.1 and khronokernel documents a `scutil` recipe for the same problem. Neither was necessary here. Do not carry that step forward into P4 without re-testing whether it is still needed. |
-| Clock accuracy across a reboot | | To check on the next boot. |
+| Clock accuracy across a reboot | **correct** | Guest clock matched the host across the install reboot and a later clone boot. Kostarelas's advice to check the clock first when Apple servers fail was not needed. |
 | Safari / TLS against a modern site | | Kostarelas found the modern web mostly broken |
 | Pointer feel | **fine enough** (user's words) | Relative `usb-mouse`, so a grab is required. `usb-tablet` does nothing on 10.9 without pmj's kext. |
 | Window drag / resize | **smooth enough to use** (user's words) | P5 baseline. Notable given there is no graphics acceleration at all: the CPU is drawing everything. |
@@ -182,3 +182,26 @@ nobody will remember it was applied.
 
 _To be filled in: what each one changes, whether it is reversible, and whether
 it would plausibly affect performance._
+
+## Auto-login is on
+
+The clone boots straight to a logged-in desktop with no password prompt. Setup
+Assistant enables auto-login for a single-user system.
+
+This is convenient and load-bearing for later phases — an unattended boot in
+P4 or P6 is not going to stall at a login window — but it also means the
+golden image grants a desktop session to anyone who can boot it. Fine for a
+local, never-published image; worth stating rather than discovering.
+
+## Measured numbers
+
+| What | Value | How |
+|---|---|---|
+| Install | **14 min** | wall clock, 17:42:13Z to ~17:56Z, against the installer's own 24-minute estimate |
+| Boot to desktop | **39.3 s** | measured host-side by polling `screendump` until the framebuffer showed a GUI, on a clone of golden #1 |
+| Installed size | **8.54 GiB** | `qemu-img info`, of a 60 GiB virtual disk |
+| Golden promotion | **19 s** | almost entirely SHA-256; the copy itself is a btrfs reflink |
+
+The 39.3 s includes the OpenCore picker's timeout, so it is a
+launch-to-usable figure rather than a kernel boot time. That is the number
+that matters for iteration speed anyway.

@@ -1,0 +1,61 @@
+# p2-clone -- boot a throwaway clone of golden #1, headless.
+#
+# This is the template every later experiment copies: include the baseline,
+# override exactly the lines that differ, change nothing else. The diff IS
+# the experiment.
+#
+# Here the only differences from p1-reference are the target disk (a clone
+# instead of the original) and a headless display with a monitor socket, so
+# boot can be timed and screenshotted from the host without a window.
+#
+# p1-reference still names the installer ISO and the original disk, so this
+# profile cannot simply @include it -- a profile is a flat list of arguments
+# and QEMU would see two -drive entries with id=target. Until the hardware
+# profile is split further, this one spells out its own drives.
+
+@include base-kvm
+
+-machine
+q35,vmport=off
+-cpu
+Penryn,+ssse3,+sse4.1,+sse4.2
+
+-bios
+%IMAGES%/work/OVMF_CODE.fd
+
+-device
+ich9-usb-ehci1,id=usb,bus=pcie.0,addr=0x1d.7,multifunction=on
+-device
+ich9-usb-uhci1,masterbus=usb.0,firstport=0,bus=pcie.0,addr=0x1d.0,multifunction=on
+-device
+ich9-usb-uhci2,masterbus=usb.0,firstport=2,bus=pcie.0,addr=0x1d.1
+-device
+ich9-usb-uhci3,masterbus=usb.0,firstport=4,bus=pcie.0,addr=0x1d.2
+
+-drive
+id=opencore,if=none,format=raw,file=%VENDOR%/derived/opencore-p1.img
+-device
+usb-storage,bus=usb.0,drive=opencore
+
+-drive
+id=target,if=none,format=qcow2,file=%IMAGES%/work/boot-timing.qcow2
+-device
+ide-hd,bus=ide.0,drive=target
+
+-netdev
+user,id=net0
+-device
+usb-net,bus=usb.0,netdev=net0
+
+-device
+usb-kbd,bus=usb.0
+-device
+usb-mouse,bus=usb.0
+
+-device
+VGA,vgamem_mb=64
+
+-display
+none
+-monitor
+unix:%IMAGES%/work/monitor.sock,server,nowait

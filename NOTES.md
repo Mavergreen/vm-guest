@@ -354,3 +354,65 @@ in order of cost:
 Not blocking. P2 finishes without it, and a kext would be installed on a
 **clone** in any case — golden #1 stays pristine as the measurement baseline,
 and a tablet-equipped image becomes golden #2.
+
+## 2026-09-17 — P2 complete: golden #1 promoted
+
+**P2's exit criteria are met.** Mavericks 10.9.5 installs, reboots cleanly,
+shuts down promptly, and golden #1 exists and survives being cloned from.
+
+### The clone premise, tested rather than assumed
+
+Everything after this phase assumes goldens are immutable. That assumption was
+tested once, here, while it is still cheap:
+
+1. Promote `p2-manual-install` — mode 0444, SHA-256 recorded, metadata sidecar.
+2. `golden.sh verify` — passes.
+3. Clone it, boot the clone all the way to a desktop, shut it down.
+4. `golden.sh verify` again — **still passes.**
+
+If that had failed, every later phase would have been built on sand.
+
+### Measured, not estimated
+
+| What | Value |
+|---|---|
+| Install | 14 min (installer estimated 24) |
+| Boot to desktop | 39.3 s, measured host-side on a clone |
+| Installed size | 8.54 GiB of a 60 GiB virtual disk |
+| Golden promotion | 19 s, nearly all of it SHA-256 — the copy is a btrfs reflink |
+
+### Disk usage on local storage
+
+```
+golden/            8.6G
+work/              8.6G   (the original install; redundant now golden exists)
+media/              12G   (ISO + dmg + the tablet driver)
+vendor-reference/  398M   (Tier 2 quarantine)
+screenshots/       5.6M
+```
+
+`work/mavericks.qcow2` is now redundant — golden #1 is its checksummed copy.
+Worth deleting once there is confidence in the golden, which would reclaim
+8.6 GB.
+
+### A sequencing mistake worth recording
+
+I sent `system_powerdown` to the clone and then deleted its image before ACPI
+shutdown had finished, so QEMU was still running against an unlinked inode.
+Harmless — the golden verified before and after, and the clone was disposable
+by design — but the right order is: shut down, confirm the process exited,
+*then* delete. Recorded because the same mistake against a golden rather than
+a clone would not be harmless.
+
+### Still open
+
+- **Why OpenCore's `Kernel > Block` had no effect.** The shipped block for
+  `AppleTyMCEDriver` was enabled and the panic persisted; changing SMBIOS is
+  what fixed it. P3 builds its own OpenCore and must not assume `Block` works.
+- **Whether `iMac14,2` is the right SMBIOS** or merely the first that worked.
+  It is a Haswell iMac while the guest CPU advertises Penryn, which 10.9
+  evidently tolerates.
+- **Whether both P1 changes are needed** — the enabled block and the SMBIOS
+  change are both in play, and only the second is known to matter.
+- **Sound** is absent because `intel-hda` was left out to reduce variables.
+- **One resolution only**, and VRAM is not the reason.

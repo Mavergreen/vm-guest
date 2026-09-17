@@ -14,3 +14,4 @@
 # name	url	sha256
 utm-bundle	https://adam.kostarelas.com/blog/mavericks-in-utm-on-silicon/Mavericks-OSX-10.9-Config.utm.zip	c7990c86c2dda00b5b88c21dd8d9337552d25f9de0b7ea0bb2e24f2cea5dcab3
 opencore-legacy-img	https://raw.githubusercontent.com/khronokernel/khronokernel.github.io/refs/heads/master/Binaries/OpenCore/EFI-LEGACY.img.zip	04d0af359b7db3d7f6f3db8361f7b13f03b79359f6a682e87181e433826ab7c9
+qemu-usb-tablet-build	https://github.com/pmj/QemuUSBTablet-OSX/raw/master/build/Build-1.2.zip	c6e4c5c47adae2ececb687d9a198b0fbbf189a4a9eafc6d976c31375947ae0ec
