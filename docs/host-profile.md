@@ -62,6 +62,7 @@ survives reboot, and how to revert.
 |---|---|---|---|
 | 2026-09-17 | `kvm.ignore_msrs=1`, applied by the user via `echo 1 \| sudo tee /sys/module/kvm/parameters/ignore_msrs`. Required by Somlo and OSX-KVM. | **no** — resets on reboot | `echo 0 \| sudo tee /sys/module/kvm/parameters/ignore_msrs` |
 | 2026-09-17 | Installed `shellcheck` (by the user) so the test suite can lint shell scripts | yes | `sudo apt remove shellcheck` |
+| 2026-09-17 | Installed `nasm` (2.16.01) and `acpica-tools` (`iasl` 20230628), by the user, so `boot/prereqs.sh` is satisfied and OpenCore can be built from source in P3 | yes | `sudo apt remove nasm acpica-tools` |
 
 ## 4. Generalization ledger
 
