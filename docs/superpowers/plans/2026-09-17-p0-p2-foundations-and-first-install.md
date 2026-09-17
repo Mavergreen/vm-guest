@@ -70,7 +70,9 @@ much as the result.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/smoke.bats`:
+Create `tests/smoke.bats`. These test *behavior* — that the ignore rules
+actually do what they claim — rather than that `mkdir` ran. `git check-ignore`
+works on paths that do not exist yet, which is what makes this possible.
 
 ```bash
 #!/usr/bin/env bats
@@ -79,14 +81,30 @@ setup() {
     REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 }
 
-@test "repository has the expected top-level directories" {
-    for d in lib bin tests vm vm/profiles boot media vendor docs; do
-        [ -d "$REPO/$d" ] || { echo "missing directory: $d"; return 1; }
+@test "the Tier 2 quarantine ignores blobs placed in it" {
+    run git -C "$REPO" check-ignore -q vendor/reference/some-firmware.img
+    [ "$status" -eq 0 ]
+}
+
+@test "the Tier 2 quarantine does not ignore its own .gitignore" {
+    run git -C "$REPO" check-ignore -q vendor/reference/.gitignore
+    [ "$status" -ne 0 ]
+}
+
+@test "disk images are ignored wherever they appear" {
+    for f in work/scratch.qcow2 golden/base.qcow2 media/images/installer.img \
+             media/images/installer.dmg some.iso; do
+        run git -C "$REPO" check-ignore -q "$f"
+        [ "$status" -eq 0 ] || { echo "not ignored: $f"; return 1; }
     done
 }
 
-@test "the Tier 2 quarantine ignores its own contents" {
-    [ -f "$REPO/vendor/reference/.gitignore" ]
+@test "source files are not ignored" {
+    for f in lib/common.sh vm/run.sh boot/build-opencore.sh; do
+        run git -C "$REPO" check-ignore -q "$f"
+        [ "$status" -eq 0 ] && { echo "wrongly ignored: $f"; return 1; }
+    done
+    return 0
 }
 ```
 
@@ -94,13 +112,18 @@ setup() {
 
 Run: `bats tests/smoke.bats`
 
-Expected: FAIL — `missing directory: lib`.
+Expected: FAIL — no `.gitignore` files exist yet, so nothing is ignored.
 
 - [ ] **Step 3: Create the skeleton**
 
 ```bash
 mkdir -p lib bin tests vm/profiles boot media vendor/reference bench
 ```
+
+These directories get real files in Tasks 2-9. Do **not** add `.gitkeep`
+markers: git does not track empty directories, so a test asserting they exist
+passes in your working tree and fails on a fresh clone — which is exactly the
+bug this task's tests were rewritten to avoid.
 
 Create `vendor/reference/.gitignore` — the quarantine is tracked as a
 directory but its contents never are:
@@ -139,11 +162,8 @@ Create `bin/run-tests.sh`:
 #!/usr/bin/env bash
 # Run the whole test suite. shellcheck is optional: it is not installed on
 # every host, and needing a package install to run tests is a bad trade.
+# bats is mandatory: it is how this script runs the suite at all.
 set -euo pipefail
-# Globs below (lib/*.sh etc.) may not match anything yet; without nullglob
-# an unmatched glob is passed to shellcheck as a literal, nonexistent
-# filename and it exits nonzero.
-shopt -s nullglob
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
@@ -151,25 +171,45 @@ cd "$repo_root"
 status=0
 
 echo "== bats =="
-if ! bats tests/; then
+if ! command -v bats >/dev/null 2>&1; then
+    echo "bats not found. Install bats-core (e.g. 'sudo apt install bats'," \
+        "or see https://github.com/bats-core/bats-core) and re-run." >&2
+    status=1
+elif ! bats tests/; then
     status=1
 fi
 
 echo
 echo "== shellcheck =="
 if command -v shellcheck >/dev/null 2>&1; then
+    # Collect scripts by walking the tree rather than a hardcoded glob list,
+    # so new script directories are picked up automatically and the check
+    # still runs on files that exist but aren't `git add`ed yet. Prune the
+    # quarantine and disk-image work areas: they hold third-party or
+    # generated content, not our shell code.
+    mapfile -t sh_files < <(
+        find . \( -path ./.git -o -path ./vendor/reference -o -path ./work \
+                  -o -path ./golden \) -prune -o -name '*.sh' -print
+    )
     # SC1091: shellcheck cannot follow dynamically-computed source paths.
-    if ! shellcheck -e SC1091 \
-        lib/*.sh bin/*.sh vm/*.sh boot/*.sh media/*.sh 2>/dev/null; then
-        status=1
+    if [ "${#sh_files[@]}" -gt 0 ]; then
+        if ! shellcheck -e SC1091 "${sh_files[@]}"; then
+            status=1
+        fi
     fi
 else
     echo "shellcheck not installed; skipping."
-    echo "To enable: sudo apt install shellcheck  (requires an ask)"
+    echo "Install it to lint shell scripts locally: sudo apt install shellcheck"
 fi
 
 exit "$status"
 ```
+
+Lint targets come from `find`, not a hardcoded glob list and not
+`git ls-files`. The glob list rots as directories are added, and would hand
+shellcheck literal unmatched patterns; `git ls-files` only sees tracked files,
+so a script written but not yet `git add`ed would silently escape linting
+mid-TDD. `find` avoids both.
 
 Make it executable: `chmod +x bin/run-tests.sh`
 
