@@ -47,24 +47,46 @@ pin_checksum() {
     awk -F'\t' -v OFS='\t' -v n="$name" -v s="$sha" \
         '$0 !~ /^#/ && $1 == n { $3 = s } { print }' "$tsv" > "$tmp"
     [ -n "$mode" ] && chmod "$mode" "$tmp"
-    mv -- "$tmp" "$tsv"
+    mv -- "$tmp" "$tsv" || die "cannot replace $tsv (left as $tmp)"
 }
 
 # fetch_source <tsv> <name> <destdir>
 # Downloads if absent, then verifies. On TOFU, pins and tells the operator
 # to commit.
 fetch_source() {
-    local tsv=$1 name=$2 destdir=$3 url sha dest got
+    local tsv=$1 name=$2 destdir=$3 url sha dest got filename
     url=$(source_field "$tsv" "$name" url) || exit 1
     sha=$(source_field "$tsv" "$name" sha256) || exit 1
     mkdir -p "$destdir"
-    dest="$destdir/$(basename "$url")"
+
+    # basename on a URL with no filename component silently falls back to
+    # something else -- the bare hostname, or a directory name -- so a
+    # typo'd or truncated URL would download to a confidently-wrong
+    # filename. Guessing the *right* name is speculative and out of
+    # scope; refusing to proceed never is. This only rejects the two
+    # "there is nothing sensible to call this" shapes -- no path at all
+    # beyond the host, or a path ending in "/" -- rather than policing the
+    # character content of the name: a query string like "?v=2" is ugly
+    # appended to a filename but not nonsensical, and rejecting it would
+    # regress previously working (if ugly) behavior for no safety gain.
+    case $url in
+        *://*/*) : ;;
+        *) die "cannot derive a filename from $url" \
+               "-- it has no path; give the source a URL ending in a filename" ;;
+    esac
+    filename=${url##*/}
+    if [ -z "$filename" ]; then
+        die "cannot derive a filename from $url" \
+            "-- it ends in \"/\"; give the source a URL ending in a filename"
+    fi
+    dest="$destdir/$filename"
 
     if [ ! -f "$dest" ]; then
         log "fetching $name from $url"
         curl -fSL --retry 3 -o "$dest.part" "$url" \
             || die "download failed for $name"
-        mv "$dest.part" "$dest"
+        mv "$dest.part" "$dest" \
+            || die "cannot move downloaded file into place: $dest"
     else
         log "$name already present at $dest"
     fi

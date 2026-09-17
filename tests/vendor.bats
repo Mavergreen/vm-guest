@@ -100,6 +100,53 @@ setup() {
     [[ "$output" == *"checksum mismatch"* ]]
 }
 
+@test "source_field returns empty with status 0 when the sha256 field is missing entirely" {
+    printf 'nosum\thttps://example.invalid/nosum.zip\n' >> "$SOURCES"
+    run source_field "$SOURCES" nosum sha256
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+}
+
+@test "fetch_source accepts a normal filename URL" {
+    dest="$BATS_TEST_TMPDIR/destdir"
+    mkdir -p "$dest"
+    printf 'hello\n' > "$dest/thing.zip"
+    got=$(sha256_file "$dest/thing.zip")
+    printf '%s\thttps://example.invalid/thing.zip\t%s\n' thing "$got" \
+        > "$BATS_TEST_TMPDIR/normal.tsv"
+    run fetch_source "$BATS_TEST_TMPDIR/normal.tsv" thing "$dest"
+    [ "$status" -eq 0 ]
+    [ "${lines[-1]}" = "$dest/thing.zip" ]
+}
+
+@test "fetch_source rejects a trailing-slash URL" {
+    printf '%s\thttps://example.invalid/dir/\tTOFU\n' thing \
+        > "$BATS_TEST_TMPDIR/trailing.tsv"
+    run fetch_source "$BATS_TEST_TMPDIR/trailing.tsv" thing "$BATS_TEST_TMPDIR/destdir"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot derive a filename"* ]]
+}
+
+@test "fetch_source rejects a bare-host URL with no path at all" {
+    printf '%s\thttps://example.invalid\tTOFU\n' thing \
+        > "$BATS_TEST_TMPDIR/barehost.tsv"
+    run fetch_source "$BATS_TEST_TMPDIR/barehost.tsv" thing "$BATS_TEST_TMPDIR/destdir"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot derive a filename"* ]]
+}
+
+@test "fetch_source accepts a URL with a query string, keeping it in the filename" {
+    dest="$BATS_TEST_TMPDIR/destdir"
+    mkdir -p "$dest"
+    printf 'hello\n' > "$dest/thing.zip?v=2"
+    got=$(sha256_file "$dest/thing.zip?v=2")
+    printf '%s\thttps://example.invalid/thing.zip?v=2\t%s\n' thing "$got" \
+        > "$BATS_TEST_TMPDIR/query.tsv"
+    run fetch_source "$BATS_TEST_TMPDIR/query.tsv" thing "$dest"
+    [ "$status" -eq 0 ]
+    [ "${lines[-1]}" = "$dest/thing.zip?v=2" ]
+}
+
 @test "fetch_source downloads over file://, pins TOFU, and records the checksum" {
     src="$BATS_TEST_TMPDIR/upstream.zip"
     printf 'payload\n' > "$src"
