@@ -1,0 +1,72 @@
+# p2-tablet-abs -- the same clone, now with usb-tablet instead of usb-mouse.
+#
+# Only safe to run AFTER pmj's QemuUSBTabletUSBDriver.kext is installed in
+# the guest. Without it, 10.9 sees a tablet it has no driver for and you get
+# a cursor pinned at the top-left -- which is exactly what P1 hit.
+#
+# ORIGINAL HEADER:
+# p2-tablet -- a clone of golden #1, for installing pmj's QemuUSBTablet kext.
+#
+# Two differences from the p2-clone baseline, and they must land in this
+# order: the transfer disk (carrying the driver) is attached now, and the
+# pointing device stays a usb-mouse until the kext is installed. Switching to
+# usb-tablet before the driver exists would leave no working pointer at all,
+# which is how P1's first input failure looked.
+#
+# Once the kext is in, p2-tablet-abs swaps in usb-tablet.
+
+@include base-kvm
+
+-machine
+q35,vmport=off
+-cpu
+Penryn,+ssse3,+sse4.1,+sse4.2
+
+-bios
+%IMAGES%/work/OVMF_CODE.fd
+
+-device
+ich9-usb-ehci1,id=usb,bus=pcie.0,addr=0x1d.7,multifunction=on
+-device
+ich9-usb-uhci1,masterbus=usb.0,firstport=0,bus=pcie.0,addr=0x1d.0,multifunction=on
+-device
+ich9-usb-uhci2,masterbus=usb.0,firstport=2,bus=pcie.0,addr=0x1d.1
+-device
+ich9-usb-uhci3,masterbus=usb.0,firstport=4,bus=pcie.0,addr=0x1d.2
+
+-drive
+id=opencore,if=none,format=raw,file=%VENDOR%/derived/opencore-p1.img
+-device
+usb-storage,bus=usb.0,drive=opencore
+
+-drive
+id=target,if=none,format=qcow2,file=%IMAGES%/work/tablet.qcow2
+-device
+ide-hd,bus=ide.0,drive=target
+
+# The transfer disk: a 16MB FAT image carrying the driver, since the guest
+# has no SSH yet. Read-only so the guest cannot modify our copy -- which
+# means usb-storage rather than ide-hd, since ide-hd refuses a read-only
+# block node outright ("Block node is read-only").
+-drive
+id=transfer,if=none,format=raw,readonly=on,file=%IMAGES%/work/transfer.img
+-device
+usb-storage,bus=usb.0,drive=transfer
+
+-netdev
+user,id=net0
+-device
+usb-net,bus=usb.0,netdev=net0
+
+-device
+usb-kbd,bus=usb.0
+-device
+usb-tablet,bus=usb.0
+
+-device
+VGA,vgamem_mb=64
+
+-display
+gtk,grab-on-hover=off,zoom-to-fit=on
+-monitor
+unix:%IMAGES%/work/monitor.sock,server,nowait

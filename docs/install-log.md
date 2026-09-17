@@ -205,3 +205,31 @@ local, never-published image; worth stating rather than discovering.
 The 39.3 s includes the OpenCore picker's timeout, so it is a
 launch-to-usable figure rather than a kernel boot time. That is the number
 that matters for iteration speed anyway.
+
+## Absolute pointing: pmj's QemuUSBTablet kext
+
+Installed on a **clone** of golden #1, never on the golden itself, so the
+baseline stays free of it and P5 can measure what it changed.
+
+- **Source:** `Build-1.2.zip` from `pmj/QemuUSBTablet-OSX`'s own `build/`
+  directory in git, sha256 `c6e4c5c4...`. Better provenance than the
+  installer on the author's website, which is offline: the zip is versioned
+  in upstream's VCS and can be pinned to a commit.
+- The `artefacts/` copy of `QemuUSBTabletUSBDriver` is **byte-identical** to
+  the binary inside the `.pkg` recovered from the Internet Archive
+  (`c111ae90...`, 46,880 bytes), so the two sources agree.
+- The kext declares `com.apple.kpi.* = 13.0` — Darwin 13, i.e. exactly 10.9 —
+  and `IOUSBHIDDriver 660.4`. It is code-signed, so 10.9 loads it without the
+  unsigned-kext question this project had left unverified.
+- Installed via the `.pkg` rather than by hand: it handles the version gating
+  (`install_only_if_older_than('10.11')` selects the right kext for 10.9) and
+  the root-owned permissions that a manual copy would have to replicate.
+- Transferred on a 16 MB read-only FAT image attached as `usb-storage`. Note
+  `ide-hd` refuses a read-only block node outright.
+
+**Result: absolute pointing works.** The guest cursor tracks the host pointer
+with no grab. Confirmed by use, not just by the kext being present.
+
+This changes the interactive feel enough to matter for every later phase,
+which is why it was pulled forward out of the deferred integration work
+rather than left for P7.
