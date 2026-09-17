@@ -515,32 +515,64 @@ source_field() {
 # Only ever promotes TOFU to a real value. Refuses to change a pinned one,
 # because a checksum that silently changes is the whole problem.
 pin_checksum() {
-    local tsv=$1 name=$2 sha=$3 current tmp
+    local tsv=$1 name=$2 sha=$3 current tmp mode
     current=$(source_field "$tsv" "$name" sha256) || exit 1
     if [ "$current" != "TOFU" ]; then
         die "source $name is already pinned to $current; refusing to change it"
     fi
-    tmp=$(mktemp)
+    # Create the temp file next to the target rather than under mktemp's
+    # default directory (usually /tmp): on this project /tmp and the repo
+    # can be different filesystems, and more importantly mktemp's 600 mode
+    # would otherwise clobber the original file's permissions -- mv/rename
+    # replaces the destination inode wholesale, it does not preserve the
+    # destination's old mode. Explicitly carrying the mode over avoids
+    # silently tightening (or loosening) sources.tsv's permissions.
+    tmp=$(mktemp "$(dirname -- "$tsv")/.$(basename -- "$tsv").XXXXXX") \
+        || die "cannot create temp file for $tsv"
+    mode=$(stat -c '%a' "$tsv" 2>/dev/null || stat -f '%Lp' "$tsv" 2>/dev/null)
     awk -F'\t' -v OFS='\t' -v n="$name" -v s="$sha" \
         '$0 !~ /^#/ && $1 == n { $3 = s } { print }' "$tsv" > "$tmp"
-    mv "$tmp" "$tsv"
+    [ -n "$mode" ] && chmod "$mode" "$tmp"
+    mv -- "$tmp" "$tsv" || die "cannot replace $tsv (left as $tmp)"
 }
 
 # fetch_source <tsv> <name> <destdir>
 # Downloads if absent, then verifies. On TOFU, pins and tells the operator
 # to commit.
 fetch_source() {
-    local tsv=$1 name=$2 destdir=$3 url sha dest got
+    local tsv=$1 name=$2 destdir=$3 url sha dest got filename
     url=$(source_field "$tsv" "$name" url) || exit 1
     sha=$(source_field "$tsv" "$name" sha256) || exit 1
     mkdir -p "$destdir"
-    dest="$destdir/$(basename "$url")"
+
+    # basename on a URL with no filename component silently falls back to
+    # something else -- the bare hostname, or a directory name -- so a
+    # typo'd or truncated URL would download to a confidently-wrong
+    # filename. Guessing the *right* name is speculative and out of
+    # scope; refusing to proceed never is. This only rejects the two
+    # "there is nothing sensible to call this" shapes -- no path at all
+    # beyond the host, or a path ending in "/" -- rather than policing the
+    # character content of the name: a query string like "?v=2" is ugly
+    # appended to a filename but not nonsensical, and rejecting it would
+    # regress previously working (if ugly) behavior for no safety gain.
+    case $url in
+        *://*/*) : ;;
+        *) die "cannot derive a filename from $url" \
+               "-- it has no path; give the source a URL ending in a filename" ;;
+    esac
+    filename=${url##*/}
+    if [ -z "$filename" ]; then
+        die "cannot derive a filename from $url" \
+            "-- it ends in \"/\"; give the source a URL ending in a filename"
+    fi
+    dest="$destdir/$filename"
 
     if [ ! -f "$dest" ]; then
         log "fetching $name from $url"
         curl -fSL --retry 3 -o "$dest.part" "$url" \
             || die "download failed for $name"
-        mv "$dest.part" "$dest"
+        mv "$dest.part" "$dest" \
+            || die "cannot move downloaded file into place: $dest"
     else
         log "$name already present at $dest"
     fi
@@ -559,11 +591,20 @@ fetch_source() {
 }
 ```
 
+Three things here are not obvious and were each found the hard way:
+`pin_checksum` creates its temp file beside the target rather than in `/tmp`,
+because `mv` replaces the destination inode and would otherwise silently
+clobber the file's mode to `mktemp`'s `0600`. Both `mv` calls check their
+exit status, so a full disk leaves a named error rather than a stray temp
+file. And `fetch_source` refuses a URL it cannot derive a filename from,
+structurally rather than by inspecting characters -- a bare-host URL's final
+path segment is the hostname, which looks like a perfectly good filename.
+
 - [ ] **Step 4: Run the tests and make sure they pass**
 
 Run: `bats tests/vendor.bats`
 
-Expected: 6 tests, all passing.
+Expected: 17 tests, all passing.
 
 - [ ] **Step 5: Create the sources file with what we know**
 
