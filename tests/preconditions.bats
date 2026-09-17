@@ -50,11 +50,15 @@ setup() {
     [[ "$output" == PASS* ]]
 }
 
-@test "ovmf_verdict fails when the directory is empty" {
+# WARN, not FAIL, since P3: the shipped profile boots firmware we build
+# ourselves, so a host with no distro OVMF is not a no-go host. See
+# ledger entry G5 in docs/host-profile.md, struck for the same reason.
+@test "ovmf_verdict warns, but does not fail, when the directory is empty" {
     mkdir -p "$BATS_TEST_TMPDIR/empty"
     run ovmf_verdict "$BATS_TEST_TMPDIR/empty"
     [ "$status" -eq 0 ]
-    [[ "$output" == FAIL* ]]
+    [[ "$output" == WARN* ]]
+    [[ "$output" == *"build our own"* ]]
 }
 
 @test "verdicts_exit_code is 0 when nothing failed" {

@@ -76,7 +76,7 @@ Debian package names in `boot/prereqs.sh`.
 
 | Ledger | Claim | What this host tests |
 |---|---|---|
-| **G5** | OVMF is 4M split CODE/VARS at `/usr/share/OVMF/` | Arch puts `edk2-ovmf` elsewhere with different names. |
+| ~~**G5**~~ | ~~OVMF is 4M split CODE/VARS at `/usr/share/OVMF/`~~ | **Nothing left to test: resolved in P3 by building our own firmware**, so no distro OVMF is read by anything that ships. What this host *can* still falsify is the replacement claim — that `boot/build-ovmf.sh` and `boot/build-opencore.sh` reproduce the same checksums on a different distro and toolchain. That is a stronger test than the one G5 asked for. |
 | **G10** | Local filesystem is btrfs, so `cp --reflink=auto` makes golden promotion near-instant | Different filesystem, so promotion cost changes. |
 | **G11** | btrfs needs `chattr +C` on the image directory | Not applicable off btrfs. |
 | — | `boot/prereqs.sh` names Debian packages | It would need an Arch mapping, or to stop naming packages at all. |

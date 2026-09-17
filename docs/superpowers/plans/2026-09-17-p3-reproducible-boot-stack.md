@@ -1137,11 +1137,31 @@ Claude-Session: https://claude.ai/code/session_01FoKSUe9s8WEdm1b1P4epUx"
 
 **This is P3's exit criterion**, and the reason the phase exists.
 
-- [ ] **Step 1: Retire the Tier 2 profiles**
+- [x] **Step 1: Retire the Tier 2 profiles**
 
 `p1-reference`, `p1-headless`, `p1-interactive`, `p2-clone` all reference the quarantine. Now that `p3-full` works, they are history rather than tools.
 
 Decide deliberately and say which you chose: delete them, or move them to `vm/profiles/attic/` outside `PROFILE_DIR` so `tier-check` no longer scans them. **Do not** leave them in place and weaken the gate to tolerate them — that would invert the whole point.
+
+**Chosen: moved to `vm/profiles/attic/`, not deleted.** They record how the
+working configuration was arrived at, and the diffs between them are the
+evidence for several findings in `NOTES.md`. `profile_list` globs `*.args`
+without recursing, so nothing in `attic/` is scanned by `tier-check` or
+reachable by `./vm/run.sh`. `vm/profiles/attic/README.md` says what each
+one was and that none is expected to keep working.
+
+**Seven, not five.** `p2-notablet-abs` also referenced the quarantine. And
+`p3-oc` was retired too, for a reason the plan did not anticipate: its
+firmware line reads `-bios %IMAGES%/work/OVMF_CODE.fd`, which contains no
+`%VENDOR%` and so passed the gate — while that file is byte-identical
+(`8a7ef535…`) to the UTM bundle's Tier 2 `OVMF.bin`. Its own header says
+"the firmware still is [Tier 2], which is why tier-check will keep flagging
+this profile until p3-full", and tier-check never did. That is the
+laundering `docs/decisions/0002`'s addendum forbids, arriving as an
+*unmodified* copy rather than a modified one. Recorded as a known limit of
+the gate in `docs/decisions/0004`.
+
+What remains in `vm/profiles/`: `base-kvm` and `p3-full`.
 
 - [ ] **Step 2: Make `--strict` the default in CI**
 
@@ -1177,14 +1197,40 @@ Expected: bats passes, shellcheck clean, **tier-check reports Tier 2 clean**, ex
 
 A table of every component in the shipped boot path with its final tier, how it is built or fetched, and its pinned version. This is the artifact that answers "can we reproduce this on another host", and it is what P4 and the GHA phase will build on.
 
-- [ ] **Step 7: Promote golden #2**
+- [x] **Step 7: Promote golden #2 — SKIPPED, deliberately. This instruction was wrong.**
+
+The plan said:
 
 ```bash
 ./vm/golden.sh promote "$MQG_IMAGE_DIR/work/p3-full.qcow2" p3-reproducible \
   "10.9.5 on a fully reproducible boot stack: OpenCore 1.0.7 built from pinned source, our config, stock Debian OVMF, no Tier 2 blobs"
 ```
 
-Golden #1 stays as the P2 baseline. Golden #2 becomes what P4 builds its pipeline around.
+**Not done, and it should not be.** Written down here rather than quietly
+omitted, so the next reader sees a decision instead of an oversight.
+
+P3 changed the **boot stack**, and the boot stack does not live on the
+macOS disk. The firmware is `$MQG_BUILD_DIR/firmware/OVMF_CODE.fd`, the
+bootloader and its config and the kexts are all in
+`$MQG_IMAGE_DIR/work/opencore-p3.img`, and the EFI variable store is a
+third file again. **Not one byte of P3's work is inside `p3-full.qcow2`.**
+That image is golden #1 plus whatever a handful of boots wrote to it: log
+lines, an `fseventsd` entry, an atime or two.
+
+So promoting it would copy 8.5 GB to obtain a disk that differs from golden
+#1 only in ways nobody wants, while asserting in its metadata that it
+represents something it does not contain. It would also make the boot stack
+*harder* to reason about, not easier, by implying that "the reproducible
+boot stack" is a disk image rather than a build.
+
+Golden #1 is unchanged, still verifies, and remains correct. What P4 builds
+its pipeline around is golden #1 plus
+`docs/decisions/0004-p3-boot-stack-provenance.md` — which is the artifact
+that actually records this phase's output, and which P4 needs anyway to
+rebuild the stack from nothing.
+
+Promote a golden when the **disk** changes: after P4's scripted install
+produces one nobody clicked through, for instance. Not after a boot.
 
 - [ ] **Step 8: Commit**
 

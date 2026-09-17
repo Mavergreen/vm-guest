@@ -91,7 +91,7 @@ Per component:
 
 | Component | Target tier | Notes |
 |---|---|---|
-| OVMF firmware | 1, falling back to 0 | Mint's `ovmf` package is vanilla EDK II. Kostarelas notes his is ~5 years old and a current build was untested; if a current one fails, build EDK II ourselves at a pinned older tag. |
+| OVMF firmware | **0** (revised in P3; was "1, falling back to 0") | Built by `boot/build-ovmf.sh` out of the same pinned `acidanthera/audk` tree OpenCore is built from. See the note below for why the original preference was backwards. |
 | OpenCore | 0 | `build-opencore.sh` fetches OpenCorePkg at a pinned release tag, builds it, and assembles `EFI/OC` against **our own `config.plist`**, checked in as diffable text. |
 | HFS+ EFI driver | 0 | OVMF cannot read HFS+, so OpenCore needs one. `HfsPlus.efi` is Apple's binary extracted from Mac firmware — Tier 2 by construction, never buildable. Use `OpenHfsPlus.efi`, which OpenCorePkg builds from source, and accept that it is slower. See `docs/decisions/0002-openhfsplus-over-apple-hfsplus.md`. |
 | `isa-applesmc` OSK | n/a | A constant, not a blob. This host is a real Mac, so reading the OSK off its own hardware is available as a clean path if preferred. |
@@ -99,6 +99,47 @@ Per component:
 
 Third-party binaries are recorded in `vendor/MANIFEST.sha256`. Fetch scripts
 verify against it or refuse.
+
+### Why the firmware is Tier 0, not Tier 1 — revised after P3
+
+This table originally read "Tier 1, falling back to Tier 0" for the
+firmware: prefer the distro's `ovmf` package, self-build only if that
+failed. **That preference was backwards**, and P3 is where it became
+obvious. Three reasons, in increasing order of importance:
+
+1. **Self-building is near-zero marginal cost once an EDK II tree is
+   pinned.** `OvmfPkg` is part of EDK II, and the EDK II this project
+   already pins for OpenCore is `acidanthera/audk`. Building the firmware
+   needed no new source, no new pin and no new fetch step — one more
+   `build -p OvmfPkg/OvmfPkgX64.dsc` against a tree that was already there
+   and already offline. 1m22s cold, 11s warm. Weighed against that, "use
+   the distro's" buys nothing.
+2. **A distro package means the distro chooses the revision, and revision
+   choice is the lever that mattered.** Debian's OVMF 2024.02 renders its
+   own boot manager perfectly and then fails to boot macOS with OpenCore —
+   and fails identically with khronokernel's reference OpenCore 0.6.6, so
+   it was not our build. Ours, from audk, worked on the first try, split
+   pflash and all. Had the firmware been a package, the only remaining
+   moves would have been to argue with the distro or to pin an older
+   package, neither of which is a build.
+3. **A distro dependency quietly imports a per-host assumption into a
+   project whose entire point is portability.** `/usr/share/OVMF/OVMF_CODE_4M.fd`
+   is a Debian/Ubuntu fact. Arch puts it elsewhere under a different
+   package name; other distros ship 2 MB or combined images; and **macOS,
+   which P6 runs on, has no such package at all**. A component we build is
+   the same component everywhere. This is the reason that outranks the
+   other two: the generalization ledger in `docs/host-profile.md` exists to
+   track exactly this kind of assumption, and this one was retired (G5)
+   rather than documented.
+
+Tier 1 remains right for things we genuinely do not build — the Lilu and
+VirtualSMC release kexts — and for QEMU on Linux, where the host's own
+hypervisor userspace is the thing under test rather than a component we
+ship. The distinction is whether the artifact ends up *inside* the guest's
+boot path. The firmware does.
+
+The full component-by-component record, with pins and checksums, is
+`docs/decisions/0004-p3-boot-stack-provenance.md`.
 
 ## 5. Architecture
 
@@ -166,6 +207,17 @@ This is the mechanism that makes "change one variable at a time" verifiable
 rather than aspirational: a profile diff is the experiment.
 
 ## 6. Phase spine
+
+| Phase | Status | Delivered / next |
+|---|---|---|
+| P0 — Foundations | **complete** 2026-09-17 | Repo, `lib/common.sh`, fetch-and-verify, `preconditions.sh` green. |
+| P1 — Known-good boot | **complete** 2026-09-17 | Installer GUI under KVM. Cost four failures worth reading in `NOTES.md`; the fix was SMBIOS, not the shipped `Kernel > Block`. |
+| P2 — Manual install | **complete** 2026-09-17 | 10.9.5 installed and rebooting; golden #1 (`p2-manual-install`) promoted and verified after being cloned from. |
+| P3 — Reproducible boot stack | **complete** 2026-09-17 | See below. |
+| P4 — Unattended pipeline | not started | Depends on `decisions/0004` and on the keypress defect below. |
+| P5 — Interactive performance | not started | Display work is now about *changing* modes, not reaching a usable one. |
+| P6 — GitHub Actions runner | not started | Also depends on the keypress defect. |
+| P7 — Guest integration | deferred | |
 
 ### P0 — Foundations
 
@@ -248,6 +300,43 @@ stock component fails, it is unambiguous which one failed.
 
 **Exit:** no run profile and no part of the image pipeline references
 `$MQG_VENDOR_DIR`. Checked by a test, not by assertion.
+
+#### P3 status: complete, 2026-09-17
+
+**Met.** `./vm/run.sh p3-full` boots 10.9.5 to the desktop with **no Tier 2
+component anywhere in the boot path**: OpenCore 1.0.7 and OVMF built
+offline from the same pinned `acidanthera/audk` tree, our own
+`config.plist`, `OpenHfsPlus.efi`, and pinned Lilu 1.7.2 / VirtualSMC
+1.3.7. `bin/tier-check.sh --strict` is now a section of
+`bin/run-tests.sh`, so the rule is enforced on every test run rather than
+checked by hand. Every component, pin and checksum is in
+`docs/decisions/0004-p3-boot-stack-provenance.md`.
+
+Answered on the way, each of which had been guessed at before:
+
+- **SMBIOS alone fixed the `AppleTyMCEDriver` panic.** Our config has
+  `Kernel > Block: []` and has never contained the block P1 enabled.
+- **`FakeSMC-32` was redundant.** Two SMC kexts, not three.
+- **EFI variables persist** over split pflash, which `-bios` had denied
+  since P1.
+- **`OpenHfsPlus.efi` costs 3.3 s of a 49 s boot** versus Apple's driver —
+  and Apple's driver will not load on our firmware at all, because audk's
+  strict PE loader rejects it. `docs/decisions/0002` has the measurement.
+- **The firmware belongs in Tier 0**, for the reasons recorded in §4.
+
+**Not met, and both P4 and P6 need it fixed: `p3-full` still requires a
+keypress.** `Misc > Boot > Timeout = 5` with an empty NVRAM makes the
+picker's default the OpenCore disk itself, so an unattended boot times out
+into `EFI_ALREADY_STARTED` and hangs; `2` must be pressed within five
+seconds. It is a `config.plist` defect, not a firmware one, and it was left
+alone here because the task that found it had a different single variable
+under test. The obvious next experiment is
+`UEFI > Input > KeySupport = false`, which would also let the picker
+remember a default — modified keys (`ctrl-2`, `ctrl-Enter`) currently reach
+nothing.
+
+**Also deliberately skipped: golden #2.** See the note at the end of
+`docs/superpowers/plans/2026-09-17-p3-reproducible-boot-stack.md`.
 
 ### P4 — Unattended pipeline (goal #2)
 

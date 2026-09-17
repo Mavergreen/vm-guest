@@ -43,4 +43,19 @@ else
     echo "Install it to lint shell scripts locally: sudo apt install shellcheck"
 fi
 
+echo
+echo "== tier-check =="
+# P3's exit gate, run as a test rather than by hand. No profile in
+# vm/profiles/ may reference the Tier 2 quarantine: the boot path has to be
+# rebuildable from pinned source. Retired profiles that do reference it live
+# in vm/profiles/attic/, outside PROFILE_DIR -- see that directory's README,
+# and docs/decisions/0004-p3-boot-stack-provenance.md.
+#
+# Unlike shellcheck this is not optional. It needs nothing installed, and a
+# rule that is only checked when a tool happens to be present is a rule that
+# will be broken on the host that does not have it.
+if ! "$repo_root/bin/tier-check.sh" --strict; then
+    status=1
+fi
+
 exit "$status"

@@ -1361,3 +1361,179 @@ nothing at all**; those two lines are what a *failed* boot leaves.
 
 I was reading a failing boot's log without ever having looked at a
 successful one's for comparison.
+
+## 2026-09-17 — P3 complete — the gate is closed, and the HFS+ cost is measured
+
+**P3's exit criterion is met and enforced.** `bin/tier-check.sh --strict`
+now runs as a section of `bin/run-tests.sh`, beside bats and shellcheck, so
+"no unreproducible blobs in the boot path" is a test rather than an
+aspiration. 170 bats tests pass, shellcheck is clean, tier-check reports
+Tier 2 clean, and the suite passes on a true fresh clone.
+
+### Seven profiles retired, not exempted
+
+`vm/profiles/attic/`, outside `PROFILE_DIR`. `profile_list` globs `*.args`
+without recursing, so nothing there is scanned or runnable, and nothing had
+to be deleted. `vm/profiles/attic/README.md` says what each one was.
+
+The alternative — leaving them and teaching the gate to tolerate them —
+would have inverted the point of having a gate. A rule with a standing
+exemption for the things that break it is not a rule.
+
+Five were the expected ones (`p1-reference`, `p1-headless`,
+`p1-interactive`, `p2-clone`, `p2-notablet-abs`). Two more went with them:
+
+**`p3-oc` was passing the gate while booting a Tier 2 blob.** Its firmware
+line is `-bios %IMAGES%/work/OVMF_CODE.fd` — no `%VENDOR%`, so tier-check
+saw nothing. That file is byte-identical to the UTM bundle's `OVMF.bin`:
+
+```
+8a7ef5356384de4e6859a070ffe6d2e1aefddfc568e9cb19b17cf9fba78b25f6  work/OVMF_CODE.fd
+8a7ef5356384de4e6859a070ffe6d2e1aefddfc568e9cb19b17cf9fba78b25f6  vendor-reference/.../Images/OVMF.bin
+```
+
+The profile's own header says "the firmware still is [Tier 2], which is why
+tier-check will keep flagging this profile until p3-full", and tier-check
+never did flag it — for the whole of P3. `docs/decisions/0002`'s addendum
+anticipated a *modified* copy escaping the quarantine; this was an
+*unmodified* one, which is the same hole by an easier route.
+
+**The gate stops accidents, not evasion**, and that is now written down in
+`docs/decisions/0004` rather than left as something a reader has to infer.
+Closing it properly would mean hashing every file a profile names against
+the quarantine, which cannot run on a fresh clone with no image directory —
+so it would be advisory, and an advisory check is not a gate.
+
+### Measured: `OpenHfsPlus.efi` costs 3.3 s, and Apple's driver will not run
+
+`docs/decisions/0002` has had `_to be filled in by P3._` since P1. Filled
+in: **49.1 s versus 45.8 s to the Mavericks desktop.**
+
+| Driver | Runs | Mean | Individual runs |
+|---|---|---|---|
+| `OpenHfsPlus.efi` (Tier 0) | 5 | **49.1 s** | 48.8, 48.9, 48.9, 49.1, 49.7 |
+| `HfsPlusLegacy.efi` (Tier 2, Apple's) | 5 | **45.8 s** | 45.7, 45.7, 45.8, 45.8, 46.0 |
+
+**+3.3 s, +7.2%.** Nine times the run-to-run spread, so it is real; and
+small. The decision stands.
+
+Method, because a number without one is a rumour:
+
+- Ten boots, **strictly alternating**, so host drift lands on both arms.
+- Each run from identical state: `rm` the overlay, `vm/clone.sh` a fresh
+  one off golden #1, `boot/make-nvram.sh --force`. 10.9 ignores the ACPI
+  power button, so every run ends in a hard kill, and a run that inherited
+  the previous run's journal replay would not be comparable.
+- **Exactly one line of the QEMU command line differs between the arms** —
+  the OpenCore image. The two images differ only in which driver sits in
+  `EFI/OC/Drivers/` and which one `config.plist` names. Same OpenCore
+  1.0.7, same config, same kexts, same firmware, same disk.
+- t=0 is the `exec` of QEMU; the end is the first 1 Hz `screendump` over
+  the monitor socket with more than half the frame lit. Resolution ±1 s,
+  hence five runs per arm rather than one.
+- **The verdict was checked by eye, not taken from the number.** The
+  threshold frame is the Finder desktop with the Dock drawn. After the
+  colour-counting fiasco earlier in this phase, a boot-progress instrument
+  does not get believed until someone has looked at what it is measuring.
+
+Shipped stack, for the record: `p3-full` (our OVMF, split pflash) with
+`OpenHfsPlus` measured 48.7, 48.8, 48.9, 50.0 s — the same as the reference
+firmware, so our firmware costs nothing here.
+
+### Why the comparison had to run on the reference firmware
+
+**Apple's driver does not load on the firmware we ship.** First attempt,
+`p3-full` with `HfsPlusLegacy.efi` swapped in, timed out at 300 s. The
+screen said why:
+
+```
+OC: Driver HfsPlusLegacy.efi at 2 cannot be loaded - Not started!
+Halting on critical error
+```
+
+`EFI_NOT_STARTED` comes back from `gBS->LoadImage` in
+`Library/OcMainLib/OpenCoreUefi.c:200`, and it originates in
+`UefiImageInitializeContextPreHash` — audk's strict PE loader, in
+`MdeModulePkg/Core/Dxe/Image/Image.c:1237`. acidanthera's EDK II fork
+replaces EDK II's tolerant image loader with one that rejects
+non-conformant PE images, and Apple's extracted binary is one.
+`FixupAppleEfiImages` was already `true` and does not help: it fixes images
+*OpenCore* loads, not ones the firmware loads.
+
+So the A/B ran on the reference OVMF (2021-era EDK II, which accepts the
+blob), holding our OpenCore, our config and our kexts constant. The
+measurement is therefore honest about the driver and silent about the
+firmware, which is the right shape for the question `0002` asks.
+
+Worth stating plainly: **acidanthera's own EDK II will not load Apple's
+`HfsPlus` driver.** Overruling `0002` would now mean giving up the
+self-built firmware too — trading 3.3 seconds for two unbuildable blobs
+instead of one.
+
+Reproducing the Apple-driver image, for anyone who wants to re-measure. It
+lives in the quarantine, because deriving from a Tier 2 artifact does not
+launder it:
+
+```
+cp --reflink=auto $MQG_IMAGE_DIR/work/opencore-p3.img \
+   $MQG_VENDOR_DIR/derived/opencore-p3-applehfs.img
+OFF=$MQG_VENDOR_DIR/derived/opencore-p3-applehfs.img@@1048576
+mcopy -n -i $MQG_VENDOR_DIR/opencore-legacy/EFI-LEGACY.img@@1048576 \
+      ::/EFI/OC/Drivers/HfsPlusLegacy.efi /tmp/HfsPlusLegacy.efi
+mdel  -i "$OFF" ::/EFI/OC/Drivers/OpenHfsPlus.efi
+mcopy -i "$OFF" /tmp/HfsPlusLegacy.efi ::/EFI/OC/Drivers/HfsPlusLegacy.efi
+# and a config.plist whose UEFI > Drivers Path says HfsPlusLegacy.efi
+```
+
+`HfsPlusLegacy.efi` is 22,912 bytes, sha256
+`5ab216689ee8b6918ef70a22928fe7bc205a39b096e8711cd5711ae95a8df7f2`.
+
+### Golden #2 was not promoted, and that was the decision
+
+The plan's Task 9 Step 7 said to promote `p3-full.qcow2` as golden #2.
+**Skipped deliberately**, and written into the plan at the place the
+instruction was, so the next reader sees a decision rather than an
+oversight.
+
+P3 changed the **boot stack**, which lives in the firmware image, the
+OpenCore image and the NVRAM file — **not one byte of it is inside
+`p3-full.qcow2`**. That image is golden #1 plus what a few boots wrote:
+log lines, an `fseventsd` entry. Promoting it would duplicate 8.5 GB to get
+a disk that differs from golden #1 only in ways nobody wants, while its
+metadata claimed to represent something it does not contain. Golden #1 is
+unchanged and still correct. Promote a golden when the *disk* changes —
+after P4's scripted install, for instance. Not after a boot.
+
+### Ledger: G5 struck, G15 struck
+
+`G5` ("OVMF is 4M split CODE/VARS at `/usr/share/OVMF/`") is no longer an
+assumption: we build our own firmware and `p3-full` boots
+`%BUILD%/firmware/OVMF_CODE.fd`, a path we own on every host. Struck rather
+than deleted, so the ledger records that it was retired by a design change
+and not merely never tested. `docs/test-hosts.md` updated: the EndeavourOS
+machine now has a *stronger* claim to falsify — that `build-ovmf.sh` and
+`build-opencore.sh` reproduce the same checksums on another distro.
+
+`G15` (EFI variables do not persist) went too — they persist, measured
+across three power cycles.
+
+One consequence worth noticing, because it is the same assumption in
+executable form: `bin/preconditions.sh` **failed** the host when
+`/usr/share/OVMF` held nothing usable. That is now a WARN. There is no
+`ovmf` package on macOS at all, and P6 runs there; a go/no-go script that
+says no-go over a package nothing reads is the per-host assumption we just
+retired, wearing a different hat.
+
+### What P3 did not deliver
+
+**`p3-full` still needs a keypress**, and both P4 and P6 need that fixed.
+`Misc > Boot > Timeout = 5` with an empty NVRAM makes the picker's default
+the OpenCore disk itself; left alone it re-enters `BOOTx64.efi`, gets
+`EFI_ALREADY_STARTED`, and hangs. It is a `config.plist` defect. The
+obvious next experiment is `UEFI > Input > KeySupport = false`, which would
+also let the picker remember a default — modified keys currently reach
+nothing.
+
+Recorded in the umbrella design's phase table alongside what P3 did
+deliver, rather than only here, because it is a dependency and not a
+footnote.

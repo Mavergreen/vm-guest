@@ -53,6 +53,14 @@ ignore_msrs_verdict() {
     fi
 }
 
+# The distro's OVMF is informational since P3, not a requirement. The
+# shipped profile boots firmware we build ourselves out of the pinned
+# acidanthera/audk tree (boot/build-ovmf.sh), so a host with no `ovmf`
+# package is not a no-go host -- and insisting otherwise would reimpose,
+# as an executable check, exactly the per-host assumption that retiring
+# ledger entry G5 removed. There is no such package on macOS at all, and
+# P6 runs there. Still reported, because knowing what the host has is
+# useful when comparing against the reference configuration.
 ovmf_verdict() {
     local dir=$1
     if [ -f "$dir/OVMF_CODE_4M.fd" ] && [ -f "$dir/OVMF_VARS_4M.fd" ]; then
@@ -60,7 +68,8 @@ ovmf_verdict() {
     elif [ -f "$dir/OVMF.fd" ]; then
         check_result PASS ovmf "combined OVMF.fd found in $dir"
     else
-        check_result FAIL ovmf "no usable OVMF firmware in $dir"
+        check_result WARN ovmf \
+            "no distro OVMF in $dir -- not required: we build our own (boot/build-ovmf.sh)"
     fi
 }
 
