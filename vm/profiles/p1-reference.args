@@ -106,20 +106,22 @@ user,id=net0
 -device
 usb-net,bus=usb.0,netdev=net0
 
-# Input. usb-mouse, NOT usb-tablet.
+# Input. usb-tablet gives absolute positioning: the guest cursor follows the
+# host pointer with no grab.
 #
-# OS X cannot drive QEMU's usb-tablet natively -- that is exactly why
-# pmj/QemuUSBTablet-OSX exists as a third-party kext, and Somlo's KVM guide
-# specifies usb-kbd + usb-mouse. Wiring a tablet here produced a guest
-# cursor pinned at the top-left that received no motion events at all.
-#
-# Absolute positioning (no pointer-grab, cursor follows the host) is a P5
-# integration question, not something to fake with a device the guest has no
-# driver for.
+# This works natively on 10.9 with NO third-party kext, which contradicts
+# what this file said earlier. The correction is worth stating because the
+# wrong version was confidently argued: an early attempt with usb-tablet
+# produced a cursor pinned at the top-left, and that was blamed on OS X
+# being unable to drive QEMU's tablet -- citing pmj/QemuUSBTablet-OSX's
+# existence as proof. But that attempt ran on qemu-xhci, where the keyboard
+# was dead too. The controller was the fault. A control experiment on a
+# clone that had never had the kext installed confirmed usb-tablet works on
+# EHCI unaided.
 -device
 usb-kbd,bus=usb.0
 -device
-usb-mouse,bus=usb.0
+usb-tablet,bus=usb.0
 
 # DEVIATION FROM THE BUNDLE: it uses virtio-vga-gl, which wants a GL-capable
 # local display. Starting with plain VGA so the guest can run headless and be

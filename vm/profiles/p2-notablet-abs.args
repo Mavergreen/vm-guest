@@ -1,3 +1,18 @@
+# p2-notablet-abs -- CONTROL EXPERIMENT.
+#
+# usb-tablet on EHCI against a clone of golden #1, which has never had pmj's
+# kext installed. This settles a claim I made too early: that OS X cannot
+# drive QEMU's usb-tablet natively.
+#
+# The evidence for that claim was weak. The first tablet attempt ran on
+# qemu-xhci, where NOTHING worked -- keyboard and mouse were dead too. The
+# controller was then changed to EHCI and the mouse came alive, but
+# usb-tablet was never retried on EHCI before the kext went in. So the
+# original failure may have been XHCI alone.
+#
+# If the pointer works here, the kext is unnecessary and the claim is wrong.
+#
+# ORIGINAL HEADER:
 # p2-tablet-abs -- the same clone, now with usb-tablet instead of usb-mouse.
 #
 # Only safe to run AFTER pmj's QemuUSBTabletUSBDriver.kext is installed in
@@ -40,7 +55,7 @@ id=opencore,if=none,format=raw,file=%VENDOR%/derived/opencore-p1.img
 usb-storage,bus=usb.0,drive=opencore
 
 -drive
-id=target,if=none,format=qcow2,file=%IMAGES%/work/tablet.qcow2
+id=target,if=none,format=qcow2,file=%IMAGES%/work/notablet.qcow2
 -device
 ide-hd,bus=ide.0,drive=target
 
@@ -48,11 +63,6 @@ ide-hd,bus=ide.0,drive=target
 # has no SSH yet. Read-only so the guest cannot modify our copy -- which
 # means usb-storage rather than ide-hd, since ide-hd refuses a read-only
 # block node outright ("Block node is read-only").
--drive
-id=transfer,if=none,format=raw,readonly=on,file=%IMAGES%/work/transfer.img
--device
-usb-storage,bus=usb.0,drive=transfer
-
 -netdev
 user,id=net0
 -device

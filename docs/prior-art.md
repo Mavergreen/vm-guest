@@ -174,9 +174,14 @@ The basis for P4's payload.
 
 - **pmj/QemuUSBTablet-OSX** — <https://github.com/pmj/QemuUSBTablet-OSX>. A
   driver letting OS X guests use QEMU's `usb-tablet` absolute pointing device.
-  **Confirmed necessary, 2026-09-17**: P1 wired a `usb-tablet` and the guest
-  drew a cursor that never moved. Without this kext, 10.9 needs a relative
-  `usb-mouse` and therefore a pointer grab.
+  **NOT needed for this setup — correction, 2026-09-17.** An earlier note here
+  claimed the opposite. `usb-tablet` works natively on 10.9 given an EHCI
+  controller; the cursor-pinned-at-top-left failure that prompted the claim
+  was caused by `qemu-xhci`, which 10.9 cannot drive at all. Verified by
+  control experiment: a clone of golden #1 that never had the kext installed
+  tracks the host pointer correctly.
+  The project still keeps this reference, because the kext may matter for
+  other controller/OS combinations — but nothing here depends on it.
   - Covers 10.8 through 10.11+, with separate kexts per era. **LGPL**, with
     commercial licensing from the author.
   - The author's binaries are **code-signed**, so 10.9 accepts them without

@@ -206,30 +206,54 @@ The 39.3 s includes the OpenCore picker's timeout, so it is a
 launch-to-usable figure rather than a kernel boot time. That is the number
 that matters for iteration speed anyway.
 
-## Absolute pointing: pmj's QemuUSBTablet kext
+## Absolute pointing: it needed no kext, and I got this wrong
 
-Installed on a **clone** of golden #1, never on the golden itself, so the
-baseline stays free of it and P5 can measure what it changed.
+**Outcome: `usb-tablet` works natively on 10.9. No third-party kext is
+installed, and none is needed.**
 
-- **Source:** `Build-1.2.zip` from `pmj/QemuUSBTablet-OSX`'s own `build/`
-  directory in git, sha256 `c6e4c5c4...`. Better provenance than the
-  installer on the author's website, which is offline: the zip is versioned
-  in upstream's VCS and can be pinned to a commit.
-- The `artefacts/` copy of `QemuUSBTabletUSBDriver` is **byte-identical** to
-  the binary inside the `.pkg` recovered from the Internet Archive
-  (`c111ae90...`, 46,880 bytes), so the two sources agree.
-- The kext declares `com.apple.kpi.* = 13.0` — Darwin 13, i.e. exactly 10.9 —
-  and `IOUSBHIDDriver 660.4`. It is code-signed, so 10.9 loads it without the
-  unsigned-kext question this project had left unverified.
-- Installed via the `.pkg` rather than by hand: it handles the version gating
-  (`install_only_if_older_than('10.11')` selects the right kext for 10.9) and
-  the root-owned permissions that a manual copy would have to replicate.
-- Transferred on a 16 MB read-only FAT image attached as `usb-storage`. Note
-  `ide-hd` refuses a read-only block node outright.
+The wrong version of this section is worth preserving, because the mistake
+was a reasoning error rather than bad luck.
 
-**Result: absolute pointing works.** The guest cursor tracks the host pointer
-with no grab. Confirmed by use, not just by the kext being present.
+### What I claimed
 
-This changes the interactive feel enough to matter for every later phase,
-which is why it was pulled forward out of the deferred integration work
-rather than left for P7.
+P1's first attempt at `usb-tablet` produced a guest cursor pinned at the
+top-left receiving no motion events. I concluded that OS X cannot drive
+QEMU's tablet natively, and cited `pmj/QemuUSBTablet-OSX` existing at all as
+confirmation — a third-party kext exists to solve this, therefore this is the
+problem it solves. That went into `NOTES.md`, into `docs/prior-art.md`, and
+into the design's risk list.
+
+### Why it was wrong
+
+That attempt ran on `qemu-xhci`. On the same controller the **keyboard was
+also dead**. The controller was at fault, not the pointing device. I then
+switched to `usb-mouse` (still XHCI, still dead), then to EHCI — where the
+mouse worked — and never retried `usb-tablet` on EHCI before installing the
+kext. So the kext was credited with a fix that the controller change had
+already made.
+
+The prior art fit the story, which is exactly what made it convincing.
+
+### How it was settled
+
+`kextstat | grep -i qemu` came back empty while absolute pointing was
+working — the kext was not loaded and the tablet worked anyway.
+
+Control experiment, `vm/profiles/p2-notablet-abs.args`: `usb-tablet` on EHCI
+against a **fresh clone of golden #1**, which has never had the kext
+installed and had no transfer disk attached. The pointer tracked correctly.
+
+This is what the clone machinery is for. Testing the claim cost one clone and
+two minutes, because throwing away a guest is free.
+
+### What this leaves
+
+- `p1-reference` uses `usb-tablet`, giving absolute pointing with no grab.
+- No third-party kext in the guest, and one fewer binary in
+  `vendor/sources.tsv` — a strictly better outcome than the one we were
+  aiming for.
+- `pmj/QemuUSBTablet-OSX` stays in `docs/prior-art.md`, correctly described.
+  It may matter for other controller or OS combinations. Nothing here
+  depends on it.
+- **Golden #2 is not needed.** Golden #1 remains the single baseline, and it
+  is also the working image.
