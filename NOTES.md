@@ -1165,3 +1165,15 @@ Profiles gained a fourth placeholder. The firmware a profile boots is a
 build artifact, and `MQG_BUILD_DIR` is overridable independently of
 `MQG_IMAGE_DIR`; a profile spelling it `%IMAGES%/build` would boot the wrong
 firmware for anyone who moved the build directory.
+
+### Housekeeping: `run.log` went missing
+
+`run.log` was present at the start of this session and is absent at the end.
+It is gitignored ("machine-generated, append-only, noisy"), so it was never
+in the repository and nothing tracked was lost — but the lab's record of
+QEMU invocations before today is gone with it. The most likely cause is a
+`git stash push -u` / `git stash pop` pair run around the fresh-clone check;
+that could not be reproduced afterwards, so this is a suspicion rather than
+a finding. It has deliberately **not** been reconstructed by hand: a
+machine-generated log that someone typed is worse than an absent one.
+`vm/run.sh` recreates it on the next run.
