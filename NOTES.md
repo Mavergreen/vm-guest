@@ -678,3 +678,112 @@ GitHub archive tarballs are not contractually byte-stable; the compression
 has changed before. If `audk-*` or `opencorepkg-src` ever fails
 verification without the URL changing, that is the cause, and the fix is to
 re-verify the *contents* against the commit rather than to re-pin blindly.
+
+## 2026-09-17 — P3 — our own config.plist, and the SMC kexts pinned
+
+Two of P3's three remaining build-side tasks. The config is the substance:
+it is what makes the bootloader ours rather than khronokernel's.
+
+### The config was derived from 1.0.7's Sample.plist, not from 0.6.6
+
+`boot/config/config.plist` starts from the `Docs/Sample.plist` in the same
+source tree we build, and departs from it only where
+`boot/config/README.md` says so, with a reason each time. The 0.6.6 reference config was used as evidence
+— cited where adopted, cited where rejected — never as a starting point.
+
+`ocvalidate` from that same build tree: **"No issues found"**, first run, no
+edits needed. It is the 1.0.7-only binary, which is exactly why it is worth
+having.
+
+Settings the plan's table did not anticipate, each of which would have been
+a boot failure or a diagnosis problem:
+
+- **`Misc > Security > Vault` = `Optional`.** The sample ships `Secure`,
+  which makes OpenCore refuse to boot without a signed `vault.plist` and
+  `vault.sig`. We produce neither. This one would have been a hard stop at
+  Task 7 with a confusing message.
+- **`Misc > Debug > DisableWatchDog` = `true`.** Decision 0002 expects
+  `OpenHfsPlus.efi` to be slower than Apple's driver by an unmeasured
+  amount. The firmware watchdog reboots on a slow `boot.efi`, which would
+  have turned "slow" into "reboot loop" and hidden the cause.
+- **`UEFI > APFS > EnableJumpstart` = `false`.** 10.9 cannot mount APFS.
+- **`Misc > Boot > HideAuxiliary` = `false`.** During bring-up an entry
+  hidden behind a keystroke is indistinguishable from one OpenCore never
+  found, and "picker empty" is a failure mode Task 7 has to diagnose.
+- **`NVRAM > Delete` on `boot-args`.** From Task 8, when split-pflash OVMF
+  restores variable *persistence*, a stale `boot-args` would otherwise
+  outlive the config that set it.
+
+And two places where we knowingly differ from the reference:
+
+- **`Kernel > Block` is empty.** The reference ships a disabled block for
+  `AppleTyMCEDriver`; P1 enabled it and nothing changed (see "Failure 4"
+  above). Shipping a setting observed to do nothing would also confound
+  Task 8, which exists to prove the SMBIOS change alone fixed the panic.
+- **`Booter > Quirks > SetupVirtualMap` and `FixupAppleEfiImages` stay on**,
+  which is 1.0.7's sample default; the 0.6.6 reference has the first off and
+  did not have the second at all. If Task 7 fails inside the booter, these
+  are the first two to flip, one at a time.
+
+`SetApfsTrimTimeout` is the clearest case of a reference setting that was
+copied rather than chosen: the reference sets it, and 10.9 predates APFS by
+four years. Left at the sample default.
+
+### The plan's HFS+ test could not have passed
+
+The plan's `tests/config_plist.bats` asserts `[[ "$output" != *"HfsPlus.efi"* ]]`
+against a space-joined driver list. `"OpenHfsPlus.efi"` **contains** the
+substring `"HfsPlus.efi"`, so with our driver present that assertion is
+always false. Written the other way round — as a guard that passes — it
+would have guarded nothing. The test now compares whole driver names, and
+was checked by temporarily adding `HfsPlusLegacy.efi` to the config and
+watching it fail.
+
+### Lilu 1.7.2 and VirtualSMC 1.3.7 still support 10.9
+
+The plan flagged this as a stop-and-report: acidanthera has been dropping
+old-OS support, and if the current releases could not load on Darwin 13 we
+would need older pinned releases, which is a decision rather than a
+workaround. Checked by reading each `Contents/Info.plist`, not by assuming:
+
+```
+Lilu 1.7.2        OSBundleLibraries_x86_64  com.apple.kpi.* = 10.0.0
+VirtualSMC 1.3.7  OSBundleLibraries_x86_64  com.apple.kpi.* = 10.0.0
+                                            as.vit9696.Lilu = 1.2.0
+```
+
+Darwin 10 is 10.6. **10.9 is Darwin 13**, well above the floor, so both are
+fine. The non-arch-specific `OSBundleLibraries` in each declares `8.0.0`
+(Darwin 8 = 10.4), which is where the `MinKernel: 8.0.0` in our
+`Kernel > Add` entries comes from. Neither Mach-O carries an
+`LC_VERSION_MIN_MACOSX` or `LC_BUILD_VERSION` load command, so there is no
+second, stricter minimum hidden in the binary. Both are fat, x86_64 + i386.
+
+Pinned in `vendor/sources.tsv`:
+
+```
+lilu-release        1.7.2  53967d7dcfaab01023a33df2e969a89522f13d6654a6a56ac4711b62dabf3ab8
+virtualsmc-release  1.3.7  12f1d379969f926306fa92d94ddbf33b32b31176589dc42089d864a26b31b700
+```
+
+`VirtualSMC` requires Lilu ≥ 1.2.0 and Lilu 1.7.2 declares
+`OSBundleCompatibleVersion 1.2.0`, so the pair is self-consistent. Lilu must
+be injected first, and is.
+
+### The two archives do not have the same shape
+
+`Lilu-1.7.2-RELEASE.zip` has `Lilu.kext` at the top level.
+`VirtualSMC-1.3.7-RELEASE.zip` has its kexts under `Kexts/`, next to
+`Tools/` and `Drivers/`. So `boot/fetch-kexts.sh` searches for
+`<Name>.kext` rather than assuming a path, with `-prune` so a `.dSYM`'s or
+a plugin's copy of the name cannot win.
+
+### Still pending: how few kexts we actually need
+
+**Task 6's experiment has not been run.** The reference image ships three
+SMC-related kexts — `FakeSMC-32`, `VirtualSMC` and `Lilu` — and `FakeSMC`
+and `VirtualSMC` are *alternative* emulators from different projects, so at
+least one is probably redundant. We ship two, because the rule is that
+nothing ships without having seen a boot fail without it. Settling that
+needs a bootable configuration, which is Task 7. Until then the question is
+open, not answered.

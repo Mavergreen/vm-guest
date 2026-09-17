@@ -231,3 +231,97 @@ setup() {
     # ...and what replaces it reads a local file.
     grep -q '^+src=\$(cat "\${EFIBUILD_SH}")' "$p"
 }
+
+# --- the SMC kexts ----------------------------------------------------
+#
+# These are the only non-Tier-0 things in the assembled EFI image, and the
+# image build consumes an exact layout -- Contents/Info.plist and
+# Contents/MacOS/<name> -- so an archive that does not contain it has to
+# fail here, naming the piece, rather than as an mcopy error two scripts
+# later.
+
+# Write a zip at $1 whose members are the remaining arguments, each an
+# empty file at that path. Enough to exercise the layout checks without
+# downloading 2 MB of real kexts.
+_fake_zip() {
+    local out=$1; shift
+    python3 - "$out" "$@" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for name in sys.argv[2:]:
+        z.writestr(name, b"")
+PY
+}
+
+# A sources.tsv naming both kexts, so the script's own pinned-ness check
+# (which runs over the whole list before fetching anything) gets a row for
+# each rather than dying with "no such source".
+_kext_sources() {
+    printf '%s\n' \
+        '# name	url	sha256' \
+        "lilu-release	$1	TOFU" \
+        "virtualsmc-release	$2	TOFU" \
+        > "$BATS_TEST_TMPDIR/sources.tsv"
+}
+
+@test "fetch-kexts.sh unpacks each kext with its binary" {
+    run "$REPO/boot/fetch-kexts.sh" --list
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Lilu"* ]]
+    [[ "$output" == *"VirtualSMC"* ]]
+}
+
+@test "fetch-kexts.sh refuses an unpinned checksum" {
+    _kext_sources "https://example.invalid/Lilu.zip" \
+                  "https://example.invalid/VirtualSMC.zip"
+    run env MQG_SOURCES="$BATS_TEST_TMPDIR/sources.tsv" \
+        MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        MQG_REQUIRE_PINNED=1 \
+        "$REPO/boot/fetch-kexts.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not pinned"* ]]
+}
+
+@test "fetch-kexts.sh names the missing binary, not just 'no such file'" {
+    _fake_zip "$BATS_TEST_TMPDIR/Lilu.zip" "Lilu.kext/Contents/Info.plist"
+    _fake_zip "$BATS_TEST_TMPDIR/VirtualSMC.zip" \
+        "Kexts/VirtualSMC.kext/Contents/Info.plist"
+    _kext_sources "file://$BATS_TEST_TMPDIR/Lilu.zip" \
+                  "file://$BATS_TEST_TMPDIR/VirtualSMC.zip"
+    run env MQG_SOURCES="$BATS_TEST_TMPDIR/sources.tsv" \
+        MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        "$REPO/boot/fetch-kexts.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Contents/MacOS/Lilu"* ]]
+}
+
+@test "fetch-kexts.sh says so when the archive has no kext bundle at all" {
+    _fake_zip "$BATS_TEST_TMPDIR/Lilu.zip" "README.md"
+    _fake_zip "$BATS_TEST_TMPDIR/VirtualSMC.zip" "README.md"
+    _kext_sources "file://$BATS_TEST_TMPDIR/Lilu.zip" \
+                  "file://$BATS_TEST_TMPDIR/VirtualSMC.zip"
+    run env MQG_SOURCES="$BATS_TEST_TMPDIR/sources.tsv" \
+        MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        "$REPO/boot/fetch-kexts.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no Lilu.kext"* ]]
+}
+
+@test "fetch-kexts.sh produces the layout build-efi-image.sh consumes" {
+    _fake_zip "$BATS_TEST_TMPDIR/Lilu.zip" \
+        "Lilu.kext/Contents/Info.plist" "Lilu.kext/Contents/MacOS/Lilu"
+    _fake_zip "$BATS_TEST_TMPDIR/VirtualSMC.zip" \
+        "Kexts/VirtualSMC.kext/Contents/Info.plist" \
+        "Kexts/VirtualSMC.kext/Contents/MacOS/VirtualSMC" \
+        "Tools/smcread" "Drivers/VirtualSmc.efi"
+    _kext_sources "file://$BATS_TEST_TMPDIR/Lilu.zip" \
+                  "file://$BATS_TEST_TMPDIR/VirtualSMC.zip"
+    run env MQG_SOURCES="$BATS_TEST_TMPDIR/sources.tsv" \
+        MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        "$REPO/boot/fetch-kexts.sh"
+    [ "$status" -eq 0 ]
+    for k in Lilu VirtualSMC; do
+        [ -f "$BATS_TEST_TMPDIR/build/kexts/$k.kext/Contents/Info.plist" ]
+        [ -f "$BATS_TEST_TMPDIR/build/kexts/$k.kext/Contents/MacOS/$k" ]
+    done
+}
