@@ -844,7 +844,7 @@ Make it executable: `chmod +x bin/preconditions.sh`
 
 Run: `bats tests/preconditions.bats`
 
-Expected: 9 tests, all passing.
+Expected: 11 tests, all passing.
 
 - [ ] **Step 5: Run it against the real host**
 
@@ -910,6 +910,7 @@ setup() {
     source "$REPO/lib/profile.sh"
     PROFILE_DIR="$BATS_TEST_TMPDIR/profiles"
     MQG_REPO_ROOT="/fake/repo"
+    MQG_IMAGE_DIR="/fake/images"
     mkdir -p "$PROFILE_DIR"
 }
 
@@ -976,9 +977,21 @@ setup() {
 }
 
 @test "profile_expand substitutes %REPO% with the repository root" {
+    printf '%s\n' '-drive' 'file=%REPO%/vendor/reference/efi.img' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "${lines[1]}" = "file=/fake/repo/vendor/reference/efi.img" ]
+}
+
+@test "profile_expand substitutes %IMAGES% with the image directory" {
     printf '%s\n' '-drive' 'file=%IMAGES%/work/disk.qcow2' > "$PROFILE_DIR/a.args"
     run profile_expand a
-    [ "${lines[1]}" = "file=/fake/repo/work/disk.qcow2" ]
+    [ "${lines[1]}" = "file=/fake/images/work/disk.qcow2" ]
+}
+
+@test "profile_expand substitutes both tokens on one line" {
+    printf '%s\n' 'a=%REPO%/x,b=%IMAGES%/y' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "${lines[0]}" = "a=/fake/repo/x,b=/fake/images/y" ]
 }
 ```
 
@@ -1052,7 +1065,7 @@ profile_list() {
 
 Run: `bats tests/profile.bats`
 
-Expected: 9 tests, all passing.
+Expected: 11 tests, all passing.
 
 - [ ] **Step 5: Commit**
 
@@ -1514,7 +1527,7 @@ Make it executable: `chmod +x vm/golden.sh`
 
 Run: `bats tests/golden.bats`
 
-Expected: 9 tests, all passing.
+Expected: 11 tests, all passing.
 
 - [ ] **Step 5: Commit**
 
