@@ -120,3 +120,67 @@ setup() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"exists"* ]]
 }
+
+@test "verify-installer-img.sh reports missing files as a failure" {
+    # Two trees, one deliberately missing a file.
+    mkdir -p "$BATS_TEST_TMPDIR/a/System/Installation" "$BATS_TEST_TMPDIR/b/System/Installation"
+    printf 'x\n' > "$BATS_TEST_TMPDIR/a/System/Installation/OSInstall.mpkg"
+    run "$REPO/media/verify-installer-img.sh" --compare-trees \
+        "$BATS_TEST_TMPDIR/a" "$BATS_TEST_TMPDIR/b"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"OSInstall.mpkg"* ]]
+}
+
+@test "verify-installer-img.sh passes for identical trees" {
+    mkdir -p "$BATS_TEST_TMPDIR/a" "$BATS_TEST_TMPDIR/b"
+    printf 'x\n' > "$BATS_TEST_TMPDIR/a/f"; printf 'x\n' > "$BATS_TEST_TMPDIR/b/f"
+    run "$REPO/media/verify-installer-img.sh" --compare-trees \
+        "$BATS_TEST_TMPDIR/a" "$BATS_TEST_TMPDIR/b"
+    [ "$status" -eq 0 ]
+}
+
+@test "verify-installer-img.sh names the files an install cannot proceed without" {
+    run "$REPO/media/verify-installer-img.sh" --required
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"boot.efi"* ]]
+    [[ "$output" == *"OSInstall.mpkg"* ]]
+    [[ "$output" == *"BaseSystem.dmg"* ]]
+}
+
+@test "verify-installer-img.sh requires all sixteen packages" {
+    run "$REPO/media/verify-installer-img.sh" --required
+    [ "$status" -eq 0 ]
+    run bash -c "'$REPO/media/verify-installer-img.sh' --required \
+        | grep -c 'System/Installation/Packages/'"
+    [ "$output" = "16" ]
+}
+
+@test "verify-installer-img.sh reports a size that differs, not just a name that matches" {
+    # A file present on both sides but larger in the build is the signal
+    # the plan asks for: an HFS+-compressed file copied decompressed.
+    mkdir -p "$BATS_TEST_TMPDIR/a/d" "$BATS_TEST_TMPDIR/b/d"
+    printf 'small\n' > "$BATS_TEST_TMPDIR/a/d/sample.txt"
+    printf 'much much bigger\n' > "$BATS_TEST_TMPDIR/b/d/sample.txt"
+    run "$REPO/media/verify-installer-img.sh" --compare-trees \
+        "$BATS_TEST_TMPDIR/a" "$BATS_TEST_TMPDIR/b"
+    [[ "$output" == *"size"* ]]
+    [[ "$output" == *"d/sample.txt"* ]]
+}
+
+@test "verify-installer-img.sh is not fooled by Unicode normalization" {
+    # HFS+ stores decomposed names; 7z hands them back composed. Comparing
+    # the bytes would report every localized filename as missing.
+    mkdir -p "$BATS_TEST_TMPDIR/a" "$BATS_TEST_TMPDIR/b"
+    printf 'x\n' > "$BATS_TEST_TMPDIR/a/$(printf 'Modern\xc3\xad')"
+    printf 'x\n' > "$BATS_TEST_TMPDIR/b/$(printf 'Moderni\xcc\x81')"
+    run "$REPO/media/verify-installer-img.sh" --compare-trees \
+        "$BATS_TEST_TMPDIR/a" "$BATS_TEST_TMPDIR/b"
+    [ "$status" -eq 0 ]
+}
+
+@test "verify-installer-img.sh fails clearly when an image is missing" {
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/empty" \
+        "$REPO/media/verify-installer-img.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"installer-linux.img"* ]]
+}

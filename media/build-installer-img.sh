@@ -252,7 +252,20 @@ hfs_with_mounted_part "$esd_img" auto with_esd
 sync
 log "checksumming $out"
 sum=$(sha256_file "$out")
-printf '%s  %s\n' "$sum" "$(basename "$out")" > "$out.sha256"
+# Recorded with its expiry date attached. udisks mounts HFS+ read-write,
+# and the kernel updates the volume header's modify time and last-mounted
+# version on the way in, so the first mount after this changes the file and
+# the checksum stops matching. That is a property of the media, not a
+# corruption, and someone running `sha256sum -c` at the wrong moment should
+# find that written down rather than have to work it out. (sha256sum
+# ignores lines beginning with #.)
+{
+    printf '# sha256 of %s as built at %s\n' \
+        "$(basename "$out")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '# Mounting the image invalidates this: HFS+ records the mount\n'
+    printf '# in its volume header, and udisks will only mount read-write.\n'
+    printf '%s  %s\n' "$sum" "$(basename "$out")"
+} > "$out.sha256"
 
 if [ "$keep_work" -eq 0 ]; then
     log "removing the raw conversions (--keep-work keeps them)"

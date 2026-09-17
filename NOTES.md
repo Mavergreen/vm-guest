@@ -1841,3 +1841,186 @@ Whether the installer cares about the ownership is **not settled here**.
 It runs as root and may well rebuild what it needs. That is a question for
 the first boot, and the point of not working around it now is that the
 answer will mean something.
+
+## 2026-09-17 — P4 — the Linux-built media matches the reference
+
+Task 4, and the question P4 exists to answer. `media/verify-installer-img.sh`
+diffs the Linux-built image against `InstallMavericks.iso` — the media a
+Mac produced, and the media that actually installed the system this
+project already has. Both are read with `7z l`, which understands HFS+ and
+needs neither root nor a mount; the reference is an ISO with an Apple
+partition map and the build is GPT, so what is compared is the contents of
+the volume, never the raw layout. 2.3 s.
+
+**Every path in the reference is in the build. 40,200 files on each side,
+6,414,899,267 bytes on each side, and not one file a different size.**
+Per top-level directory the counts and byte totals are identical, down to
+`[HFS+ Private Data]` — the hardlinks survived `rsync -H` exactly.
+
+Three comparison traps had to be handled before that sentence could be
+true, and each would have produced a page of false differences:
+
+- **Unicode normalization.** HFS+ stores names decomposed; 7z hands them
+  back composed. Every Czech, Greek, Japanese and Korean filename on the
+  volume "differs" until both sides are normalized — which is very close
+  to the Korean-localization loss `mkosxinstallusb`'s README warns about,
+  except that here it is an artifact of the *measurement*, not the copy.
+- **HFS+ hardlinks.** 7z renders them as inode files under `[HFS+ Private
+  Data]`, with different inode numbers on each image, and the link stubs
+  carry a mode that is not the file's (`-r--r--r--` there, `0---------`
+  here; the inode carries `-rwxr-xr-x` on both).
+- **`.Trashes`**, which OS X made on the reference and we have no reason
+  to.
+
+### What is actually different
+
+**1,144 alternate streams, 515,320 bytes, all absent from the build**:
+1,139 × `com.apple.system.Security` (directory ACLs), 4 × `:rsrc`
+(resource forks on the Multiple Master fonts, whose AppleDouble `._`
+twins *are* copied as ordinary files), and one
+`com.apple.diskimages.recentcksum`. The Linux hfsplus driver exposes no
+extended attributes at all — `getfattr -d -m -` on the source returns
+nothing — so there was never anything for rsync to carry. Whether an
+installer environment misses its directory ACLs is a boot's question.
+
+**Symlink modes**: Linux creates symlinks `0777`, OS X wrote them `0755`.
+783 of them. Neither system consults a symlink's own permission bits.
+
+**No HFS+ compression was lost, because there is none to lose.** Neither
+image stores a single file smaller than its logical size. Whatever
+`mkosxinstallusb`'s README warns about, this media is not compressed:
+allocated bytes are 6,520,008,704 on the reference and 6,521,208,832 on
+the build, a difference of 1.2 MB in the *other* direction from a
+decompressed copy.
+
+### The report, verbatim
+
+```
+note: 7z exited 2 listing InstallMavericks.iso; 52295 entries were read anyway
+== what is being compared ==
+reference: /home/schmonz/.local/share/mavericks-qemu-guest/media/InstallMavericks.iso
+build:     /home/schmonz/.local/share/mavericks-qemu-guest/media/installer-linux.img
+
+== totals ==
+                files     dirs            bytes        allocated
+reference       40200    12095       6414899267       6520008704
+build           40200    12094       6414899267       6521208832
+
+== per top-level directory ==
+path                                        ref n      ref bytes        n          bytes
+(root)                                          5           6181        5           6181
+Applications                                 6235       75975463     6235       75975463
+Install OS X Mavericks.app                   1162       20546612     1162       20546612
+Library                                        62        6173759       62        6173759
+System                                      31679     6193035390    31679     6193035390
+[HFS+ Private Data]                             8         500359        8         500359
+bin                                            33        1914704       33        1914704
+private                                       258       15739991      258       15739991
+sbin                                           58        1795711       58        1795711
+usr                                           700       99211097      700       99211097
+
+== in the reference, not in the build ==
+(none)
+
+(9 further paths differ only in how 7z and Linux describe the same
+ volume -- HFS+ hardlink inodes and OS X's .Trashes -- not counted as missing)
+
+== in the build, not in the reference ==
+EXTRA    [HFS+ Private Data]/iNode173739738
+EXTRA    [HFS+ Private Data]/iNode307984300
+EXTRA    [HFS+ Private Data]/iNode391757844
+EXTRA    [HFS+ Private Data]/iNode459841181
+EXTRA    [HFS+ Private Data]/iNode508686807
+EXTRA    [HFS+ Private Data]/iNode612229993
+EXTRA    [HFS+ Private Data]/iNode870586201
+EXTRA    [HFS+ Private Data]/iNode981485428
+
+== required files ==
+ok       System/Library/CoreServices/boot.efi  505400 bytes
+ok       System/Installation/BaseSystem.dmg  493349624 bytes
+ok       System/Installation/BaseSystem.chunklist  2020 bytes
+ok       System/Installation/Packages/OSInstall.mpkg  728069 bytes
+ok       System/Installation/Packages/OSInstall.pkg  2258 bytes
+ok       System/Installation/Packages/OSUpgrade.pkg  843 bytes
+ok       System/Installation/Packages/AdditionalEssentials.pkg  94434126 bytes
+ok       System/Installation/Packages/AdditionalSpeechVoices.pkg  434183027 bytes
+ok       System/Installation/Packages/AsianLanguagesSupport.pkg  1100808 bytes
+ok       System/Installation/Packages/BaseSystemBinaries.pkg  283812163 bytes
+ok       System/Installation/Packages/BaseSystemResources.pkg  2302558 bytes
+ok       System/Installation/Packages/BSD.pkg  304865061 bytes
+ok       System/Installation/Packages/Essentials.pkg  3218081872 bytes
+ok       System/Installation/Packages/InstallableMachines.plist  2813 bytes
+ok       System/Installation/Packages/JavaEssentials.pkg  2472424 bytes
+ok       System/Installation/Packages/JavaTools.pkg  20715 bytes
+ok       System/Installation/Packages/MediaFiles.pkg  345478239 bytes
+ok       System/Installation/Packages/OxfordDictionaries.pkg  140448540 bytes
+ok       System/Installation/Packages/X11redirect.pkg  581272 bytes
+
+== sizes that differ ==
+larger in the build (HFS+ compression not preserved?): 0
+smaller in the build (content lost): 0
+zero in the reference, present in the build (7z's hardlink rendering): 0
+
+== HFS+ compression ==
+files stored smaller than their logical size: reference 0, build 0
+allocated bytes: reference 6520008704, build 6521208832 (+1200128)
+Neither image stores any file compressed, so there is no HFS+
+compression here for a Linux rsync to lose.
+
+== permission bits ==
+files whose mode differs: 799
+  symlinks (0777 here, 0755 there; nobody reads them): 783
+  hard link stubs (the inode carries the real mode): 16
+  everything else: 0
+setuid/setgid/sticky entries: reference 11, build 10
+    only in the reference: .Trashes (d-wx-wx-wt)
+(ownership is not compared: every file here is owned by whoever ran
+ the build, because that is the only thing udisks will mount as)
+
+== alternate streams (resource forks, ACLs) ==
+reference 1144 streams, 515320 bytes
+build     0 streams, 0 bytes
+  not in the build: 1 x :com.apple.diskimages.recentcksum
+  not in the build: 1139 x :com.apple.system.Security
+  not in the build: 4 x :rsrc
+
+== verdict ==
+PASS: every path in the reference is in the build, and every
+      required file is present at the reference's size.
+
+== dmesg, hfsplus ===
+(timestamps are seconds since boot: check them against the build,
+ because this log outlives it)
+[34298.474944] hfsplus: invalid secondary volume header
+[34298.474949] hfsplus: unable to find HFS+ superblock
+mqg: warning: the kernel logged hfsplus messages -- read them above
+```
+
+The `hfsplus` lines in that tail are at t=34298 s; the build ran at
+t≈35198 s. They are from the experiment that established that an HFS+
+volume must exactly fill its partition, not from the build.
+
+### What this does and does not settle
+
+It settles that **Linux can assemble the same bytes a Mac does**. Nothing
+required is missing, nothing is truncated, nothing was silently skipped.
+
+It does not settle that the media boots. What it cannot see: the file
+ownership (uid 1000 throughout, not root), the missing directory ACLs, the
+GPT-versus-APM partition map, and whether OpenCore and the Mavericks
+bootloader are as happy with this volume as with the reference's. That is
+the next task, and the reason the reference exists is that when a boot
+fails we can tell which of the two is at fault.
+
+### One more property of the media, found by accident
+
+Mounting the built image changes it. Mounting it to read the mount options
+for the entry above was enough: the as-built sha256 was
+`bdb26dca…6fd578eb` and afterwards the same file hashed
+`9f6ab64a…ab9d6fb4`. udisks will only mount HFS+ read-write, and the
+kernel updates the volume header's modify time and last-mounted version on
+the way in. Nothing is corrupted — but a `sha256sum -c` at the wrong
+moment looks exactly like corruption, so `installer-linux.img.sha256` now
+carries comment lines saying when the sum was taken and what invalidates
+it. Task 5 will mount this image to inject a LaunchDaemon, so this is not
+a one-off.
