@@ -97,3 +97,53 @@ record why here.
 
 **It resets on reboot.** If a previously-working guest suddenly fails early,
 check this first.
+
+## 2026-09-17 — P1 — installer media imported and verified
+
+The user ran Mavericks Forever's `get.sh` unmodified on an Intel Mac
+(installer Approach C, the path Kostarelas proved). Apple's SHA-256 check
+passed with no errors. They also produced an ISO, because the UTM bundle's
+own notes show Kostarelas booted a CD image rather than a raw disk:
+
+```
+hdiutil convert InstallMacOSXMavericks.dmg -format UDTO -o InstallMavericks
+```
+
+Both files were copied to `~/.local/share/mavericks-qemu-guest/media/`, on
+local btrfs rather than the NFS-mounted repo — QEMU reads the installer on
+every boot attempt, and the performance phase will boot dozens of times.
+
+| File | Bytes | SHA-256 |
+|---|---|---|
+| `InstallMavericks.iso` | 6,550,052,864 | `e3d624946082e81812b180551c15a36737d1acf75b09f01b1bf926198e637189` |
+| `InstallMacOSXMavericks.dmg` | 5,844,415,233 | `dfcae16050a3bad50344db29b20aa0b20172993f1ef8b15fe6a698debd8c11ef` |
+
+Also written to `media/SHA256SUMS`, so `sha256sum -c` can re-check them.
+
+### The media was verified before booting anything
+
+A finished copy proves nothing, so the ISO was inspected structurally rather
+than assumed good:
+
+- **Apple Partition Map**, not GPT or MBR — `fdisk` reads nothing, which is
+  expected and not a problem. Three entries: the map itself, a 6.55 GB
+  `Apple_HFS` partition named "disk image", and 3 blocks of `Apple_Free`.
+- **HFS+ volume header** (`H+`) at byte 33792. Volume is `OS X Base System`.
+- **`System/Library/CoreServices/boot.efi`** present, dated 2014-09-09.
+- **The merge worked.** `System/Installation/` holds `BaseSystem.chunklist`,
+  a 493 MB `BaseSystem.dmg`, and a `Packages` directory — the first two dated
+  today, which is `get.sh` having assembled them, against 2014 dates on the
+  original Apple files.
+- **All 16 packages present**, including `OSInstall.mpkg`, `OSInstall.pkg`,
+  `BaseSystemBinaries.pkg`, and the 3.2 GB `Essentials.pkg`.
+
+This matters beyond a sanity check: it is the reference P4's Linux-native
+media build gets diffed against. When that build produces something that will
+not boot, this is how we tell whether the media or the configuration is at
+fault.
+
+### Storage note
+
+The files initially landed in the repo, which is the NFS mount, and were
+moved to local disk — 12.4 GB in 1m46s. Copy directly to
+`~/.local/share/mavericks-qemu-guest/media/` next time.

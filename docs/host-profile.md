@@ -49,6 +49,10 @@ Two consequences worth stating plainly:
 | Intel Mac running macOS | P1: runs `get.sh` unmodified to produce the reference installer image. |
 | Mavericks-capable Mac | Ground truth for behavior comparison; release sign-off. |
 
+Installer media produced on the Intel Mac lives at
+`~/.local/share/mavericks-qemu-guest/media/` with a `SHA256SUMS` beside it.
+See the 2026-09-17 entry in `NOTES.md` for what it is and how it was verified.
+
 ## 3. Host state changes
 
 Anything here required a `sudo` ask. Record the change, the reason, whether it
