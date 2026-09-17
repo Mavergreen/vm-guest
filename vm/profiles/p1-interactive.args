@@ -1,0 +1,16 @@
+# p1-interactive -- p1-reference in a native GTK window.
+#
+# Use this to drive the installer by hand. A real window beats VNC here:
+# Ctrl+Alt+G releases the pointer grab, the title bar says so, and there is
+# no separate client to get trapped inside.
+#
+# The monitor socket is still here, so screenshots can be taken from another
+# shell while you work -- which is how the install click-log gets recorded
+# without anyone transcribing screens by hand.
+
+@include p1-reference
+
+-display
+gtk,grab-on-hover=off,zoom-to-fit=on
+-monitor
+unix:%IMAGES%/work/monitor.sock,server,nowait

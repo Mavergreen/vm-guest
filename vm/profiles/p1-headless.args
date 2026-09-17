@@ -1,0 +1,15 @@
+# p1-headless -- p1-reference with no window, driven from the monitor socket.
+#
+# Screenshots come from `screendump` over the monitor socket, so boot progress
+# can be captured without anyone watching a screen. VNC is on :5 as a way in,
+# but note that Vinagre (Mint's default viewer) grabs input with no obvious
+# release -- prefer p1-interactive if you actually want to click things.
+
+@include p1-reference
+
+-display
+none
+-monitor
+unix:%IMAGES%/work/monitor.sock,server,nowait
+-vnc
+:5

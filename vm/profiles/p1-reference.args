@@ -104,14 +104,3 @@ usb-tablet,bus=usb.0
 # notices 64MB. Display device is a P5 experiment in its own right.
 -device
 VGA,vgamem_mb=64
-
-# Headless with a monitor socket, so boot progress can be screenshotted
-# without a GUI. Override with extra args for an interactive session.
--display
-none
--vga
-none
--monitor
-unix:%IMAGES%/work/monitor.sock,server,nowait
--vnc
-:5
