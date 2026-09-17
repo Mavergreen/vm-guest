@@ -140,6 +140,10 @@ Create `bin/run-tests.sh`:
 # Run the whole test suite. shellcheck is optional: it is not installed on
 # every host, and needing a package install to run tests is a bad trade.
 set -euo pipefail
+# Globs below (lib/*.sh etc.) may not match anything yet; without nullglob
+# an unmatched glob is passed to shellcheck as a literal, nonexistent
+# filename and it exits nonzero.
+shopt -s nullglob
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
