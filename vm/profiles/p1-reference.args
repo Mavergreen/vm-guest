@@ -22,22 +22,47 @@ q35,vmport=off
 -cpu
 Penryn,+ssse3,+sse4.1,+sse4.2
 
-# Firmware: the bundle's 2MB-class EDK II build. Debian ships only a 4MB
-# build and CODE/VARS must be a matched pair, so these two travel together.
-# VARS is a writable per-VM copy, never the pristine file.
--drive
-if=pflash,format=raw,unit=0,readonly=on,file=%IMAGES%/work/OVMF_CODE.fd
--drive
-if=pflash,format=raw,unit=1,file=%IMAGES%/work/OVMF_VARS.fd
+# Firmware: the bundle's EDK II build, passed with -bios rather than as a
+# pflash CODE/VARS pair.
+#
+# The bundle marks it ImageType "bios", which is UTM for -bios: a complete
+# firmware image, not the CODE half of a split pair. The sizes agree --
+# 1,966,080 for OVMF.bin and 540,672 for efi_vars.fd sum to no standard
+# flash geometry -- and a first attempt wiring them as pflash unit 0/1 left
+# the guest stuck at "Guest has not initialized the display (yet)".
+#
+# Consequence: EFI variables are not persisted between runs. That is what
+# the reference configuration did, and it is fine for an installer boot.
+-bios
+%IMAGES%/work/OVMF_CODE.fd
+
+# q35 provides no USB bus of its own, so the controller must be explicit --
+# the first boot attempt failed with "No 'usb-bus' bus found". UTM adds one
+# implicitly, which is why the bundle's config does not mention it. xhci
+# because the bundle sets InputLegacy false; 10.9 has AppleUSBXHCI. If this
+# proves unhappy, usb-ehci is the fallback.
+-device
+qemu-xhci,id=usb
 
 # OpenCore over USB, as in the bundle. This image is byte-identical to
 # khronokernel's published EFI-LEGACY.img, so we use his directly.
 # It carries FakeSMC-32, VirtualSMC and Lilu -- which is why there is no
 # -device isa-applesmc here and no OSK string anywhere.
+# A DERIVED copy of khronokernel's image, not the original. The only change
+# is flipping Kernel > Block > com.apple.driver.AppleTyMCEDriver from
+# Enabled:false to true.
+#
+# The first boot to reach the kernel panicked in AppleTyMCEDriver's
+# enableInterruptForCorrectableMemoryCoreRegister -- the Xeon machine-check
+# driver, which loads because this config sets SMBIOS to MacPro5,1. It never
+# fired for Kostarelas because he ran under TCG on Apple Silicon. khronokernel
+# had already anticipated it: the block entry ships in the image, just
+# disabled. So this enables a fix that was already written, rather than
+# inventing one.
 -drive
-id=opencore,if=none,format=raw,file=%VENDOR%/opencore-legacy/EFI-LEGACY.img
+id=opencore,if=none,format=raw,file=%IMAGES%/work/opencore-p1.img
 -device
-usb-storage,drive=opencore
+usb-storage,bus=usb.0,drive=opencore
 
 # Installer as a CD on IDE. Kostarelas converted the dmg to an ISO in Disk
 # Utility and attached it to the bundle's empty removable ide CD slot.
@@ -58,13 +83,13 @@ ide-hd,bus=ide.0,drive=target
 -netdev
 user,id=net0
 -device
-usb-net,netdev=net0
+usb-net,bus=usb.0,netdev=net0
 
 # Input. The bundle passes -usbdevice keyboard and sets InputLegacy false.
 -device
-usb-kbd
+usb-kbd,bus=usb.0
 -device
-usb-tablet
+usb-tablet,bus=usb.0
 
 # DEVIATION FROM THE BUNDLE: it uses virtio-vga-gl, which wants a GL-capable
 # local display. Starting with plain VGA so the guest can run headless and be

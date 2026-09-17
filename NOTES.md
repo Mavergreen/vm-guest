@@ -147,3 +147,127 @@ fault.
 The files initially landed in the repo, which is the NFS mount, and were
 moved to local disk — 12.4 GB in 1m46s. Copy directly to
 `~/.local/share/mavericks-qemu-guest/media/` next time.
+
+## 2026-09-17 — P1 — installer GUI reached under KVM
+
+**P1's exit criterion is met.** The Mavericks installer boots to its language
+picker at 1280x720 under `-enable-kvm`. Four failures on the way, each one a
+single change, all recorded because the next person needs the dead ends as
+much as the destination.
+
+Run it with `./vm/run.sh p1-reference`; it is headless with a monitor socket
+at `$MQG_IMAGE_DIR/work/monitor.sock` and VNC on `:5`.
+
+### Failure 1: no USB bus
+
+```
+qemu-system-x86_64: -device usb-storage,drive=opencore:
+  No 'usb-bus' bus found for device 'usb-storage'
+```
+
+q35 provides no USB controller by default. UTM adds one implicitly, which is
+why the bundle's `config.plist` never mentions it — a good example of a
+setting that is invisible in the reference configuration precisely because
+something else supplied it. Added `-device qemu-xhci,id=usb` and put every
+USB device explicitly on `bus=usb.0`.
+
+Also found while fixing this: `base-kvm.args` set `-machine q35` and
+`p1-reference.args` set `-machine q35,vmport=off`, so the machine type was
+specified twice and the last one silently won. `base-kvm` no longer sets
+`-machine` at all.
+
+### Failure 2: firmware wired as pflash, stuck at a black screen
+
+The guest sat forever at "Guest has not initialized the display (yet)". I had
+wired the bundle's firmware as a pflash CODE/VARS pair:
+
+```
+-drive if=pflash,format=raw,unit=0,readonly=on,file=OVMF_CODE.fd
+-drive if=pflash,format=raw,unit=1,file=OVMF_VARS.fd
+```
+
+That was a misreading. The bundle marks `OVMF.bin` as `ImageType: bios`, which
+is UTM for `-bios` — a complete firmware image, not the CODE half of a split
+pair. The sizes say the same thing: 1,966,080 and 540,672 sum to no standard
+flash geometry. Switching to `-bios` brought the display up immediately.
+
+Consequence: EFI variables are not persisted between runs. That is what the
+reference configuration did, and it is fine for an installer boot.
+
+### Failure 3: kernel panic in AppleTyMCEDriver
+
+First boot to reach the kernel. Mavericks itself panicked:
+
+```
+panic(cpu 1 caller 0xffffff800096dc43e): Kernel trap at ...
+  type 13=general protection
+com.apple.driver.AppleTyMCEDriver :
+  __ZN16AppleTyMCEDriver47enableInterruptForCorrectableMemoryCoreRegisterEPv
+Mac OS version: 13F34
+Darwin Kernel Version 13.4.0 ... RELEASE_X86_64
+System model name: MacPro5,1 (Mac-F221BEC8)
+```
+
+Good news buried in a panic: OVMF booted, OpenCore loaded, and the installer's
+own 10.9.5 kernel started. Everything up to the kernel was already working.
+
+`AppleTyMCEDriver` is the Xeon machine-check driver. It loads because
+OpenCore's `PlatformInfo` sets SMBIOS to `MacPro5,1`, a Xeon machine, and then
+faults on a CPU that is not one. It never fired for Kostarelas because he ran
+under TCG on Apple Silicon — this is a genuine KVM-specific divergence from
+the reference configuration, and the first thing found that the bundle could
+not have told us.
+
+### Failure 4: the shipped fix did not work
+
+khronokernel had already anticipated this. His `config.plist` ships a
+`Kernel > Block` entry for `com.apple.driver.AppleTyMCEDriver` — with
+`Enabled: false`.
+
+Flipping it to `true` (in a **derived** copy of the image, leaving the Tier 2
+original untouched; `mtools` can write into the FAT partition at offset
+`2048*512` without root) changed nothing. Same panic, same backtrace. This is
+OpenCore 0.6.6 with `Kernel > Scheme > KernelCache: Auto`, so the block should
+have applied to the prelinked kernel. Why it did not is **unresolved** — worth
+knowing before P3 builds its own OpenCore and inherits the assumption that
+`Block` works.
+
+### What fixed it: SMBIOS
+
+Changed `PlatformInfo > Generic > SystemProductName` from `MacPro5,1` to
+`iMac14,2` — attacking what the driver *matches on* rather than trying to stop
+it loading. The panic disappeared and the installer booted.
+
+**Two changes from the reference are in play at once** (the enabled block and
+the SMBIOS change), and only the second is known to matter. P3 should turn the
+block back off and confirm SMBIOS alone is sufficient, rather than carrying a
+cargo-culted setting forward.
+
+### Boot progress after the fix
+
+```
+Creating RAM Disk for /System/Installation
+hfs: mounted untitled on device disk6
+Apple16X50ACPI1: Identified Serial Port on ACPI Device=COM1
+ACPI_SMC_PlatformPlugin::start - waitForService(AppleIntelCPUPowerManagement) timed out
+DSMOS has arrived
+[IOBluetoothHCIController][start] -- completed
+```
+
+`DSMOS has arrived` is the one that matters: "Don't Steal Mac OS X" decrypted,
+so the SMC emulation works. That confirms the design's conclusion that
+`FakeSMC-32` + `VirtualSMC` + `Lilu` injected by OpenCore replace
+`-device isa-applesmc` entirely. No OSK string is needed anywhere in this
+project.
+
+The `AppleIntelCPUPowerManagement` timeout is expected and harmless —
+OpenCore sets `DummyPowerManagement`.
+
+### Still unknown
+
+- Why `Kernel > Block` had no effect (see Failure 4).
+- Whether `iMac14,2` is the best SMBIOS choice or merely the first that
+  worked. It is a 2013 Haswell iMac; the guest CPU is advertised as Penryn,
+  which is an odd pairing that 10.9 evidently tolerates.
+- Whether the e1000 NIC would work as DarwinKVM claims. Still on `usb-net`,
+  per the bundle.
