@@ -1,0 +1,86 @@
+# p1-reference -- reproduce Kostarelas's working configuration under KVM.
+#
+# TIER 2: deliberately references %VENDOR%. That is the point of P1 -- boot
+# something known to have worked, so a failure is ours and not the
+# firmware's. bin/tier-check.sh will flag this profile, which is correct.
+# P3 replaces every one of these paths with something built from source.
+#
+# Provenance: docs/utm-bundle-config.md, the actual contents of
+# Mavericks-OSX-10.9-Config.utm.zip, translated from UTM/TCG to plain
+# QEMU/KVM. Where the bundle disagrees with the briefs, the bundle wins --
+# it is the only verified 10.9-on-QEMU install we have.
+
+@include base-kvm
+
+# vmport=off comes straight from the bundle's MachineProperties.
+-machine
+q35,vmport=off
+
+# Penryn plus exactly these three flags. The bundle has no popcnt, xsave,
+# xsaveopt and no 'check' -- khronokernel's longer string from the briefs is
+# NOT what actually worked. vendor is GenuineIntel already on this host.
+-cpu
+Penryn,+ssse3,+sse4.1,+sse4.2
+
+# Firmware: the bundle's 2MB-class EDK II build. Debian ships only a 4MB
+# build and CODE/VARS must be a matched pair, so these two travel together.
+# VARS is a writable per-VM copy, never the pristine file.
+-drive
+if=pflash,format=raw,unit=0,readonly=on,file=%IMAGES%/work/OVMF_CODE.fd
+-drive
+if=pflash,format=raw,unit=1,file=%IMAGES%/work/OVMF_VARS.fd
+
+# OpenCore over USB, as in the bundle. This image is byte-identical to
+# khronokernel's published EFI-LEGACY.img, so we use his directly.
+# It carries FakeSMC-32, VirtualSMC and Lilu -- which is why there is no
+# -device isa-applesmc here and no OSK string anywhere.
+-drive
+id=opencore,if=none,format=raw,file=%VENDOR%/opencore-legacy/EFI-LEGACY.img
+-device
+usb-storage,drive=opencore
+
+# Installer as a CD on IDE. Kostarelas converted the dmg to an ISO in Disk
+# Utility and attached it to the bundle's empty removable ide CD slot.
+-drive
+id=installer,if=none,format=raw,readonly=on,file=%IMAGES%/media/InstallMavericks.iso
+-device
+ide-cd,bus=ide.1,drive=installer
+
+# Target disk on IDE, as in the bundle.
+-drive
+id=target,if=none,format=qcow2,file=%IMAGES%/work/mavericks.qcow2
+-device
+ide-hd,bus=ide.0,drive=target
+
+# usb-net, not e1000-82545em. DarwinKVM recommends e1000 for 10.9 and the
+# design took that as the starting point, but the configuration that is
+# known to work uses usb-net. e1000 is now an experiment, not the baseline.
+-netdev
+user,id=net0
+-device
+usb-net,netdev=net0
+
+# Input. The bundle passes -usbdevice keyboard and sets InputLegacy false.
+-device
+usb-kbd
+-device
+usb-tablet
+
+# DEVIATION FROM THE BUNDLE: it uses virtio-vga-gl, which wants a GL-capable
+# local display. Starting with plain VGA so the guest can run headless and be
+# screenshotted from the QEMU monitor. Kostarelas saw ~3MB of VRAM and could
+# not change it under UTM; plain QEMU can, so find out early whether 10.9
+# notices 64MB. Display device is a P5 experiment in its own right.
+-device
+VGA,vgamem_mb=64
+
+# Headless with a monitor socket, so boot progress can be screenshotted
+# without a GUI. Override with extra args for an interactive session.
+-display
+none
+-vga
+none
+-monitor
+unix:%IMAGES%/work/monitor.sock,server,nowait
+-vnc
+:5

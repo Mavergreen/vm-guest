@@ -69,3 +69,36 @@ PASS c"
 FAIL b"
     [ "$status" -ne 0 ]
 }
+
+# Regression: verdicts_exit_code used to pipe into `grep -q '^FAIL'`. grep -q
+# exits on first match, SIGPIPEing the writer; with `set -o pipefail` the
+# pipeline reported 141 and the function returned 0 -- GO, because it found a
+# FAIL. The failure needs a long list with the FAIL early, which is exactly
+# why short test inputs missed it.
+@test "verdicts_exit_code catches a FAIL early in a long list" {
+    long="FAIL first-check something went wrong"
+    for i in $(seq 200); do
+        long="$long
+PASS filler-$i all good here with enough text to fill the pipe buffer"
+    done
+    run verdicts_exit_code "$long"
+    [ "$status" -ne 0 ]
+}
+
+@test "verdicts_exit_code catches a FAIL late in a long list" {
+    long="PASS first-check fine"
+    for i in $(seq 200); do
+        long="$long
+PASS filler-$i all good here"
+    done
+    long="$long
+FAIL last-check broken"
+    run verdicts_exit_code "$long"
+    [ "$status" -ne 0 ]
+}
+
+@test "verdicts_exit_code does not match FAIL appearing mid-line" {
+    run verdicts_exit_code "PASS note the word FAIL inside a detail field
+PASS another"
+    [ "$status" -eq 0 ]
+}

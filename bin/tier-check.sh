@@ -40,6 +40,7 @@ if [ "${#names[@]}" -eq 0 ]; then
 fi
 
 dirty=0
+expanded=""
 for name in "${names[@]}"; do
     # Grepped against the EXPANDED profile (after %REPO%/%IMAGES%/%VENDOR%
     # substitution), matching the resolved $MQG_VENDOR_DIR path rather than
@@ -51,7 +52,16 @@ for name in "${names[@]}"; do
     # a quarantined blob placed elsewhere, or path text assembled so that
     # the literal path never appears in one piece. It is a reasonable gate
     # for accidental references, not a proof against deliberate evasion.
-    if profile_expand "$name" 2>/dev/null | grep -qF "$MQG_VENDOR_DIR/"; then
+    # No pipe into `grep -q` here, deliberately. `grep -q` exits the moment
+    # it matches, which SIGPIPEs the still-writing profile_expand; under
+    # `set -o pipefail` the pipeline then reports 141 and the `if` takes the
+    # FALSE branch *because* the match succeeded. That made this gate fail
+    # open exactly when it found a violation, and only for profiles long
+    # enough that the writer had not already finished -- so short test
+    # profiles passed while a real 45-line one did not. Match in-process
+    # instead: no pipe, no signal, no exit-status subtlety.
+    expanded=$(profile_expand "$name")
+    if [ "${expanded#*"$MQG_VENDOR_DIR/"}" != "$expanded" ]; then
         printf 'TIER2  %s\n' "$name"
         dirty=1
     fi

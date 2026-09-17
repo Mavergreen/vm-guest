@@ -73,9 +73,15 @@ tool_verdict() {
     fi
 }
 
+# Matched in-process rather than by piping into `grep -q`. grep -q exits on
+# the first match, SIGPIPEing the writer; under `set -o pipefail` (which
+# bin/preconditions.sh sets) the pipeline then reports 141 and this function
+# would return 0 -- reporting GO *because* it found a FAIL. Same bug bit
+# bin/tier-check.sh. No pipe, no signal, no surprise.
 verdicts_exit_code() {
-    if printf '%s\n' "$1" | grep -q '^FAIL'; then
-        return 1
-    fi
+    case $1 in
+        FAIL*|*"
+FAIL"*) return 1 ;;
+    esac
     return 0
 }

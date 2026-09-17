@@ -135,3 +135,24 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"no profiles found"* ]]
 }
+
+# Regression: tier-check used to pipe into `grep -qF`. grep -q exits on first
+# match, SIGPIPEing the still-writing profile_expand; under `set -o pipefail`
+# the pipeline reported 141 and the `if` took the false branch *because* the
+# match succeeded -- the gate reported clean exactly when it found a
+# violation. It only showed up once a profile was long enough that the writer
+# had not already finished, so the short profiles in the tests above passed.
+@test "tier-check catches a quarantine reference early in a long profile" {
+    mkdir -p "$BATS_TEST_TMPDIR/profiles"
+    {
+        printf -- '-drive\nfile=%%VENDOR%%/opencore/EFI.img\n'
+        for i in $(seq 300); do
+            printf -- '-device\nfiller-device-%s,with=some,long=arguments,to=fill,the=pipe\n' "$i"
+        done
+    } > "$BATS_TEST_TMPDIR/profiles/longdirty.args"
+    run env MQG_TIER_PROFILE_DIR="$BATS_TEST_TMPDIR/profiles" \
+        MQG_VENDOR_DIR="$BATS_TEST_TMPDIR/vendor" \
+        "$REPO/bin/tier-check.sh" --strict
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"longdirty"* ]]
+}
