@@ -1,5 +1,22 @@
 # Prior art
 
+> **Prior art has a date.** These sources are mostly 2016–2021. Two of their
+> claims have already been disproven by testing here, both because the
+> underlying problem was fixed upstream in the meantime:
+>
+> - *"OS X cannot use QEMU's `usb-tablet`"* — fixed in QEMU in **2017**, by
+>   the very author whose workaround kext the briefs cite as evidence.
+> - *"DNS needs pointing at 1.1.1.1"* — not needed; DNS worked untouched.
+>
+> So treat every "X does not work" below as **a claim with an expiry date**,
+> not a constraint. Re-test before building around it. The failure mode is
+> subtle: the prior art *fits the symptom*, which is exactly what makes a
+> wrong diagnosis convincing.
+>
+> Claims from this era still awaiting re-test: that 10.9's first boot needs
+> SMP (Somlo), that there is no virtio block driver for 10.9, that a current
+> OVMF will not work, and that `vmxnet3`/`e1000` are the viable NICs.
+
 Absorbed from the four source briefs. **Study these before inventing
 anything.** If a source can't be fetched, say so in `NOTES.md` — never guess
 at its contents.
