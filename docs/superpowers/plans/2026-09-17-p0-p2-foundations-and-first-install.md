@@ -348,7 +348,9 @@ require_cmd() {
 
 sha256_file() {
     [ -f "$1" ] || die "no such file: $1"
-    sha256sum "$1" | cut -d' ' -f1
+    local sum
+    sum=$(sha256sum "$1") || die "cannot read: $1"
+    printf '%s\n' "${sum%% *}"
 }
 
 # Verify a file against an expected checksum. Reports both values, because
@@ -356,6 +358,10 @@ sha256_file() {
 # partial download.
 verify_sha256() {
     local file=$1 want=$2 got
+    # sha256_file's own die only kills the command-substitution subshell, so
+    # this || exit 1 is load-bearing: without it a missing or unreadable file
+    # falls through to the mismatch branch below and prints a bogus
+    # "checksum mismatch ... got " instead of the real cause.
     got=$(sha256_file "$file") || exit 1
     if [ "$got" != "$want" ]; then
         die "checksum mismatch for $file: want $want, got $got"
@@ -375,7 +381,7 @@ run_log() {
 
 Run: `bats tests/common.bats`
 
-Expected: 7 tests, all passing.
+Expected: 13 tests, all passing.
 
 - [ ] **Step 5: Commit**
 
@@ -1265,7 +1271,7 @@ Make it executable: `chmod +x bin/tier-check.sh`
 
 Run: `bats tests/run.bats`
 
-Expected: 7 tests, all passing.
+Expected: 13 tests, all passing.
 
 - [ ] **Step 7: Verify the dry run by eye**
 
