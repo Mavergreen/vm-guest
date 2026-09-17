@@ -34,3 +34,18 @@ convenient it is.
   user can overrule this decision knowingly — which is the point of measuring
   rather than assuming.
 - Measured cost: _to be filled in by P3._
+
+## Addendum, 2026-09-17: derived images stay in the quarantine
+
+P1 needed a modified OpenCore image (SMBIOS changed to stop an
+`AppleTyMCEDriver` panic). The patched copy was first written to
+`$MQG_IMAGE_DIR/work/`, which made `bin/tier-check.sh` report Tier 2 clean --
+the profile no longer named the quarantine, even though it still depended on
+an unbuildable blob.
+
+**Deriving from a Tier 2 artifact does not launder it.** Modified copies live
+in `$MQG_VENDOR_DIR/derived/`, inside the quarantine, so the gate keeps
+seeing them. A gate a copy can walk out of is decorative.
+
+This also sharpens what P3 has to deliver: not "an OpenCore image with our
+settings", but one built from pinned OpenCorePkg source with those settings.

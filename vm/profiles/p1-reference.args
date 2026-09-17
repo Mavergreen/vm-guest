@@ -48,7 +48,13 @@ qemu-xhci,id=usb
 # khronokernel's published EFI-LEGACY.img, so we use his directly.
 # It carries FakeSMC-32, VirtualSMC and Lilu -- which is why there is no
 # -device isa-applesmc here and no OSK string anywhere.
-# A DERIVED copy of khronokernel's image, not the original. The only change
+# A DERIVED copy of khronokernel's image, kept INSIDE the quarantine under
+# derived/. Deriving from a Tier 2 blob does not launder it: the result is
+# still something we cannot rebuild from source, and putting it in work/
+# made bin/tier-check.sh report clean while we still depended on it. The
+# gate is only worth having if a copy cannot escape it.
+#
+# Not the original. The only change
 # is flipping Kernel > Block > com.apple.driver.AppleTyMCEDriver from
 # Enabled:false to true.
 #
@@ -60,7 +66,7 @@ qemu-xhci,id=usb
 # disabled. So this enables a fix that was already written, rather than
 # inventing one.
 -drive
-id=opencore,if=none,format=raw,file=%IMAGES%/work/opencore-p1.img
+id=opencore,if=none,format=raw,file=%VENDOR%/derived/opencore-p1.img
 -device
 usb-storage,bus=usb.0,drive=opencore
 
