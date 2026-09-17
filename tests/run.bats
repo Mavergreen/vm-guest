@@ -60,10 +60,13 @@ setup() {
 
 # --- Additional coverage found during verification, beyond the assigned scope ---
 
+# base-kvm deliberately does not set -machine: profiles need to add
+# properties to it (p1-reference wants q35,vmport=off), and two -machine
+# flags means the last silently wins.
 @test "run.sh prints exactly the expected command for base-kvm" {
     run env MQG_DRY_RUN=1 "$REPO/vm/run.sh" base-kvm
     [ "$status" -eq 0 ]
-    [ "$output" = "qemu-system-x86_64 -enable-kvm -machine q35 -m 4096 -smp 2" ]
+    [ "$output" = "qemu-system-x86_64 -enable-kvm -m 4096 -smp 2" ]
 }
 
 @test "run.sh fails with 'expanded to nothing' for a profile that is only comments" {

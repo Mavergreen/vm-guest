@@ -64,6 +64,7 @@ setup() {
 }
 
 @test "run_log appends a timestamped line, isolated from the real run.log" {
+    real_run_log_lines=$(cat "$REPO/run.log" 2>/dev/null | wc -l)
     # Stub repo_root so this writes into the bats tmpdir instead of the
     # repository's real (gitignored, append-only) run.log.
     repo_root() { echo "$BATS_TEST_TMPDIR"; }
@@ -71,7 +72,11 @@ setup() {
     [ -f "$BATS_TEST_TMPDIR/run.log" ]
     run cat "$BATS_TEST_TMPDIR/run.log"
     [[ "$output" == *"did a thing"* ]]
-    [ ! -e "$REPO/run.log" ]
+    # Assert this test did not touch the repo's real run log -- NOT that no
+    # run log exists. A repo where the VM has actually been run has one, and
+    # asserting its absence made this test pass only on machines that had
+    # never used the tool.
+    [ "$(cat "$REPO/run.log" 2>/dev/null | wc -l)" = "$real_run_log_lines" ]
     # The run log is the project's evidence trail: a UTC timestamp (ending
     # in Z, not local time), a literal TAB, then the message verbatim. A
     # silent drift in either would quietly corrupt its parseability.
