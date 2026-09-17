@@ -123,9 +123,9 @@ excuse later._
 | Sleep | offered in the Apple menu | Not yet exercised. |
 | Shutdown | offered in the Apple menu | |
 | Reboot | | |
-| Networking | partly verified | `usb-net`, `AppleUSBCDCECMData` loads at boot. The guest discovered an AirPlay device on the LAN, so the stack is alive. |
+| Networking | **works** | `usb-net` + slirp. `dig` resolves and `curl` completes an HTTP request. No configuration was needed. |
 | ICMP / `ping` | **fails, and cannot work here** | Not a guest problem — see below. |
-| DNS | | |
+| DNS | **works out of the box** | Notable: Kostarelas needed to set the resolver to 1.1.1.1 and khronokernel documents a `scutil` recipe for the same problem. Neither was necessary here. Do not carry that step forward into P4 without re-testing whether it is still needed. |
 | Clock accuracy across a reboot | | |
 | Safari / TLS against a modern site | | Kostarelas found the modern web mostly broken |
 | Pointer feel | **fine enough** (user's words) | Relative `usb-mouse`, so a grab is required. `usb-tablet` does nothing on 10.9 without pmj's kext. |
