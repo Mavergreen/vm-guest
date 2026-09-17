@@ -9,6 +9,7 @@ setup() {
     PROFILE_DIR="$BATS_TEST_TMPDIR/profiles"
     MQG_REPO_ROOT="/fake/repo"
     MQG_IMAGE_DIR="/fake/images"
+    MQG_BUILD_DIR="/fake/images/build"
     MQG_VENDOR_DIR="/fake/vendor-reference"
     mkdir -p "$PROFILE_DIR"
 }
@@ -175,4 +176,41 @@ setup() {
     printf '%s\n' 'file=%VENDOR%/opencore-legacy/EFI-LEGACY.img' > "$PROFILE_DIR/a.args"
     run profile_expand a
     [ "$status" -ne 0 ]
+}
+
+# --- %BUILD% ----------------------------------------------------------
+#
+# The firmware a profile boots is a build artifact, and MQG_BUILD_DIR is
+# overridable independently of MQG_IMAGE_DIR. A profile that spelled it
+# %IMAGES%/build would silently boot the wrong firmware for anyone who
+# moved the build directory, which is exactly the class of bug the
+# placeholders exist to prevent.
+
+@test "profile_expand substitutes %BUILD%" {
+    printf '%s\n' 'file=%BUILD%/firmware/OVMF_CODE.fd' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "file=/fake/images/build/firmware/OVMF_CODE.fd" ]
+}
+
+@test "profile_expand does not require MQG_BUILD_DIR for a profile that never uses %BUILD%" {
+    unset MQG_BUILD_DIR
+    printf '%s\n' '-enable-kvm' '-m' '4096' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 3 ]
+}
+
+@test "profile_expand still fails for an unset MQG_BUILD_DIR when %BUILD% is used" {
+    unset MQG_BUILD_DIR
+    printf '%s\n' 'file=%BUILD%/firmware/OVMF_CODE.fd' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "$status" -ne 0 ]
+}
+
+@test "%BUILD% is not the same directory as %IMAGES%/build when the build dir moves" {
+    MQG_BUILD_DIR="/elsewhere/build"
+    printf '%s\n' 'file=%BUILD%/firmware/OVMF_CODE.fd' > "$PROFILE_DIR/a.args"
+    run profile_expand a
+    [ "${lines[0]}" = "file=/elsewhere/build/firmware/OVMF_CODE.fd" ]
 }

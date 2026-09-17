@@ -152,6 +152,23 @@ UDK="$SRC/UDK"
 OUT="$MQG_BUILD_DIR/artifacts"
 PATCH_DIR="$MQG_REPO_ROOT/boot/patches"
 
+# Where this script assembles the EDK II tree, and which commit it holds.
+#
+# boot/build-ovmf.sh builds OvmfPkg out of that same tree rather than
+# unpacking a second copy of a 19 MB tarball and eleven submodules. It asks
+# here rather than recomputing the path, so OC_VERSION and the layout stay
+# in one place. --udk-commit is the pin the tree is expected to hold; the
+# marker file inside it says what it actually holds, and the two disagreeing
+# is what tells a caller the tree is stale.
+if [ "${1:-}" = "--udk-dir" ]; then
+    printf '%s\n' "$UDK"
+    exit 0
+fi
+if [ "${1:-}" = "--udk-commit" ]; then
+    printf '%s\n' "$AUDK_COMMIT"
+    exit 0
+fi
+
 [ -d "$SRC" ] || die "no OpenCorePkg source tree at $SRC -- run boot/fetch-opencorepkg.sh first"
 
 # pinned_file <source-name> <commit>
@@ -230,6 +247,9 @@ fi
 # does `rm -rf UDK` before anything else. Ours has to exist up front or the
 # tree we just unpacked is deleted. patches.ready and submodules.ready keep
 # efibuild from trying to redo, with git, work we have already done here.
+#
+# boot/build-ovmf.sh reads this marker too, to refuse to build OvmfPkg out
+# of a tree that is absent or holds a different audk commit than it pinned.
 PREPARED="$UDK/.mqg-prepared"
 if [ ! -f "$PREPARED" ] || [ "$(cat "$PREPARED")" != "$AUDK_COMMIT" ]; then
     log "assembling EDK II tree: audk $AUDK_COMMIT"

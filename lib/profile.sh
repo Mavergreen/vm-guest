@@ -4,16 +4,22 @@
 # One argument per line, so quoting never enters the picture. Full-line
 # comments start with '#'. '@include <name>' pulls in another profile.
 # '%REPO%' expands to the repository root, '%IMAGES%' to the image
-# directory, '%VENDOR%' to the Tier 2 quarantine directory -- all three
-# deliberately NOT under the repo except %REPO% itself, because the repo
-# is on NFS and neither a guest disk nor a blob QEMU reads on every boot
-# belongs there.
+# directory, '%BUILD%' to the build output directory, '%VENDOR%' to the
+# Tier 2 quarantine directory -- all four deliberately NOT under the repo
+# except %REPO% itself, because the repo is on NFS and neither a guest disk
+# nor a blob QEMU reads on every boot belongs there.
+#
+# %BUILD% is not just %IMAGES%/build spelled differently: MQG_BUILD_DIR is
+# independently overridable, and the firmware a profile boots lives there,
+# so a profile that hardcoded the default would boot the wrong firmware for
+# anyone who moved it.
 #
 # The point of the format is that an experiment is a diff. Changing one
 # variable at a time is only verifiable if the change is a file change.
 #
 # Requires lib/common.sh. Callers set PROFILE_DIR, MQG_REPO_ROOT,
-# MQG_IMAGE_DIR and MQG_VENDOR_DIR.
+# MQG_IMAGE_DIR, MQG_BUILD_DIR and MQG_VENDOR_DIR. Each is demanded only by
+# the profile line that actually uses its placeholder.
 
 profile_path() {
     printf '%s/%s.args\n' "${PROFILE_DIR:?PROFILE_DIR is unset}" "$1"
@@ -59,6 +65,9 @@ profile_expand() {
                 esac
                 case $line in *'%IMAGES%'*)
                     line="${line//'%IMAGES%'/${MQG_IMAGE_DIR:?MQG_IMAGE_DIR is unset}}" ;;
+                esac
+                case $line in *'%BUILD%'*)
+                    line="${line//'%BUILD%'/${MQG_BUILD_DIR:?MQG_BUILD_DIR is unset}}" ;;
                 esac
                 case $line in *'%VENDOR%'*)
                     line="${line//'%VENDOR%'/${MQG_VENDOR_DIR:?MQG_VENDOR_DIR is unset}}" ;;

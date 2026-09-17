@@ -408,3 +408,176 @@ _fake_artifacts() {
     # Apple's HFS+ driver must never appear in the shipped image.
     [[ "$output" != *"HfsPlusLegacy.efi"* ]]
 }
+
+# --- OVMF, built from the same pinned EDK II tree ----------------------
+#
+# P3's gate is that nothing in the boot path is a binary we cannot rebuild.
+# The firmware was the last holdout: Debian's stock OVMF 2024.02 does not
+# work with OpenCore on this host (proved with khronokernel's reference
+# OpenCore as a control), so the fix and the gate are the same thing --
+# build it ourselves, out of the acidanthera/audk tree boot/build-opencore.sh
+# already pins.
+
+@test "build-ovmf.sh lists the firmware images it intends to produce" {
+    run "$REPO/boot/build-ovmf.sh" --list-artifacts
+    [ "$status" -eq 0 ]
+    # The split pflash pair, which is what restores EFI variable persistence...
+    [[ "$output" == *"OVMF_CODE.fd"* ]]
+    [[ "$output" == *"OVMF_VARS.fd"* ]]
+    # ...and the combined image, for -bios, which is how the reference
+    # firmware was wired.
+    [[ "$output" == *"OVMF.fd"* ]]
+}
+
+@test "build-ovmf.sh builds X64 RELEASE with GCC, like the OpenCore build" {
+    run "$REPO/boot/build-ovmf.sh" --show-build
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OvmfPkg/OvmfPkgX64.dsc"* ]]
+    [[ "$output" == *"X64"* ]]
+    [[ "$output" == *"GCC"* ]]
+    [[ "$output" == *"RELEASE"* ]]
+}
+
+@test "build-ovmf.sh takes the EDK II tree and its commit from the OpenCore build" {
+    run "$REPO/boot/build-opencore.sh" --udk-commit
+    [ "$status" -eq 0 ]
+    commit="$output"
+    [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+    # The same commit the pins declare -- one source of truth, not two.
+    run "$REPO/boot/build-opencore.sh" --show-pins
+    [[ "$output" == *"audk-src"$'\t'"$commit"* ]]
+    run env MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        "$REPO/boot/build-opencore.sh" --udk-dir
+    [ "$status" -eq 0 ]
+    [ "$output" = "$BATS_TEST_TMPDIR/build/OpenCorePkg-1.0.7/UDK" ]
+}
+
+@test "build-ovmf.sh says which script to run when the EDK II tree is absent" {
+    run env MQG_BUILD_DIR="$BATS_TEST_TMPDIR/nonexistent" \
+        "$REPO/boot/build-ovmf.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"build-opencore.sh"* ]]
+}
+
+@test "build-ovmf.sh refuses an EDK II tree at a different audk commit" {
+    # A tree that exists, with BaseTools apparently built, but holding some
+    # other commit. Rebuilding OVMF from an unpinned tree would produce
+    # firmware nobody could reproduce, which is the whole point of the gate.
+    udk="$BATS_TEST_TMPDIR/build/OpenCorePkg-1.0.7/UDK"
+    mkdir -p "$udk/BaseTools/Source/C/bin"
+    printf '#!/bin/sh\nexit 0\n' > "$udk/BaseTools/Source/C/bin/GenFv"
+    chmod +x "$udk/BaseTools/Source/C/bin/GenFv"
+    printf '%s\n' "$(printf '%040d' 0)" > "$udk/.mqg-prepared"
+    run env MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" "$REPO/boot/build-ovmf.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not the pinned"* ]]
+}
+
+@test "build-ovmf.sh says so when BaseTools are not built" {
+    udk="$BATS_TEST_TMPDIR/build/OpenCorePkg-1.0.7/UDK"
+    mkdir -p "$udk"
+    "$REPO/boot/build-opencore.sh" --udk-commit > "$udk/.mqg-prepared"
+    run env MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" "$REPO/boot/build-ovmf.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BaseTools"* ]]
+}
+
+@test "nothing in the OVMF build reaches the network" {
+    # The same claim boot/build-opencore.sh makes, and the same guard: no
+    # fetch tool is named anywhere in the script.
+    run grep -nE '\b(curl|wget|git clone|git fetch|git pull)\b' \
+        "$REPO/boot/build-ovmf.sh"
+    [ "$status" -ne 0 ]
+}
+
+# --- per-VM EFI variable stores ---------------------------------------
+#
+# The VARS image the build produces is a template. A VM that booted from it
+# directly would scribble its boot order into a build artifact and silently
+# invalidate its checksum; two VMs sharing one would trample each other.
+
+_nvram_env() {
+    printf '%s\n' \
+        "MQG_BUILD_DIR=$BATS_TEST_TMPDIR/build" \
+        "MQG_FIRMWARE_DIR=$BATS_TEST_TMPDIR/build/firmware" \
+        "WORK_DIR=$BATS_TEST_TMPDIR/work"
+}
+
+# A firmware directory holding a plausible VARS template and its SHA256SUMS.
+_fake_firmware() {
+    mkdir -p "$BATS_TEST_TMPDIR/build/firmware"
+    printf 'pristine variable store\n' \
+        > "$BATS_TEST_TMPDIR/build/firmware/OVMF_VARS.fd"
+    ( cd "$BATS_TEST_TMPDIR/build/firmware" \
+      && sha256sum OVMF_VARS.fd > SHA256SUMS )
+}
+
+@test "make-nvram.sh copies the template to a per-VM path" {
+    _fake_firmware
+    mapfile -t e < <(_nvram_env)
+    run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
+    [ "$status" -eq 0 ]
+    [ -f "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd" ]
+    # ...and the copy is byte-identical to the template it came from.
+    cmp "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd" \
+        "$BATS_TEST_TMPDIR/build/firmware/OVMF_VARS.fd"
+    # ...and prints where it put it, so a profile author can see the path.
+    [[ "$output" == *"p3-full-VARS.fd"* ]]
+}
+
+@test "make-nvram.sh refuses to clobber an existing NVRAM file" {
+    _fake_firmware
+    mapfile -t e < <(_nvram_env)
+    mkdir -p "$BATS_TEST_TMPDIR/work"
+    printf 'boot order lives here\n' > "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd"
+    run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--force"* ]]
+    # The existing file is untouched: this is accumulated guest state.
+    grep -q 'boot order lives here' "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd"
+}
+
+@test "make-nvram.sh --force resets an existing NVRAM file" {
+    _fake_firmware
+    mapfile -t e < <(_nvram_env)
+    mkdir -p "$BATS_TEST_TMPDIR/work"
+    printf 'boot order lives here\n' > "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd"
+    run env "${e[@]}" "$REPO/boot/make-nvram.sh" --force p3-full
+    [ "$status" -eq 0 ]
+    cmp "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd" \
+        "$BATS_TEST_TMPDIR/build/firmware/OVMF_VARS.fd"
+}
+
+@test "make-nvram.sh never writes into the build output" {
+    _fake_firmware
+    mapfile -t e < <(_nvram_env)
+    run env "${e[@]}" WORK_DIR="$BATS_TEST_TMPDIR/build/firmware" \
+        "$REPO/boot/make-nvram.sh" p3-full
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"build output"* ]]
+}
+
+@test "make-nvram.sh rejects a name that is a path" {
+    _fake_firmware
+    mapfile -t e < <(_nvram_env)
+    run env "${e[@]}" "$REPO/boot/make-nvram.sh" ../../escape
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not a usable VM name"* ]]
+}
+
+@test "make-nvram.sh refuses a template that does not match SHA256SUMS" {
+    _fake_firmware
+    mapfile -t e < <(_nvram_env)
+    printf 'somebody booted from the template\n' \
+        > "$BATS_TEST_TMPDIR/build/firmware/OVMF_VARS.fd"
+    run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"checksum mismatch"* ]]
+}
+
+@test "make-nvram.sh says which script to run when there is no template" {
+    mapfile -t e < <(_nvram_env)
+    run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"build-ovmf.sh"* ]]
+}

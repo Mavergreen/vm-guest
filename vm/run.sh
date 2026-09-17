@@ -14,6 +14,8 @@ export MQG_REPO_ROOT
 
 MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 export MQG_IMAGE_DIR
+MQG_BUILD_DIR=${MQG_BUILD_DIR:-$MQG_IMAGE_DIR/build}
+export MQG_BUILD_DIR
 MQG_VENDOR_DIR=${MQG_VENDOR_DIR:-$MQG_IMAGE_DIR/vendor-reference}
 export MQG_VENDOR_DIR
 PROFILE_DIR=${PROFILE_DIR:-$MQG_REPO_ROOT/vm/profiles}

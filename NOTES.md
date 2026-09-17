@@ -1019,3 +1019,149 @@ want split pflash.
 `Misc > Debug > Target = 67` stays on. It is the only thing in this entire
 session that produced a direct answer instead of a hypothesis, and the cost
 is one file on the ESP.
+
+## 2026-09-17 — P3 Task 9 — our own OVMF, and why Debian's was never the test
+
+**P3's firmware gate is closed.** `./vm/run.sh p3-full` boots 10.9.5 to the
+desktop on firmware we built, over split pflash, with EFI variables that
+persist. Nothing in that profile is Tier 2.
+
+### The build
+
+`OvmfPkg` is part of EDK II, and the EDK II this project already pins is
+**acidanthera/audk** — acidanthera's own fork, the one OpenCore is built
+against. So the firmware did not need a new source, a new pin, or a new
+fetch step. `boot/build-ovmf.sh` builds it out of the same tree
+`boot/build-opencore.sh` assembles, with the same three environment choices:
+
+```
+build -a X64 -b RELEASE -t GCC -p OvmfPkg/OvmfPkgX64.dsc
+```
+
+Reusing that tree rather than unpacking a second copy is deliberate: a
+second list of submodule pins is a second thing that can drift. The cost is
+an ordering dependency, which the script states (`--udk-dir` /
+`--udk-commit` ask `build-opencore.sh` where the tree is and which commit it
+should hold, and the build refuses a tree holding any other commit).
+OpenCorePkg's patches to that tree touch DuetPkg's SATA/ATA drivers and
+ShellPkg; none reach OvmfPkg.
+
+Three images, all from one build, into `$MQG_BUILD_DIR/firmware/`:
+
+| File | Bytes | For |
+|---|---|---|
+| `OVMF_CODE.fd` | 3,653,632 | pflash unit 0, read-only |
+| `OVMF_VARS.fd` | 540,672 | pflash unit 1 — the **template** |
+| `OVMF.fd` | 4,194,304 | `-bios`, one complete image |
+
+Sizes worth noticing: CODE + VARS = exactly 4 MiB, which is what makes the
+pflash pair legal (QEMU sizes each flash device from its file). And they are
+byte-for-byte the sizes of Debian's `OVMF_CODE_4M.fd` / `OVMF_VARS_4M.fd`,
+so this is a drop-in replacement for the wiring Task 8 already tried.
+
+`unshare -rn ./boot/build-ovmf.sh` produces identical checksums to a normal
+run — 1m22s from clean, 11s warm. Offline, as claimed.
+
+### Does it work where Debian's did not? Yes, immediately.
+
+Tested in the prescribed order, one change each:
+
+| # | Configuration | Result |
+|---|---|---|
+| 1 | our `OVMF.fd` alone, `-bios` | TianoCore boot manager renders at 1280x800 |
+| 2 | our CODE/VARS pflash + our OpenCore, **usb-storage** | **picker renders; 10.9 boots to the desktop** |
+| 3 | combined `-bios` | not needed |
+
+There was no step 3. The split pair — the arrangement Task 8 could never get
+past a black screen — worked on the first try.
+
+Two things Task 8 blamed on other causes turn out to have been the firmware:
+
+- **The OpenCore disk over USB.** Task 8 moved it to `ide-hd` because stock
+  OVMF never read a single block from it over USB. Ours enumerates it over
+  USB fine, and `p3-full` is back to `usb-storage`, matching `p3-oc`. That
+  really was a firmware difference, and this is the firmware without it.
+- **`Failed to start image - Already started`.** Still happens here — but
+  only when you let the picker time out (see below), never on the path that
+  boots macOS. It is a *symptom of re-entry*, not of a broken loader.
+
+### What the "Already started" log actually is
+
+With a fresh NVRAM there is no remembered default, so OpenCore's picker
+defaults to entry 1, **`EFI (external)` — the OpenCore disk itself**. Let the
+5-second timeout fire and OpenCore boots that entry, which is
+`EFI/BOOT/BOOTx64.efi`, which is `Bootstrap.efi`, which tries to start
+`OpenCore.efi` a second time and gets `EFI_ALREADY_STARTED`. Screen freezes,
+and the two-line log Task 8 found is written by that second instance.
+
+So the log Task 8 read was the *recursion*, not the original failure. Press
+`2` (or arrow to Mavericks and press Enter) within the timeout and macOS
+boots. This is a config wart, not a firmware one, and it is worth fixing
+separately — nothing here changed `config.plist`, because this task's one
+variable was the firmware.
+
+### EFI variables persist — the other reason for split pflash
+
+`boot/make-nvram.sh <name>` copies the pristine VARS template to
+`$WORK_DIR/<name>-VARS.fd`, verifies it against the build's `SHA256SUMS`
+first, refuses to clobber an existing one without `--force`, and refuses
+outright to write anywhere under `$MQG_BUILD_DIR`. The template is a build
+artifact; booting from it directly would invalidate its own checksum.
+
+Measured across three power cycles of one VM:
+
+```
+pristine template  5d2ac383...   0 variables
+after boot 1       792a56b2...  24 variables
+after boot 3       b8ac5c96...  24 variables, different contents
+```
+
+The store goes from **empty to holding real variables**, and among them are
+ones macOS itself wrote — `boot-args`, `prev-lang:kbd`, `run-efi-updater` —
+alongside OVMF's `Boot0000`–`Boot0004`, `BootOrder`, and a boot entry named
+`UEFI QEMU QEMU USB HARDDRIVE 1-0000:00:1d.7-1`. Guest NVRAM writes survive
+a power cycle. This is the thing `-bios` has denied us since P1.
+
+### Two things that did not work, recorded because they cost time
+
+- **Modified keys never reach OpenCore's picker.** Plain keys work: digits
+  boot an entry, arrows move the cursor and cancel the timeout. But
+  `ctrl-2` and `ctrl-ret` — the picker's "set this as the default" gesture —
+  do nothing at all. Most likely `UEFI > Input > KeySupport = true`, whose
+  legacy keyboard shim has no BIOS data area to read modifiers from under
+  OVMF. `KeySupport = false` (let OpenCore use the firmware's own
+  `SimpleTextInputEx`) is the obvious next experiment and would also give
+  the picker a remembered default. **Not tried here** — it is a
+  `config.plist` change, i.e. a different variable.
+  Consequence: the "picker remembers its selection" half of the persistence
+  test is **unproven**. Variables persist; OpenCore was never able to write
+  a default for them to hold.
+- **10.9 ignores the ACPI power button.** `system_powerdown` over the QEMU
+  monitor produces no shutdown and no dialog, so every reboot in this
+  session was a hard stop. Mouse clicks via `mouse_button` over the monitor
+  did not register either (the pointer moves, the click does nothing), so
+  the Apple menu was not reachable from a script. A clean guest shutdown
+  still needs a human at a GTK window. Worth solving before P4 automates
+  anything that has to shut a guest down.
+
+### Where P3 stands
+
+| Component | Tier | State |
+|---|---|---|
+| OpenCore | **0** | built offline from pinned source |
+| `config.plist` | **0** | ours, `ocvalidate`-clean |
+| HFS+ driver | **0** | `OpenHfsPlus.efi` |
+| **Firmware** | **0** | **`OvmfPkg` from the same pinned audk tree** |
+| Kexts | 1 | Lilu 1.7.2, VirtualSMC 1.3.7, pinned |
+
+`bin/tier-check.sh` reports `p3-full` clean. `--strict` still fails overall,
+on `p1-reference`, `p1-headless`, `p1-interactive`, `p2-clone` and
+`p2-notablet-abs` — the historical reference profiles, which Task 9 Step 1
+retires deliberately rather than exempts.
+
+### New: `%BUILD%` in profiles
+
+Profiles gained a fourth placeholder. The firmware a profile boots is a
+build artifact, and `MQG_BUILD_DIR` is overridable independently of
+`MQG_IMAGE_DIR`; a profile spelling it `%IMAGES%/build` would boot the wrong
+firmware for anyone who moved the build directory.
