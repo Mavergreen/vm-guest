@@ -787,3 +787,77 @@ least one is probably redundant. We ship two, because the rule is that
 nothing ships without having seen a boot fail without it. Settling that
 needs a bootable configuration, which is Task 7. Until then the question is
 open, not answered.
+
+## 2026-09-17 — P3 — the EFI image, assembled without root
+
+`./boot/build-efi-image.sh` produces
+`$MQG_IMAGE_DIR/work/opencore-p3.img`: a 192 MiB file, GPT, one EF00
+partition of 191.0 MiB starting at LBA 2048, FAT32, built with `sgdisk`
+and `mtools` and no privilege of any kind. Nothing has booted it yet —
+that is Task 7.
+
+```
+::/EFI/BOOT/BOOTx64.efi
+::/EFI/OC/OpenCore.efi
+::/EFI/OC/config.plist
+::/EFI/OC/Drivers/OpenRuntime.efi
+::/EFI/OC/Drivers/OpenPartitionDxe.efi
+::/EFI/OC/Drivers/OpenHfsPlus.efi
+::/EFI/OC/Kexts/Lilu.kext/Contents/Info.plist
+::/EFI/OC/Kexts/Lilu.kext/Contents/MacOS/Lilu
+::/EFI/OC/Kexts/VirtualSMC.kext/Contents/Info.plist
+::/EFI/OC/Kexts/VirtualSMC.kext/Contents/MacOS/VirtualSMC
+::/EFI/OC/ACPI/  ::/EFI/OC/Tools/  ::/EFI/OC/Resources/   (empty)
+```
+
+Every file was copied back out with `mcopy -n` and compared: all ten are
+byte-identical to their sources, and `ocvalidate` still passes on the
+`config.plist` read out of the FAT filesystem, not just on the one in the
+repo.
+
+### `mformat` will format over the backup GPT if you let it
+
+The one real bug found in this task, and it is invisible until it is not.
+
+mtools is given a byte *offset* into the image (`img@@1048576`), not a
+partition. Left to itself it formats from there to the end of the file —
+including the 33 sectors GPT reserves at the end for the backup header and
+partition table. The resulting filesystem believes it owns 96,256 sectors
+where the partition table says 96,223, and a large enough write eventually
+scribbles over the backup GPT.
+
+The fix is one flag: `mformat -T "$(efi_partition_sectors "$img")"`, with
+the sector count read back out of the partition table via `sgdisk -i 1`
+rather than recomputed. `tests/efi.bats` compares `minfo`'s `big size`
+against `sgdisk`'s `Partition size` and fails if the filesystem is larger.
+Verified by removing the flag and watching that test go red.
+
+### Sizing, checked rather than assumed
+
+The payload is **1,658,422 bytes**: 860 KB of artifacts, 14 KB of config,
+784 KB of kexts. The plan's 192 MiB is therefore about 120× what is
+needed, which is fine — it matches the reference image's 191 MiB and an
+EFI partition is not scarce.
+
+What matters is not the constant but that nothing depends on it being
+right by accident. `efi_fits` refuses to build when the payload plus the
+same again for headroom would not fit, *before* `mcopy` gets a chance to
+fail with a message about a file rather than about the image.
+
+### Kexts are copied as trees, not as two known files
+
+The plan's script copies `Contents/Info.plist` and `Contents/MacOS/<name>`
+by name. That is correct for Lilu 1.7.2 and VirtualSMC 1.3.7 — each
+release bundle contains exactly those two files, checked — but it would
+silently drop anything a future release adds. `efi_copy_tree` walks the
+bundle instead, creating directories parent-first, so the shape survives
+the trip. Confirmed with `mdir -b -/`, above.
+
+### `mdir` shows short names, which nearly hid a real question
+
+`mdir` prints the 8.3 name in its columns and the long name only in a
+trailing column when the two differ. A file called `d.efi` shows up as
+`d        efi`, so a test asserting `*"d.efi"*` against `mdir` output is
+testing nothing about long-name support. `tests/efi.bats` uses
+`OpenHfsPlus.efi` for that reason: OpenCore looks up drivers by long name,
+and VFAT long names are the thing that has to work.

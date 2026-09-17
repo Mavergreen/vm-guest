@@ -325,3 +325,86 @@ _kext_sources() {
         [ -f "$BATS_TEST_TMPDIR/build/kexts/$k.kext/Contents/MacOS/$k" ]
     done
 }
+
+# --- assembling the EFI image -----------------------------------------
+
+# A build area with plausible artifacts and their SHA256SUMS, so the image
+# build gets past its provenance check and we can test what comes after.
+_fake_artifacts() {
+    local art="$BATS_TEST_TMPDIR/build/artifacts" a
+    mkdir -p "$art"
+    for a in BOOTx64.efi OpenCore.efi OpenRuntime.efi OpenPartitionDxe.efi \
+             OpenHfsPlus.efi; do
+        printf 'not really %s\n' "$a" > "$art/$a"
+    done
+    ( cd "$art" && sha256sum ./*.efi | sed 's| \./| |' > SHA256SUMS )
+}
+
+@test "build-efi-image.sh lists what it puts in the image" {
+    run "$REPO/boot/build-efi-image.sh" --list-contents
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OpenHfsPlus.efi"* ]]
+    [[ "$output" == *"Lilu.kext"* ]]
+    [[ "$output" == *"config.plist"* ]]
+}
+
+@test "build-efi-image.sh says which script to run when artifacts are absent" {
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR" \
+        MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        "$REPO/boot/build-efi-image.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"build-opencore.sh"* ]]
+}
+
+@test "build-efi-image.sh refuses artifacts that do not match SHA256SUMS" {
+    _fake_artifacts
+    printf 'tampered\n' > "$BATS_TEST_TMPDIR/build/artifacts/OpenCore.efi"
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR" \
+        MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        "$REPO/boot/build-efi-image.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"SHA256SUMS"* ]]
+}
+
+@test "build-efi-image.sh names the missing kext piece, not just the kext" {
+    _fake_artifacts
+    # A bundle with its Info.plist but no Mach-O: the shape that would
+    # otherwise fail later as a confusing mcopy error.
+    mkdir -p "$BATS_TEST_TMPDIR/build/kexts/Lilu.kext/Contents"
+    printf 'plist\n' > "$BATS_TEST_TMPDIR/build/kexts/Lilu.kext/Contents/Info.plist"
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR" \
+        MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        "$REPO/boot/build-efi-image.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Contents/MacOS/Lilu"* ]]
+    [[ "$output" == *"fetch-kexts.sh"* ]]
+}
+
+@test "build-efi-image.sh builds an image whose EFI/OC is laid out for OpenCore" {
+    _fake_artifacts
+    for k in Lilu VirtualSMC; do
+        mkdir -p "$BATS_TEST_TMPDIR/build/kexts/$k.kext/Contents/MacOS"
+        printf 'plist\n' > "$BATS_TEST_TMPDIR/build/kexts/$k.kext/Contents/Info.plist"
+        printf 'macho\n' > "$BATS_TEST_TMPDIR/build/kexts/$k.kext/Contents/MacOS/$k"
+    done
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR" \
+        MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
+        "$REPO/boot/build-efi-image.sh" "$BATS_TEST_TMPDIR/oc.img"
+    [ "$status" -eq 0 ]
+    [ -f "$BATS_TEST_TMPDIR/oc.img" ]
+    [ -f "$BATS_TEST_TMPDIR/oc.img.sha256" ]
+
+    # Read the layout back out of the image rather than trusting the build.
+    run mdir -b -i "$BATS_TEST_TMPDIR/oc.img@@1048576" -/ ::
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"::/EFI/BOOT/BOOTx64.efi"* ]]
+    [[ "$output" == *"::/EFI/OC/OpenCore.efi"* ]]
+    [[ "$output" == *"::/EFI/OC/config.plist"* ]]
+    [[ "$output" == *"::/EFI/OC/Drivers/OpenHfsPlus.efi"* ]]
+    # The kext must arrive as a bundle, not as a flattened pair of files.
+    [[ "$output" == *"::/EFI/OC/Kexts/Lilu.kext/Contents/Info.plist"* ]]
+    [[ "$output" == *"::/EFI/OC/Kexts/Lilu.kext/Contents/MacOS/Lilu"* ]]
+    [[ "$output" == *"::/EFI/OC/Kexts/VirtualSMC.kext/Contents/MacOS/VirtualSMC"* ]]
+    # Apple's HFS+ driver must never appear in the shipped image.
+    [[ "$output" != *"HfsPlusLegacy.efi"* ]]
+}
