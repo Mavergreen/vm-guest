@@ -1,0 +1,14 @@
+# Third-party artifacts. Tab-separated: name, url, sha256.
+#
+# sha256 of TOFU means "not yet known" -- the checksum is computed and
+# pinned on first fetch, and the change is committed deliberately.
+#
+# Tier 2 entries land in vendor/reference/ and must never be referenced by
+# a shipped profile or by the image pipeline. See bin/tier-check.sh.
+#
+# URLs marked CONFIRM-IN-TASK-10 have not been verified against the live
+# page. Confirm them before fetching; do not guess.
+#
+# name	url	sha256
+utm-bundle	CONFIRM-IN-TASK-10	TOFU
+opencore-legacy-img	CONFIRM-IN-TASK-10	TOFU
