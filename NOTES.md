@@ -861,3 +861,71 @@ trailing column when the two differ. A file called `d.efi` shows up as
 testing nothing about long-name support. `tests/efi.bats` uses
 `OpenHfsPlus.efi` for that reason: OpenCore looks up drivers by long name,
 and VFAT long names are the thing that has to work.
+
+## 2026-09-17 — P3 — our own OpenCore boots 10.9, and answers three questions
+
+`./vm/run.sh p3-oc` — one variable changed from the P2 baseline, the
+bootloader — boots Mavericks to the desktop. The boot log shows
+`Lilu Kernel Extension 1.7.2`, `VirtualSMC`, and
+`hfs: mounted Mavericks on device root_device`, which is **our
+`OpenHfsPlus.efi` reading the HFS+ volume**. That is the component
+`docs/decisions/0002` was written about, working.
+
+Three things this settles.
+
+### 1. SMBIOS alone was sufficient — P1's open question, closed
+
+Our `config.plist` has `Kernel > Block: []`. It has **never** contained the
+`AppleTyMCEDriver` block that khronokernel's image shipped and that P1
+enabled. The guest boots with no panic.
+
+So the block was never the fix; changing SMBIOS from `MacPro5,1` to
+`iMac14,2` was. P1 left both changes in play and could not separate them.
+Worth noting the shape of the near-miss: had we carried the block forward
+"because the reference had it", it would have looked like part of the
+solution forever.
+
+### 2. FakeSMC-32 was redundant — Task 6's experiment, answered
+
+The reference image ships **three** SMC-related kexts: `FakeSMC-32`,
+`VirtualSMC` and `Lilu`. `FakeSMC` and `VirtualSMC` are alternative SMC
+emulators from different projects, so shipping both was always suspicious.
+
+We ship **two** — `Lilu` and `VirtualSMC` — and the guest boots. `FakeSMC-32`
+was not needed. Nothing is shipped here without having seen a boot fail
+without it, and this one never failed.
+
+### 3. Screen resolution is a firmware setting, not a driver problem
+
+**This corrects a claim made in `docs/install-log.md` after P2.**
+
+P2 offered exactly one resolution, 1280x720, despite `vgamem_mb=64`. I
+concluded that VRAM was not the constraint — correct — and that the real
+work was therefore a display driver such as VMQemuVGA or VMsvga2 —
+**wrong**.
+
+This boot came up at **4096x2160** with no display driver at all. The cause
+is in our config, inherited from 1.0.7's sample:
+
+```
+UEFI > Output > Resolution = Max
+```
+
+OpenCore sets the UEFI GOP framebuffer, and macOS inherits whatever
+framebuffer the firmware hands it. The lever is the **bootloader's GOP
+mode**, which we control, not a guest-side driver.
+
+Two caveats, so this is not over-read:
+
+- The framebuffer is still **fixed**. macOS gets one mode and cannot change
+  it at runtime; System Preferences will still offer a single resolution. A
+  display driver remains the only route to *changing* resolution from inside
+  the guest, and to resize-to-window.
+- `Max` is not obviously the right choice. 4096x2160 is a lot of pixels for a
+  guest with no graphics acceleration, where the CPU draws everything. P5
+  should treat resolution as a tunable with a real cost, and measure it,
+  rather than assuming bigger is better.
+
+**What P5 inherits:** its display phase is now about *changing* modes and
+resize-to-window, not about reaching a usable resolution at all. That is a
+smaller and better-defined problem than the one the design anticipated.

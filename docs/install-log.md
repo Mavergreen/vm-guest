@@ -163,11 +163,20 @@ constraint and made "try `vgamem_mb=64` and see whether 10.9 notices" an early
 experiment. We gave it 64 MB — twenty times what he had — and 10.9 still
 offers a single mode.
 
-So **VRAM was never the limiting factor**. The limit is that stock `-vga std`
-has no 10.9 driver capable of mode-setting. That reframes P5's display phase:
-raising VRAM is not the lever, and the real work is a display driver
-(VMQemuVGA or VMsvga2), or the resize-to-window path in the deferred
-integration milestone M5.
+So **VRAM was never the limiting factor**.
+
+**The rest of what this section originally said was wrong, and P3 corrected
+it.** It concluded that the limit was stock `-vga std` having no 10.9
+mode-setting driver, and that the real work was therefore a display driver.
+
+P3's boot, with our own OpenCore and no display driver whatsoever, came up at
+**4096x2160**. The lever is `UEFI > Output > Resolution` in the bootloader's
+config: OpenCore sets the UEFI GOP framebuffer and macOS inherits it. See the
+P3 entry in `NOTES.md`.
+
+What remains true: the framebuffer is *fixed*, so the guest still cannot
+change resolution at runtime, and resize-to-window still needs driver work.
+But reaching a usable resolution was never a driver problem.
 
 ## Deferred post-install changes
 
