@@ -61,9 +61,13 @@ setup() {
 }
 
 @test "fetch-opencorepkg.sh refuses an unpinned checksum" {
+    # The name here must match what fetch-opencorepkg.sh looks up
+    # (opencorepkg-src, per vendor/sources.tsv) -- a mismatched name would
+    # die with "no such source" instead, which is a different failure than
+    # the one this test means to exercise.
     printf '%s\n' \
         '# name	url	sha256' \
-        'opencorepkg	https://example.invalid/oc.tar.gz	TOFU' \
+        'opencorepkg-src	https://example.invalid/oc.tar.gz	TOFU' \
         > "$BATS_TEST_TMPDIR/sources.tsv"
     run env MQG_SOURCES="$BATS_TEST_TMPDIR/sources.tsv" \
         MQG_BUILD_DIR="$BATS_TEST_TMPDIR/build" \
