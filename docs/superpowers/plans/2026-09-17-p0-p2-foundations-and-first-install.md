@@ -888,7 +888,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 A profile is a text file of QEMU arguments, one per line. Full-line comments
 start with `#`. `@include <name>` pulls in another profile. `%REPO%` expands
-to the repository root.
+to the repository root and `%IMAGES%` to the image directory, which is
+deliberately not under the repo because the repo is on NFS.
 
 One argument per line — not a shell string — because it removes quoting
 entirely from the problem. `-drive if=none,file=x,format=qcow2` never needs
@@ -975,7 +976,7 @@ setup() {
 }
 
 @test "profile_expand substitutes %REPO% with the repository root" {
-    printf '%s\n' '-drive' 'file=%REPO%/work/disk.qcow2' > "$PROFILE_DIR/a.args"
+    printf '%s\n' '-drive' 'file=%IMAGES%/work/disk.qcow2' > "$PROFILE_DIR/a.args"
     run profile_expand a
     [ "${lines[1]}" = "file=/fake/repo/work/disk.qcow2" ]
 }
@@ -997,7 +998,9 @@ Create `lib/profile.sh`:
 #
 # One argument per line, so quoting never enters the picture. Full-line
 # comments start with '#'. '@include <name>' pulls in another profile.
-# '%REPO%' expands to the repository root.
+# '%REPO%' expands to the repository root, '%IMAGES%' to the image
+# directory -- which is deliberately NOT under the repo, because the repo
+# is on NFS and a guest disk must not be.
 #
 # The point of the format is that an experiment is a diff. Changing one
 # variable at a time is only verifiable if the change is a file change.
@@ -1029,7 +1032,8 @@ profile_expand() {
             '@include '*)
                 profile_expand "${line#@include }" "$chain:$name" ;;
             *)
-                printf '%s\n' "${line//'%REPO%'/${MQG_REPO_ROOT:?MQG_REPO_ROOT is unset}}" ;;
+                line="${line//'%REPO%'/${MQG_REPO_ROOT:?MQG_REPO_ROOT is unset}}"
+                printf '%s\n' "${line//'%IMAGES%'/${MQG_IMAGE_DIR:?MQG_IMAGE_DIR is unset}}" ;;
         esac
     done < "$path"
 }
@@ -1480,7 +1484,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/golden.sh
 . "$MQG_REPO_ROOT/lib/golden.sh"
 
-GOLDEN_DIR=${GOLDEN_DIR:-$MQG_REPO_ROOT/golden}
+MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
+GOLDEN_DIR=${GOLDEN_DIR:-$MQG_IMAGE_DIR/golden}
 
 usage() {
     die "usage:
@@ -1611,8 +1616,9 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/golden.sh
 . "$MQG_REPO_ROOT/lib/golden.sh"
 
-GOLDEN_DIR=${GOLDEN_DIR:-$MQG_REPO_ROOT/golden}
-WORK_DIR=${WORK_DIR:-$MQG_REPO_ROOT/work}
+MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
+GOLDEN_DIR=${GOLDEN_DIR:-$MQG_IMAGE_DIR/golden}
+WORK_DIR=${WORK_DIR:-$MQG_IMAGE_DIR/work}
 
 verify=0
 if [ "${1:-}" = "--verify" ]; then
@@ -2232,9 +2238,9 @@ OVMF's variable store must be writable and per-VM. Never point `unit=1` at the
 file in `/usr/share/OVMF` or at anything in the quarantine:
 
 ```bash
-mkdir -p work
-cp /usr/share/OVMF/OVMF_VARS_4M.fd work/OVMF_VARS.fd
-chmod u+w work/OVMF_VARS.fd
+mkdir -p "$MQG_IMAGE_DIR/work"
+cp /usr/share/OVMF/OVMF_VARS_4M.fd "$MQG_IMAGE_DIR/work/OVMF_VARS.fd"
+chmod u+w "$MQG_IMAGE_DIR/work/OVMF_VARS.fd"
 ```
 
 If Task 10 found the bundle ships its own OVMF as a **combined** image, use
@@ -2271,7 +2277,7 @@ Penryn,vendor=GenuineIntel,+ssse3,+sse4.1,+sse4.2,+popcnt,+xsave,+xsaveopt,check
 -drive
 if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd
 -drive
-if=pflash,format=raw,unit=1,file=%REPO%/work/OVMF_VARS.fd
+if=pflash,format=raw,unit=1,file=%IMAGES%/work/OVMF_VARS.fd
 
 # OpenCore, from the reference bundle. Substitute the real filename.
 -drive
@@ -2287,7 +2293,7 @@ ide-hd,bus=ide.1,drive=installer
 
 # Target disk, created in step 4.
 -drive
-id=target,if=none,format=qcow2,file=%REPO%/work/mavericks.qcow2
+id=target,if=none,format=qcow2,file=%IMAGES%/work/mavericks.qcow2
 -device
 ide-hd,bus=ide.2,drive=target
 
@@ -2316,7 +2322,7 @@ gtk
 - [ ] **Step 4: Create the target disk**
 
 ```bash
-qemu-img create -f qcow2 work/mavericks.qcow2 60G
+qemu-img create -f qcow2 "$MQG_IMAGE_DIR/work/mavericks.qcow2" 60G
 ```
 
 60G rather than the brief's 40G: this guest is for building and testing
@@ -2575,11 +2581,11 @@ Shut down from the Apple menu and wait for QEMU to exit on its own.
 - [ ] **Step 2: Promote**
 
 ```bash
-./vm/golden.sh promote work/mavericks.qcow2 p2-manual-install \
+./vm/golden.sh promote "$MQG_IMAGE_DIR/work/mavericks.qcow2" p2-manual-install \
     "First manual install: 10.9.x via reference OpenCore + Approach C media, clean double reboot"
 ```
 
-Expected: `golden/p2-manual-install.qcow2` exists, is mode 0444, and has
+Expected: `$MQG_IMAGE_DIR/golden/p2-manual-install.qcow2` exists, is mode 0444, and has
 `.sha256` and `.meta` sidecars.
 
 - [ ] **Step 3: Verify the promotion**
@@ -2587,7 +2593,7 @@ Expected: `golden/p2-manual-install.qcow2` exists, is mode 0444, and has
 ```bash
 ./vm/golden.sh list
 ./vm/golden.sh verify p2-manual-install
-cat golden/p2-manual-install.meta
+cat "$MQG_IMAGE_DIR/golden/p2-manual-install.meta"
 ```
 
 Expected: `verify` passes and the metadata records the description, date,
@@ -2615,7 +2621,7 @@ Then write a profile that boots the clone. Create
 @include p1-reference-noinstaller
 
 -drive
-id=target,if=none,format=qcow2,file=%REPO%/work/scratch-1.qcow2
+id=target,if=none,format=qcow2,file=%IMAGES%/work/scratch-1.qcow2
 -device
 ide-hd,bus=ide.2,drive=target
 ```
@@ -2646,7 +2652,7 @@ after this point assumes goldens are immutable.
 - [ ] **Step 6: Discard the scratch clone**
 
 ```bash
-rm work/scratch-1.qcow2
+rm "$MQG_IMAGE_DIR/work/scratch-1.qcow2"
 ```
 
 Cheap to discard is the entire point.
