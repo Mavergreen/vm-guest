@@ -1,0 +1,91 @@
+# p3-full -- ONE VARIABLE from p3-oc: the firmware.
+#
+# With this, NOTHING in the boot path is Tier 2. OpenCore is built from
+# pinned source offline; the firmware is the distro's own package. This is
+# the profile P3 exists to produce, and tier-check --strict should pass
+# with it.
+#
+# ORIGINAL HEADER:
+# p3-oc -- ONE VARIABLE: our own OpenCore, built from pinned source.
+#
+# Everything else is held constant against p2-clone: same reference
+# firmware via -bios, same chipset, same CPU, same disks. So a failure here
+# is our OpenCore build or our config.plist, and nothing else.
+#
+# The bootloader is no longer Tier 2 -- but the firmware still is, which is
+# why tier-check will keep flagging this profile until p3-full.
+#
+# This is the template every later experiment copies: include the baseline,
+# override exactly the lines that differ, change nothing else. The diff IS
+# the experiment.
+#
+# Here the only differences from p1-reference are the target disk (a clone
+# instead of the original) and a headless display with a monitor socket, so
+# boot can be timed and screenshotted from the host without a window.
+#
+# p1-reference still names the installer ISO and the original disk, so this
+# profile cannot simply @include it -- a profile is a flat list of arguments
+# and QEMU would see two -drive entries with id=target. Until the hardware
+# profile is split further, this one spells out its own drives.
+
+@include base-kvm
+
+-machine
+q35,vmport=off
+-cpu
+Penryn,+ssse3,+sse4.1,+sse4.2
+
+# Stock Debian OVMF 2024.02, 4MB split CODE/VARS as a pflash pair.
+#
+# P1 tried pflash once and got a permanently black screen -- but that was
+# with the REFERENCE firmware, which is a complete -bios image, not the CODE
+# half of a pair. Debian's is genuinely split, so pflash is correct here.
+# Do not "fix" this back to -bios.
+#
+# This is also what restores EFI variable persistence, which -bios has
+# denied us since P1.
+-drive
+if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd
+-drive
+if=pflash,format=raw,unit=1,file=%IMAGES%/work/OVMF_VARS_p3.fd
+
+-device
+ich9-usb-ehci1,id=usb,bus=pcie.0,addr=0x1d.7,multifunction=on
+-device
+ich9-usb-uhci1,masterbus=usb.0,firstport=0,bus=pcie.0,addr=0x1d.0,multifunction=on
+-device
+ich9-usb-uhci2,masterbus=usb.0,firstport=2,bus=pcie.0,addr=0x1d.1
+-device
+ich9-usb-uhci3,masterbus=usb.0,firstport=4,bus=pcie.0,addr=0x1d.2
+
+-drive
+id=opencore,if=none,format=raw,file=%IMAGES%/work/opencore-p3.img
+# IDE, not usb-storage. Stock 4MB OVMF did not enumerate the OpenCore image
+# over USB at all -- blockstats showed zero reads from it while the firmware
+# was plainly running and writing NVRAM. The reference firmware did find it
+# over USB, so this is a firmware difference, not a device one.
+-device
+ide-hd,bus=ide.1,drive=opencore
+
+-drive
+id=target,if=none,format=qcow2,file=%IMAGES%/work/p3-full.qcow2
+-device
+ide-hd,bus=ide.0,drive=target
+
+-netdev
+user,id=net0
+-device
+usb-net,bus=usb.0,netdev=net0
+
+-device
+usb-kbd,bus=usb.0
+-device
+usb-mouse,bus=usb.0
+
+-device
+VGA,vgamem_mb=64
+
+-display
+none
+-monitor
+unix:%IMAGES%/work/monitor.sock,server,nowait

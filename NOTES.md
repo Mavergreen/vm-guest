@@ -929,3 +929,93 @@ Two caveats, so this is not over-read:
 **What P5 inherits:** its display phase is now about *changing* modes and
 resize-to-window, not about reaching a usable resolution at all. That is a
 smaller and better-defined problem than the one the design anticipated.
+
+## 2026-09-17 — P3 Task 8 — stock OVMF does not work with OpenCore here
+
+**Blocked, and the cause is not ours.** Recording in full because the
+diagnosis took a while and the conclusion is counter-intuitive.
+
+### What works
+
+- `p3-oc`: our OpenCore 1.0.7 + the **reference** firmware → boots 10.9 to
+  the desktop.
+- Stock Debian OVMF 2024.02 **alone**, no OpenCore: renders the TianoCore
+  boot manager at 1280x800. The firmware is fine.
+
+### What does not
+
+Stock OVMF + OpenCore → OpenCore runs, sets its resolution, renders nothing,
+never boots macOS.
+
+**And it fails identically with khronokernel's reference OpenCore 0.6.6.**
+That control is what matters: it is not our build, our config, or our image
+assembly. It is stock OVMF and OpenCore not getting along on this setup.
+
+### How it was diagnosed
+
+Bisected by adding one device at a time to a minimal OVMF boot:
+
+| Configuration | Result |
+|---|---|
+| OVMF alone | 1280x800, boot manager renders |
+| + ich9 USB controllers | unchanged, fine |
+| + our OpenCore image | **4096x2160, black** |
+
+The resolution change proves OpenCore executes: setting `Resolution` in our
+config to `1024x768` produced a 1024x768 framebuffer, a mode OVMF would never
+pick by itself.
+
+Ruled out, each as its own experiment:
+
+- CPU model — `Penryn` with and without flags, `Nehalem`, `Haswell-noTSX`:
+  OVMF boots fine on all four.
+- `usb-storage` vs `ide-hd` for the OpenCore disk.
+- Booter quirks `SetupVirtualMap` and `FixupAppleEfiImages`, off individually
+  and together.
+- `TextRenderer` `BuiltinGraphics` vs `SystemText`.
+- Verbose `boot-args` — macOS never gets far enough to print.
+- The macOS disk's own ESP — fails with only the OpenCore disk attached.
+
+### The one real lead, and why it is a dead end for now
+
+Enabling OpenCore's own file logging (`Misc > Debug > Target = 67`) — which is
+how this should have been approached an hour earlier — produced exactly two
+lines:
+
+```
+OCM: Failed to start image - Already started
+BS: Failed to start OpenCore image - Already started
+```
+
+`Bootstrap.efi` (shipped as `EFI/BOOT/BOOTx64.efi`) loads
+`EFI/OC/OpenCore.efi` and gets `EFI_ALREADY_STARTED` back.
+
+Shipping `OpenCore.efi` directly as `BOOTx64.efi` instead gets further — it
+renders — but then fails with `OC: Failed to load configuration!`, because
+OpenCore resolves `config.plist` relative to its own path and looks in
+`EFI/BOOT/`. 1.0.7's `Docs/Configuration.tex` confirms the Bootstrap
+arrangement we used is the intended one.
+
+### Where this leaves P3
+
+Everything except the firmware is done and Tier 0:
+
+| Component | Tier | State |
+|---|---|---|
+| OpenCore | **0** | built offline from pinned source, boots 10.9 |
+| `config.plist` | **0** | ours, `ocvalidate`-clean |
+| HFS+ driver | **0** | `OpenHfsPlus.efi`, mounts the volume |
+| Kexts | **1** | Lilu 1.7.2, VirtualSMC 1.3.7, pinned |
+| **Firmware** | **2** | still the reference `OVMF.bin` |
+
+The design anticipated this: *"If the stock one fails, log how, and keep the
+old one pinned (with its checksum) for now."* Done.
+
+**Also unresolved:** EFI variable persistence, which was the other reason to
+want split pflash.
+
+### Keep the file logging
+
+`Misc > Debug > Target = 67` stays on. It is the only thing in this entire
+session that produced a direct answer instead of a hypothesis, and the cost
+is one file on the ESP.
