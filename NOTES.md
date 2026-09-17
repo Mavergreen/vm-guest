@@ -551,3 +551,120 @@ this task, and one variable per experiment.
   them — that is Task 5 onward, and the golden-#1 comparison is the test.
 - The `OpenHfsPlus` vs Apple `HfsPlus` boot-time cost that `0002` asks P3 to
   measure. Still unmeasured; it needs a booting image first.
+
+## 2026-09-17 — P3 — the OpenCore build is now pinned and offline
+
+Closes the "the build is *not* fully pinned" concern from the entry above.
+All three inputs are pinned by commit and by SHA-256, `build_oc.tool` no
+longer `curl | eval`s anything, and **the build runs with no network at
+all**. The five artifacts are byte-identical to the floating build.
+
+### What is pinned, to what
+
+| Input | Pin | Where |
+|---|---|---|
+| OpenCorePkg | tag `1.0.7` tarball | `opencorepkg-src` (unchanged) |
+| `ocbuild/efibuild.sh` | `e9ed49cb7a4f7fa2830c024a13d63de27c2e0d1a` | `ocbuild-efibuild` |
+| `acidanthera/audk` | `0672a009e9ca85753d240324d761341adf0291b3` | `audk-src` |
+| audk's 12 submodules | the commits audk's gitlinks name | `audk-*` |
+
+`master` of `ocbuild` resolved to `e9ed49cb` and the file at that commit
+hashes to `4ae2461427bf68be18276483b58e7e295bf77b83782b80b817586a2c817cdb30`
+— the same value the floating build recorded, so nothing moved under us
+between the two runs.
+
+`boot/build-opencore.sh` is the single place the commits are written down.
+`boot/fetch-edk2.sh` asks it (`--show-pins`) what to download, and the build
+refuses a `sources.tsv` URL that names a different commit than it expects,
+so the two files cannot quietly disagree.
+
+### How the fetch was removed
+
+`build_oc.tool`'s last act was:
+
+```
+src=$(curl -LfsS https://raw.githubusercontent.com/acidanthera/ocbuild/master/efibuild.sh) && eval "$src" || exit 1
+```
+
+`boot/patches/0001-build_oc-source-pinned-efibuild.patch` replaces the
+`curl` with a `cat "${EFIBUILD_SH}"`, keeping the `eval` exactly as upstream
+has it so `efibuild.sh` still runs in `build_oc.tool`'s own shell. The patch
+is applied by `boot/build-opencore.sh` at build time, guarded by a grep so a
+warm tree is not patched twice, and asserted afterwards. `build_oc.tool` has
+no other network call: that one line was the whole of it.
+
+### How offline was proved
+
+```
+unshare -rn ./boot/build-opencore.sh
+```
+
+`unshare -rn` gives an unprivileged network namespace with nothing but a
+down `lo` — verified separately that `curl https://example.com` fails inside
+it. Two runs: a **cold** one that unpacked and patched the EDK II tree from
+scratch (2m6s, 2m27s wall) and a **warm** re-run over the existing tree
+(20s). Both exited 0 and produced the same five checksums as the floating
+build:
+
+```
+7b3ce1defa81257d8994961fb838cda765e6a990d7bf9d6773aa94ef9ea63819  OpenCore.efi
+eb05c27990e7162011b2ef5229d3e2b8be23a8e0bfd79d77c1891cee175e0094  BOOTx64.efi
+d5bece452e5c2180b7f588b40b12c2fe64663548dbbe0de01038c3db45083a5d  OpenRuntime.efi
+e0ee5f238725685eff2f423558b933497c5475c257f747aa281e2d88018723ea  OpenPartitionDxe.efi
+93f491375fbd4c0541b55d64b8d4e2f01cafde4f66b7f520f943d3351a45040a  OpenHfsPlus.efi
+```
+
+Identical artifacts from identical commits is the result that says the
+pinning describes what was actually happening, rather than changing it.
+
+### `efibuild.sh` behaviour worth knowing later
+
+Read it at the pinned commit before changing any of this. Four things are
+not obvious and all four cost a build to find out:
+
+- **`OFFLINE_MODE=1` does what the name says, and only that.** It skips the
+  `audk` clone and the `git pull --rebase`. It does *not* skip anything else
+  — and the submodule checkout and the `DISCARD_SUBMODULES` handling live
+  *inside* the function it skips (`updaterepo`), so in offline mode both
+  simply never happen. Whatever they would have done, you must do yourself.
+- **`UDK.ready` is load-bearing before the build, not just after.** If
+  `UDK/UDK.ready` is absent, efibuild's *first* act is `rm -rf UDK`. A
+  pre-unpacked tree without that marker is deleted before it is used. We
+  touch it (plus `patches.ready` and `submodules.ready`) during assembly.
+  It also suppresses a whole-tree `find . -exec file {} ;` CRLF scan.
+- **A GitHub archive leaves an empty directory at every submodule path**,
+  including audk's own `OpenCorePkg` submodule. efibuild wants to put a
+  symlink there pointing at the OpenCorePkg tree being built, but its
+  `symlink()` silently does nothing when the target already exists as a
+  directory — and then BaseTools fails to compile `ImageTool` because
+  `OpenCorePkg/User/Include/UserFile.h` is not found. Upstream avoids this
+  by `git rm`-ing the submodule inside the clone step. We `rm -rf` it.
+- **`HASH=$(git rev-parse '@{upstream}')` runs unconditionally**, and our
+  `UDK` is not a git repository, so every build prints
+  `fatal: not a git repository` once. Harmless: `HASH` is only passed as
+  `package`'s third argument, which OpenCorePkg's `package()` ignores.
+
+### Why all twelve submodules, not the two that get compiled
+
+Only two are actually built: `openssl` (OpenCorePkg.dsc links
+`CryptoPkg/Library/OpensslLib`) and `brotli` (BaseTools' `BrotliCompress`;
+audk lists brotli twice, at one commit). But EDK II's `build.py` validates
+every `[Includes]` path of every `.dec` it parses, and `MdePkg.dec` names
+`Library/MipiSysTLib/mipisyst/library/include`. Missing that directory kills
+the build at meta-data processing, two seconds in. Rather than guess which
+`.dec` files a future `ARCHS`/`TARGETS` change will drag in, all twelve are
+pinned — which is also just what `git submodule update --init` produced.
+
+Two tarball-vs-checkout differences were checked and are harmless, both
+caused by `export-ignore` in the upstream `.gitattributes`: openssl's
+archive omits `dev/` and `util/mktar.sh`, and brotli's omits
+`c/common/dictionary.bin`, which nothing in BaseTools reads (`dictionary.c`
+carries the data inline). Every file present in both is byte-identical, and
+the artifact checksums agree.
+
+### Residual risk
+
+GitHub archive tarballs are not contractually byte-stable; the compression
+has changed before. If `audk-*` or `opencorepkg-src` ever fails
+verification without the URL changing, that is the cause, and the fix is to
+re-verify the *contents* against the commit rather than to re-pin blindly.
