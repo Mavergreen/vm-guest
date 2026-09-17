@@ -1676,3 +1676,60 @@ signature. The reference size is 6,550,020,096 bytes = 6246.09375 MiB, so
 Task 3 cannot ask for a byte-exact image through that interface. Either
 round up or teach `hfs_create` a byte-sized argument — a decision for the
 task that actually needs it.
+
+## 2026-09-17 — P4 — what `get.sh` actually does, and InstallESD.dmg fetched
+
+Task 2. Read <https://mavericksforever.com/get.sh> in full first, as the plan
+demanded, rather than guessing at the protocol. Fetched 2026-09-17; the
+script's own header says "Last updated 2026/02/09", by Wowfunhappy with
+Krackers, Jazzzny and dosdude1.
+
+### The handshake, exactly
+
+Apple will not hand out the installer without a token, and the token needs a
+key derived from a real Mavericks-era Mac's identity.
+
+| # | Step | Endpoint |
+|---|---|---|
+| 1 | Client id: 8 random bytes, uppercase hex | — |
+| 2 | Server id: `curl -c -` and take the last cookie line's last field, shaped `<n>~<hex>` | `GET http://osrecovery.apple.com/` |
+| 3 | Board serial `C0243070168G3M91F`, board id `Mac-3CBD00234E554E41`, boot ROM `003EE1E6AC14` — donated by dosdude1 from a broken Mac | — |
+| 4 | Key: SHA-256 over client-id ‖ server-id's hex half ‖ ROM ‖ SHA-256(serial ‖ board-id) ‖ ten `0xCC` bytes, uppercase hex | — |
+| 5 | Payload: POST `cid=`/`sn=`/`bid=`/`k=`, newline-separated, `Content-Type: text/plain`, `Cookie: session=<server id>`. Replies with `AU: <url>` and `AT: <token>` lines | `POST http://osrecovery.apple.com/InstallationPayload/OSInstaller` |
+| 6 | Download with `Cookie: AssetToken=<AT>` | `GET http://oscdn.apple.com/content/downloads/33/62/031-10295/gho4r94w66f5v4ujm0sz7k1m0hua68i6oo/OSInstaller/InstallESD.dmg` |
+
+All of it plain HTTP, Apple's choice. **The expected SHA-256 of
+`InstallESD.dmg` is
+`c861fd59e82bf777496809a0d2a9b58f66691ee56738031f55874a3fe1d7c3ff`** — and
+over an unencrypted transfer that checksum is the only integrity there is,
+which is why `media/fetch-installesd.sh` verifies before renaming the
+`.part` into place rather than after.
+
+`get.sh` also checks that `AU` is *that exact URL* before downloading. Worth
+keeping: the same handshake serves whatever OS Apple thinks that board is
+entitled to.
+
+Everything after the checksum check in `get.sh` is `hdiutil` — attach the
+ESD, convert BaseSystem.dmg to a sparseimage, resize it to **6,550,020,096
+bytes**, copy `Packages`, `BaseSystem.chunklist` and `BaseSystem.dmg` in,
+convert to UDZO. macOS-only, and exactly what Task 3 reimplements. Not
+lifted. (That 6,550,020,096 is where the reference ISO's partition size
+comes from — the same number, from the same line.)
+
+### The real download
+
+```
+$ time ./media/fetch-installesd.sh
+```
+
+| | |
+|---|---|
+| Wall clock | **59.6 s** (≈ 89 MB/s) |
+| Size | 5,318,660,434 bytes (5.0 GiB) |
+| SHA-256 | matched on the first attempt |
+| Re-run | 11 s, re-verifies and leaves the file alone — no second download |
+| `dmg2img -l` | DDM, Apple partition map, one `Apple_HFS` "disk image" partition — a real UDIF, and what Task 3 expects |
+
+No retries, no surprises. The `.part` is removed and restarted rather than
+resumed with `curl -C -`: resuming into bytes nobody has ever verified turns
+a bad network and a bad resume into the same 5 GB-later checksum failure.
