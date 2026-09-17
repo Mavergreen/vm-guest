@@ -30,6 +30,7 @@ of working through a list rather than rediscovering what was baked in.
 | QEMU | 8.2.2 (Debian `1:8.2.2+ds-0ubuntu1.18`) |
 | OVMF | **4M split only**: `OVMF_CODE_4M.fd` / `OVMF_VARS_4M.fd` in `/usr/share/OVMF/`, plus `.ms`, `.secboot`, `.snakeoil` variants. No 2M or combined image. |
 | IOMMU | enabled, 14 groups |
+| `kvm.ignore_msrs` | `Y` since 2026-09-17, non-persistent — see §3 |
 
 Two consequences worth stating plainly:
 
@@ -55,7 +56,7 @@ survives reboot, and how to revert.
 
 | Date | Change | Persistent? | Revert |
 |---|---|---|---|
-| — | `kvm.ignore_msrs=1` — **not yet applied**; required by Somlo and OSX-KVM | | |
+| 2026-09-17 | `kvm.ignore_msrs=1`, applied by the user via `echo 1 \| sudo tee /sys/module/kvm/parameters/ignore_msrs`. Required by Somlo and OSX-KVM. | **no** — resets on reboot | `echo 0 \| sudo tee /sys/module/kvm/parameters/ignore_msrs` |
 | 2026-09-17 | Installed `shellcheck` (by the user) so the test suite can lint shell scripts | yes | `sudo apt remove shellcheck` |
 
 ## 4. Generalization ledger

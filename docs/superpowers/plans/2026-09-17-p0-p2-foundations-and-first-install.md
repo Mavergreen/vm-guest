@@ -8,7 +8,7 @@
 
 **Tech Stack:** bash, bats-core 1.10, shellcheck 0.9, QEMU 8.2.2 + KVM, qemu-img, Python 3 `plistlib`, OVMF (Debian `ovmf` 2024.02), OpenCore (reference images in P1; built from source in P3).
 
-**Already verified:** the library code in Tasks 2, 5, and 7 was linted clean and run against its own test cases before this plan was written — profile expansion (whitespace, comments, mid-line hashes, `@include`, cycle detection, `%REPO%`) and the full golden promote/clone/verify round-trip against real `qemu-img`. It should work as written. If it does not, that is a bug worth understanding rather than papering over.
+**Partly pre-verified, and treat that with suspicion.** The library code in Tasks 2, 5 and 7 was linted and run against its own cases before this plan was written. That did not stop real bugs reaching the commits: `sha256_file` swallowed read failures, a bare `@include` silently became a literal argument, and the `%IMAGES%` token — added to the plan *after* that verification — put an unconditional `:?` guard on a path that runs for every line. Pre-verification narrows the search; it does not license skipping it.
 
 **Read first:** `docs/superpowers/specs/2026-09-17-mavericks-guest-design.md`, `docs/prior-art.md`, `docs/host-profile.md`.
 
@@ -885,7 +885,7 @@ Make it executable: `chmod +x bin/preconditions.sh`
 
 Run: `bats tests/preconditions.bats`
 
-Expected: 11 tests, all passing.
+Expected: 19 tests, all passing.
 
 - [ ] **Step 5: Run it against the real host**
 
@@ -1059,15 +1059,24 @@ Create `lib/profile.sh`:
 # The point of the format is that an experiment is a diff. Changing one
 # variable at a time is only verifiable if the change is a file change.
 #
-# Requires lib/common.sh. Callers set PROFILE_DIR and MQG_REPO_ROOT.
+# Requires lib/common.sh. Callers set PROFILE_DIR, MQG_REPO_ROOT and
+# MQG_IMAGE_DIR.
 
 profile_path() {
     printf '%s/%s.args\n' "${PROFILE_DIR:?PROFILE_DIR is unset}" "$1"
 }
 
 # profile_expand <name> [include-chain]
+#
+# include-chain is the colon-delimited list of ancestor profile names
+# currently being expanded -- i.e. the path from the top-level call down to
+# (but not including) this call. It is deliberately not a "seen" set: a
+# diamond (d includes b and c, both of which include a) must expand a's
+# contents twice without being mistaken for a cycle, since this is textual
+# inclusion, not idempotent import. Only an ancestor of the current call is
+# a cycle.
 profile_expand() {
-    local name=$1 chain=${2:-} path line
+    local name=$1 chain=${2:-} path line included
 
     case ":$chain:" in
         *":$name:"*) die "profile include cycle: $chain -> $name" ;;
@@ -1083,11 +1092,22 @@ profile_expand() {
         case $line in
             '#'*)
                 continue ;;
+            '@include')
+                die "@include with no profile name in $path" ;;
             '@include '*)
-                profile_expand "${line#@include }" "$chain:$name" ;;
+                included="${line#@include }"
+                included="${included#"${included%%[![:space:]]*}"}"
+                [ -n "$included" ] \
+                    || die "@include with no profile name in $path"
+                profile_expand "$included" "$chain:$name" ;;
             *)
-                line="${line//'%REPO%'/${MQG_REPO_ROOT:?MQG_REPO_ROOT is unset}}"
-                printf '%s\n' "${line//'%IMAGES%'/${MQG_IMAGE_DIR:?MQG_IMAGE_DIR is unset}}" ;;
+                case $line in *'%REPO%'*)
+                    line="${line//'%REPO%'/${MQG_REPO_ROOT:?MQG_REPO_ROOT is unset}}" ;;
+                esac
+                case $line in *'%IMAGES%'*)
+                    line="${line//'%IMAGES%'/${MQG_IMAGE_DIR:?MQG_IMAGE_DIR is unset}}" ;;
+                esac
+                printf '%s\n' "$line" ;;
         esac
     done < "$path"
 }
@@ -1095,18 +1115,25 @@ profile_expand() {
 # List every profile name.
 profile_list() {
     local p
-    for p in "${PROFILE_DIR:?}"/*.args; do
+    for p in "${PROFILE_DIR:?PROFILE_DIR is unset}"/*.args; do
         [ -e "$p" ] || continue
         basename "$p" .args
     done
 }
 ```
 
+Two details that were bugs before they were features. A bare `@include` with
+no profile name is an error rather than silently becoming a literal QEMU
+argument, because a mistyped include that produces a working-but-wrong
+command line is nasty to debug. And each token's `:?` guard fires only when
+that token actually appears in the line -- otherwise an unset `MQG_IMAGE_DIR`
+would break profiles that never mention images.
+
 - [ ] **Step 4: Run the tests and make sure they pass**
 
 Run: `bats tests/profile.bats`
 
-Expected: 11 tests, all passing.
+Expected: 19 tests, all passing.
 
 - [ ] **Step 5: Commit**
 
@@ -1568,7 +1595,7 @@ Make it executable: `chmod +x vm/golden.sh`
 
 Run: `bats tests/golden.bats`
 
-Expected: 11 tests, all passing.
+Expected: 19 tests, all passing.
 
 - [ ] **Step 5: Commit**
 

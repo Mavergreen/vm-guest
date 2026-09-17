@@ -77,3 +77,23 @@ Conclusion: this host is a GO. Everything passes except `ignore-msrs`, which
 warns rather than fails because setting it needs a `sudo` ask that hasn't
 happened yet -- not a blocker for further P0/P1 work, but must be done before
 first boot.
+
+## 2026-09-17 — P0 — ignore_msrs enabled
+
+The user applied `kvm.ignore_msrs=1` for this boot only:
+
+```
+echo 1 | sudo tee /sys/module/kvm/parameters/ignore_msrs
+```
+
+`./bin/preconditions.sh` now reports 18/18 PASS and GO, with no warnings.
+
+Deliberately **not** persistent. Prior art (Somlo, OSX-KVM) says macOS reads
+MSRs that KVM does not emulate and the guest fails early without this, but
+nobody has confirmed that on a T2-patched kernel. Making it survive reboots
+before we have seen it matter would be committing to a global KVM setting on
+faith. If P1 shows it is genuinely required, make it persistent then and
+record why here.
+
+**It resets on reboot.** If a previously-working guest suddenly fails early,
+check this first.
