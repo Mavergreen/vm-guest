@@ -60,7 +60,7 @@ Verified afterwards from the Disk Utility footer:
 
 - **Install started:** 2026-09-17T17:42:13Z
 - **Installer's own estimate:** "about 24 minutes remaining"
-- **Actual wall-clock:** _to be filled in_
+- **Actual wall-clock: 14 minutes** (17:42:13Z → ~17:56Z), against the installer's own 24-minute estimate. Useful for P6's job-time budget: the install is not the long pole a naive reading of the estimate suggests.
 
 ## First boot and Setup Assistant
 
@@ -81,16 +81,34 @@ Assistant actually asks *is* the specification for it.
 
 | # | Screen | Action | Notes |
 |---|---|---|---|
+| 14 | Reboot | automatic when the install finishes | |
+| 15 | OpenCore picker | **auto-picked the Mavericks volume** | Worth noting: no NVRAM persistence, yet it still chose the installed system over the attached installer ISO |
+| 16 | Setup Assistant | region, keyboard, no transfer, **skip Apple ID**, agree, create `mavsuser`, skip iCloud Keychain, decline diagnostics | |
+| 17 | Desktop | | `11-desktop.png` |
 
 ## Post-install state
 
-_To be filled in._
+Verified in the guest's own Terminal rather than assumed — `12-terminal.png`.
 
-- Account name / uid:
-- Hostname:
-- Network: DHCP? DNS resolving?
-- Clock correct?
-- `sw_vers` output:
+```
+ProductName:    Mac OS X
+ProductVersion: 10.9.5
+BuildVersion:   13F34
+```
+
+| | |
+|---|---|
+| Account | `mavsuser`, uid 501, gid 20 (staff) |
+| Admin? | yes — in group 80 (admin) |
+| Hostname | `Maverickss-iMac.local` — Setup Assistant derived it from the full name; P4 should set this deliberately |
+| Boot volume | `/dev/disk0s2`, 59 GiB, **8.8 GiB used**, 50 GiB free |
+| `hw.model` | **`iMac14,2`** — our OpenCore SMBIOS override is in effect in the installed system, not only in the installer |
+| `hw.ncpu` | 2 |
+| `hw.memsize` | 4294967296 (4 GiB) |
+
+The account is already a member of `com.apple.access_ssh` and
+`com.apple.access_screensharing`, which is ordinary for an admin user and does
+**not** mean either service is enabled. Remote Login is still off.
 
 ## Capability census
 
