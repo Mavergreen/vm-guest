@@ -53,6 +53,7 @@ survives reboot, and how to revert.
 | Date | Change | Persistent? | Revert |
 |---|---|---|---|
 | — | `kvm.ignore_msrs=1` — **not yet applied**; required by Somlo and OSX-KVM | | |
+| 2026-09-17 | Installed `shellcheck` (by the user) so the test suite can lint shell scripts | yes | `sudo apt remove shellcheck` |
 
 ## 4. Generalization ledger
 
