@@ -1537,3 +1537,51 @@ nothing.
 Recorded in the umbrella design's phase table alongside what P3 did
 deliver, rather than only here, because it is a dependency and not a
 footnote.
+
+## 2026-09-17 — P4 — the keypress requirement is fixed
+
+**`./vm/run.sh p3-full` now boots 10.9.5 to the Finder desktop with no
+keypress at all.** Verified: 99.78% of pixels lit, `graphical`, Finder menu
+bar present.
+
+This was P3's one outstanding defect and a hard blocker for both remaining
+phases — P4's unattended pipeline and P6's CI each need a boot no human
+touches.
+
+### The fix
+
+`Misc > Security > ScanPolicy` was `0`, which means *scan everything*. So the
+picker listed the OpenCore image itself as a bootable entry, made it the
+default, timed out into it, re-entered `BOOTx64.efi` and hung.
+
+```
+ScanPolicy = 0x10203
+```
+
+That is `OC_SCAN_FILE_SYSTEM_LOCK` (0x1) + `OC_SCAN_DEVICE_LOCK` (0x2) +
+`OC_SCAN_ALLOW_FS_HFS` (0x200) + `OC_SCAN_ALLOW_DEVICE_SATA` (0x10000):
+**HFS+ volumes on SATA devices only.**
+
+That is exactly the macOS disk and nothing else. The OpenCore image is FAT on
+`usb-storage`, so it is excluded twice over — wrong filesystem and wrong bus.
+The picker now has one entry, and the timeout boots it.
+
+This is a better fix than hiding the entry or remembering a choice, because it
+is *declarative about what we intend to boot* rather than patching over a
+symptom. It also means an unexpected bootable volume appearing cannot silently
+become the default.
+
+### Two process notes
+
+**First try was `0x10202` and OpenCore rejected it** — `OC: Invalid
+ScanPolicy 10202`, halting on critical error. Setting a filesystem bit
+requires the filesystem lock bit as well. **`ocvalidate` catches this in one
+millisecond**, and it was already built and sitting in the build tree. Running
+it before booting would have saved a 75-second cycle. It is now part of the
+loop.
+
+**Also: `HideAuxiliary = true` was tried earlier and recorded as "did not
+work".** That conclusion is worthless — it was measured with the colour-count
+heuristic that mistook a rendered picker for a blank screen. It may well have
+worked. Noted so that nobody treats that as a tested dead end; `ScanPolicy` is
+the better fix regardless, so it was not re-run.

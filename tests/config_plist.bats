@@ -50,12 +50,33 @@ print(d['Misc']['Security']['SecureBootModel'])" "$PLIST"
     [ "$output" = "Disabled" ]
 }
 
-@test "ScanPolicy is 0, so the picker scans everything" {
+@test "ScanPolicy admits only HFS+ on SATA, so the picker has exactly one entry" {
     run python3 -c "
 import plistlib,sys
 d=plistlib.load(open(sys.argv[1],'rb'))
 print(d['Misc']['Security']['ScanPolicy'])" "$PLIST"
-    [ "$output" = "0" ]
+    policy="$output"
+
+    # Not 0. ScanPolicy 0 means scan everything, which made OpenCore list its
+    # own image as a boot entry, default to it, time out into it and hang --
+    # the bug that made the guest need a keypress to boot.
+    [ "$policy" -ne 0 ]
+
+    # OC_SCAN_FILE_SYSTEM_LOCK 0x1 and OC_SCAN_DEVICE_LOCK 0x2: without the
+    # lock bits the allow bits mean nothing, and OpenCore rejects an allow
+    # bit whose lock is missing ("Invalid ScanPolicy").
+    [ $(( policy & 0x1 )) -ne 0 ]
+    [ $(( policy & 0x2 )) -ne 0 ]
+
+    # OC_SCAN_ALLOW_FS_HFS 0x200 -- the macOS volume.
+    [ $(( policy & 0x200 )) -ne 0 ]
+
+    # OC_SCAN_ALLOW_DEVICE_SATA 0x10000 -- q35's ide-hd presents as SATA.
+    [ $(( policy & 0x10000 )) -ne 0 ]
+
+    # And NOT usb: the OpenCore image lives on usb-storage, and admitting it
+    # is what caused the hang.
+    [ $(( policy & 0x80000 )) -eq 0 ]
 }
 
 @test "every enabled kext in Kernel>Add is one we have pinned" {
