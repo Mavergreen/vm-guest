@@ -148,3 +148,80 @@ teardown() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"no such image"* ]]
 }
+
+@test "hfs_mount is idempotent: an already-mounted device is a success" {
+    # This host is a live desktop session: gvfs/udisks automounting races
+    # every loop-setup, and whoever loses gets "already mounted". Winning
+    # the race is not something we can arrange; being correct either way
+    # is. See the P4 entry in NOTES.md.
+    hfs_create "$IMG" 32 MQGTEST
+    LOOPDEV=$(hfs_attach "$IMG")
+    MNT=$(hfs_mount "$LOOPDEV")
+    run hfs_mount "$LOOPDEV"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$MNT" ]
+    hfs_unmount "$LOOPDEV"; hfs_detach "$LOOPDEV"; LOOPDEV=""
+}
+
+@test "hfs_create_gpt makes a GPT image with one AF00 HFS+ partition" {
+    hfs_create_gpt "$IMG" 32 "OS X Base System"
+    run sgdisk -p "$IMG"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"AF00"* ]]
+    [[ "$output" == *"OS X Base System"* ]]
+    # No leftover intermediate beside the image.
+    run bash -c "ls '$BATS_TEST_TMPDIR' | grep -c hfs-tmp || true"
+    [ "$output" = "0" ]
+}
+
+@test "hfs_create_gpt refuses to clobber an existing image" {
+    hfs_create_gpt "$IMG" 32 MQGTEST
+    run hfs_create_gpt "$IMG" 32 MQGTEST
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"exists"* ]]
+}
+
+@test "hfs_with_mounted_part mounts the partition inside a GPT image" {
+    # The whole-disk device is not mountable; partition 1 is. This is how
+    # media/build-installer-img.sh writes into its target.
+    hfs_create_gpt "$IMG" 32 "OS X Base System"
+    body_writes() { printf 'in a partition\n' > "$1/written.txt"; }
+    hfs_with_mounted_part "$IMG" 1 body_writes
+    body_reads() { cat "$1/written.txt"; }
+    run hfs_with_mounted_part "$IMG" auto body_reads
+    [ "$status" -eq 0 ]
+    [ "$output" = "in a partition" ]
+    run bash -c "losetup -a 2>/dev/null | grep -c -- '$IMG' || true"
+    [ "$output" = "0" ]
+}
+
+@test "hfs_with_mounted_part cleans up when the body fails" {
+    hfs_create_gpt "$IMG" 32 MQGTEST
+    body_that_fails() { return 4; }
+    run hfs_with_mounted_part "$IMG" 1 body_that_fails
+    [ "$status" -ne 0 ]
+    run bash -c "losetup -a 2>/dev/null | grep -c -- '$IMG' || true"
+    [ "$output" = "0" ]
+}
+
+@test "hfs_with_mounted_part fails clearly for a partition that is not there" {
+    hfs_create_gpt "$IMG" 32 MQGTEST
+    body_never_runs() { printf 'should not happen\n' > "$1/nope.txt"; }
+    run hfs_with_mounted_part "$IMG" 7 body_never_runs
+    [ "$status" -ne 0 ]
+    run bash -c "losetup -a 2>/dev/null | grep -c -- '$IMG' || true"
+    [ "$output" = "0" ]
+}
+
+@test "hfs_with_mounted cleans up when the body exits rather than returns" {
+    # `die` calls exit. A body that hits one must not take the cleanup down
+    # with it: that is how the first real media build left three loop
+    # devices and three mounts behind.
+    hfs_create "$IMG" 32 MQGTEST
+    body_that_dies() { die "nope"; }
+    run hfs_with_mounted "$IMG" body_that_dies
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nope"* ]]
+    run bash -c "losetup -a 2>/dev/null | grep -c -- '$IMG' || true"
+    [ "$output" = "0" ]
+}

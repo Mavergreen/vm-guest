@@ -77,3 +77,46 @@ setup() {
     [[ "$output" == *"checksum mismatch"* ]]
     [ ! -f "$dir/media/InstallESD.dmg" ]
 }
+
+@test "build-installer-img.sh reports the layout it will create" {
+    run "$REPO/media/build-installer-img.sh" --describe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OS X Base System"* ]]
+    [[ "$output" == *"AF00"* ]]
+}
+
+@test "build-installer-img.sh --describe touches nothing" {
+    dir="$BATS_TEST_TMPDIR/img"
+    mkdir -p "$dir"
+    run env MQG_IMAGE_DIR="$dir" "$REPO/media/build-installer-img.sh" --describe
+    [ "$status" -eq 0 ]
+    # Not even the media directory: describing is a read of our own
+    # intentions, not the first step of a build.
+    [ ! -e "$dir/media" ]
+}
+
+@test "build-installer-img.sh sizes its partition from the reference" {
+    # The Mac-produced reference's HFS+ partition is 6,550,020,096 bytes,
+    # which is what get.sh's hdiutil resize asks for. Guessing a size here
+    # would be guessing at whether the packages fit.
+    run "$REPO/media/build-installer-img.sh" --describe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"6550020096"* ]]
+}
+
+@test "build-installer-img.sh fails clearly without InstallESD.dmg" {
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/empty" \
+        "$REPO/media/build-installer-img.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"InstallESD"* ]]
+}
+
+@test "build-installer-img.sh refuses to clobber an existing image" {
+    mkdir -p "$BATS_TEST_TMPDIR/img/media"
+    : > "$BATS_TEST_TMPDIR/img/media/InstallESD.dmg"
+    : > "$BATS_TEST_TMPDIR/img/media/installer-linux.img"
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/img" \
+        "$REPO/media/build-installer-img.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"exists"* ]]
+}

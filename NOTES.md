@@ -1733,3 +1733,111 @@ $ time ./media/fetch-installesd.sh
 No retries, no surprises. The `.part` is removed and restarted rather than
 resumed with `curl -C -`: resuming into bytes nobody has ever verified turns
 a bad network and a bad resume into the same 5 GB-later checksum failure.
+
+## 2026-09-17 — P4 — installer media built on Linux, and what it cost
+
+Task 3. `media/build-installer-img.sh` assembles bootable Mavericks
+installer media from Apple's `InstallESD.dmg` with no Mac, no root and
+nothing installed: `dmg2img` the ESD, mount it, `dmg2img` the
+`BaseSystem.dmg` inside it, mount that too, create a GPT image with one
+AF00 partition, `rsync` BaseSystem onto it, then replace the dangling
+`System/Installation/Packages` symlink with the ESD's real `Packages`
+directory plus `BaseSystem.dmg` and `BaseSystem.chunklist`.
+
+### The build
+
+```
+$ time ./media/build-installer-img.sh
+```
+
+| | |
+|---|---|
+| Wall clock | **50 s** |
+| ESD raw image | 5,465,933,824 bytes (transient) |
+| BaseSystem raw image | 1,281,120,256 bytes (transient) |
+| Output | `installer-linux.img`, 6,686,769,152 bytes |
+| SHA-256 | `bdb26dca5e2316b41d2ce4666ceb0748afe8a6bd1a83eb3a9cb9e0686fd578eb` |
+| Volume contents | 52,285 entries, 6,414,899,267 bytes — the reference's total to the byte |
+| Free space left | 117,112,832 bytes |
+| Loop devices before/after | 0 / 0 |
+
+Verification is its own entry below. Three things had to be learned the
+hard way first.
+
+### 1. The reference's partition size does not fit a Linux-built copy
+
+`get.sh`'s `hdiutil resize` asks for 6,550,020,096 bytes, and sizing the
+partition at exactly that (rounded up to whole MiB, since HFS+ must fill
+its partition exactly) ran out of space **17 MB into `BaseSystem.dmg`**,
+with everything else already copied.
+
+The same files cost about 153 MB of metadata and per-file slack here
+against about 105 MB on the Mac — same content, bigger catalog — and
+hdiutil had packed the reference down to 30 MB of free space. So the size
+is now the reference rounded up **plus a 128 MiB margin**, which is
+documented in the script as what it is: a measured allowance, not a guess.
+The reference is still where the number comes from.
+
+### 2. `/.file` cannot be read without root, and does not need to be
+
+BaseSystem has one file at mode `0000` — `/.file`, the marker OS X looks
+for to decide a volume has a filesystem. Root can read it; we cannot, and
+rsync fails the *whole* transfer over it (exit 23). It is empty, so there
+is nothing in it to read: the build excludes it from the copy and
+recreates it with its mode and mtime. Any *non-empty* unreadable file
+would be a different matter, so the script checks the size and refuses
+rather than papering over it.
+
+### 3. Two leaks that only a real 6 GB build exposes
+
+- **A `die` inside a `hfs_with_mounted` body skipped every cleanup.** `die`
+  calls `exit`; the first failed build left three loop devices and three
+  mounts behind. The body now runs in a subshell, so an `exit` unwinds to
+  the cleanup instead of past it. Tested.
+- **`udisksctl loop-delete` is a silent no-op while any partition of the
+  device is mounted** — and on a desktop session that partition may have
+  been mounted by gvfs, not by us. `hfs_detach` now unmounts everything on
+  the device first, ours or not.
+
+### The desktop automounter races every `loop-setup`
+
+Same session, same cause: udisks/gvfs see each new loop device and try to
+mount it at the same moment we do. Whoever loses gets "already mounted",
+and the user gets a modal dialog on their desktop — which an automated
+pipeline has no business producing. `hfs_mount` is now idempotent: it asks
+`findmnt` first, and treats an already-mounted device as the outcome it
+wanted, whoever produced it. Winning the race is not something we can
+arrange; being right either way is. (The systemic fix would be a udev rule
+setting `UDISKS_IGNORE=1` on our loop devices. That is host configuration,
+which this project does not do to people's machines.)
+
+### Ownership: the answer is the one the plan feared
+
+Verbatim, from the built image mounted through udisks:
+
+```
+/dev/loop0p1 /media/schmonz/OS X Base System hfsplus \
+  rw,nosuid,nodev,relatime,umask=22,uid=1000,gid=1000,nls=utf8
+```
+
+`uid=1000,gid=1000`. Everything written is owned by whoever ran the build.
+The reference's `root:wheel` is not reproducible unprivileged, whatever
+flags rsync is given, so the build does not ask for it — `-rlptDH`, not
+`-a`.
+
+**But the mode bits do survive**, which is the half that looked most
+likely to break:
+
+```
+-rwsr-xr-x 1 1000 1000 46784 Aug 24  2013 .../bin/ps
+-r-sr-xr-x 1 1000 1000 31632 Aug 12  2014 .../usr/bin/login
+```
+
+setuid intact, on disk, written unprivileged. Ten of the reference's
+eleven setuid/setgid/sticky entries are present and identical; the missing
+one is `.Trashes`, which OS X made and we have no reason to.
+
+Whether the installer cares about the ownership is **not settled here**.
+It runs as root and may well rebuild what it needs. That is a question for
+the first boot, and the point of not working around it now is that the
+answer will mean something.
