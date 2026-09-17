@@ -18,7 +18,8 @@ of working through a list rather than rediscovering what was baked in.
 | Virtualization | VT-x present; `vmx` in flags; `ept`, `vpid`, `ept_ad` |
 | Notable ISA | `avx`, `avx2`, `aes`, `rdrand`, `rdseed`, `bmi1`, `bmi2`, `mpx`, `intel_pt`, `xsaves`. **No AVX-512** — relevant to P6's CPU-gating test |
 | RAM | 62 GiB total, ~55 GiB available |
-| Storage | `/dev/nvme0n1p2` on `/home`, 1.9 TB, 1.7 TB free |
+| Storage (local) | `/dev/nvme0n1p2`, **btrfs**, on `/` and `/home`: 1.9 TB, 1.7 TB free |
+| Storage (repo) | **NFSv3** `ap-juicer:/export/code/trees` on `~/Documents/trees`, 4.2 TB, 3.9 TB free, `vers=3,proto=tcp,hard,rsize=wsize=1M` |
 | GPU | Intel UHD 630 (CoffeeLake-H GT2) `[8086:3e9b]` at `00:02.0` — **the only display device** |
 | T2 | Apple T2 Bridge Controller `[106b:1801]` and Secure Enclave `[106b:1802]` at `02:00.1`/`02:00.2` |
 | OS | Linux Mint 22.3 "Zena" (Ubuntu/Debian derived) |
@@ -36,6 +37,8 @@ Two consequences worth stating plainly:
   Apple-branded hardware. This is the sanctioned case, not a gray area.
 - **GPU passthrough is not available.** One iGPU, no PCIe slots. See
   `decisions/0001-no-gpu-passthrough.md`.
+- **The repository lives on NFS; disk images must not.** See
+  `decisions/0003-vm-images-on-local-btrfs.md`.
 
 ## 2. Other available hardware
 
@@ -69,3 +72,6 @@ Every assumption specific to this host. Populate as phases proceed.
 | G6 | QEMU 8.2.2 from Ubuntu | P1–P5 | Behavior may differ across QEMU versions; the GHA phase pins its own. |
 | G7 | `t2`-patched kernel | all | Unusual. Any KVM or IOMMU oddity seen here may not reproduce elsewhere — and may be *caused* here. |
 | G8 | 62 GB RAM and 1.7 TB free — no pressure on image sizes locally | P2–P5 | P6 deliberately works to a 7 GB / 14 GB budget instead. |
+| G9 | The repo is on NFS, so `MQG_IMAGE_DIR` points images at local btrfs instead | P2–P5 | Any host needs images on local storage; the split is the portable part, the path is not. |
+| G10 | Local filesystem is btrfs, so `cp --reflink=auto` makes golden promotion near-instant and near-free | P2–P5 | On ext4/xfs without reflink support, promotion is a full copy — slower and costly in space. Budget for it. |
+| G11 | btrfs needs `chattr +C` on the image directory to avoid COW fragmentation of qcow2 files | P2–P5 | Not needed on ext4/xfs; harmless to skip elsewhere. |
