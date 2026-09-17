@@ -322,3 +322,35 @@ NIC, and `info usb` shows keyboard and mouse at 480 Mb/s with no spurious hub.
 given us.** UTM supplies its own USB controller implicitly, so the bundle's
 `config.plist` never mentions one at all — the setting was invisible precisely
 because something else was making the choice.
+
+## 2026-09-17 — pulling the tablet driver forward, and a dead upstream
+
+P1 established that `usb-tablet` does nothing on 10.9, so the guest needs a
+relative mouse and a pointer grab. The user's call: integrate
+`pmj/QemuUSBTablet-OSX` sooner rather than leaving it in the deferred
+integration phase, because a better pointer improves the feedback loop for
+every phase after it. That is a good trade — the cost is paid once and the
+benefit compounds.
+
+Investigated feasibility. The good news is better than expected: it is LGPL,
+covers 10.8–10.11, and **the author's binaries are code-signed**, so 10.9
+accepts them without the unsigned-kext question this project had flagged as
+unverified.
+
+**But both upstreams are down.** <http://philjordan.eu/osx-virt/> refuses
+connections on HTTP and HTTPS (DNS resolves fine, to 144.76.63.178), and the
+Internet Archive returned "Internet Archive services are temporarily offline"
+at the same moment, so the archived copy could not be checked either.
+
+Per the design's stop-and-ask rule, reporting rather than improvising. Options,
+in order of cost:
+
+1. **Retry the Archive later.** It says *temporarily* offline. Cheapest path.
+2. **Build from source.** Needs Xcode 6.4 and the 10.9 SDK exactly; the README
+   warns a 10.10-SDK build will not load on 10.9. The user has suitable Macs,
+   but this means obtaining an old Xcode from Apple's developer downloads.
+3. Look for the kext redistributed inside another VM project.
+
+Not blocking. P2 finishes without it, and a kext would be installed on a
+**clone** in any case — golden #1 stays pristine as the measurement baseline,
+and a tablet-equipped image becomes golden #2.

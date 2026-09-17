@@ -174,6 +174,22 @@ The basis for P4's payload.
 
 - **pmj/QemuUSBTablet-OSX** — <https://github.com/pmj/QemuUSBTablet-OSX>. A
   driver letting OS X guests use QEMU's `usb-tablet` absolute pointing device.
+  **Confirmed necessary, 2026-09-17**: P1 wired a `usb-tablet` and the guest
+  drew a cursor that never moved. Without this kext, 10.9 needs a relative
+  `usb-mouse` and therefore a pointer grab.
+  - Covers 10.8 through 10.11+, with separate kexts per era. **LGPL**, with
+    commercial licensing from the author.
+  - The author's binaries are **code-signed**, so 10.9 accepts them without
+    the unsigned-kext question this project has otherwise left unverified.
+  - Building from source needs **Xcode 6.4 and the 10.9 SDK exactly**. The
+    README warns that a binary built against the 10.10 SDK will not load on
+    10.9.
+  - **Distribution is a problem.** There are no GitHub releases; the README
+    points at <http://philjordan.eu/osx-virt/>, which on 2026-09-17 refused
+    connections on both HTTP and HTTPS (DNS resolves to 144.76.63.178). The
+    Internet Archive was simultaneously showing "temporarily offline", so the
+    archived copy could not be checked either. **Retry both before concluding
+    the binary is unobtainable.**
 - **pmj/virtio-net-osx** — its README says other virtio device types would
   attach to the same `VirtioPCIDriver`. A 2018 commit, "Part 1 of driver for
   standardised PCI Virtio devices," adds virtio capability detection and
