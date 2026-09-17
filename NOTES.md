@@ -1585,3 +1585,43 @@ work".** That conclusion is worthless — it was measured with the colour-count
 heuristic that mistook a rendered picker for a blank screen. It may well have
 worked. Noted so that nobody treats that as a tested dead end; `ScanPolicy` is
 the better fix regardless, so it was not re-run.
+
+## 2026-09-17 — P4 — the media pipeline does not need root
+
+Probed before planning P4, because the answer decides whether building
+installer media on Linux is a stop-and-ask or just work.
+
+**It is just work.** Every step runs unprivileged:
+
+| Step | Tool | Root? |
+|---|---|---|
+| Convert the dmg | `dmg2img` | no |
+| Create an HFS+ filesystem | `mkfs.hfsplus <file>` | **no** — it operates on a plain file, no loop device required |
+| Attach a loop device | `udisksctl loop-setup -f <file>` | **no** |
+| Mount HFS+ | `udisksctl mount -b /dev/loopN` | **no** — udisks2 auto-loads the `hfsplus` module |
+| Copy files | `rsync` | no |
+
+Verified end to end: a 64 MB HFS+ image created, looped and mounted at
+`/media/schmonz/P4TEST` with no password prompt, then unmounted and
+detached.
+
+The design assumed the `mkosxinstallusb` approach would need `sudo` for
+`losetup` and `mount`, and listed that as an ask. It does not. This removes
+the main obstacle to installer Approach A — the Linux-native media build —
+and therefore to the whole point of P4, which is producing media without a
+Mac in the loop.
+
+### Two caveats to carry into the plan
+
+**Ownership.** udisks2 mounts a filesystem owned by the invoking user. The
+`mkosxinstallusb` recipe uses `rsync -aAEHW`, whose `-a` implies `-o`
+(preserve owner), and preserving root-owned system files needs root. Whether
+the installer actually cares is unknown — it runs as root and may rebuild
+what it needs. **Test it rather than assume, and do not reach for sudo until
+a boot has actually failed without it.**
+
+**`udisksctl loop-delete` wants a polkit agent** and fails from a
+non-interactive shell with "Error opening current controlling terminal". The
+unmount succeeds and the loop device detaches with the backing file, so this
+is cosmetic here — but a pipeline that loops many images should clean up
+deliberately rather than relying on that.
