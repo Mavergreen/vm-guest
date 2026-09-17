@@ -19,6 +19,18 @@ setup() {
     [[ "$output" == *"no such file"* ]]
 }
 
+@test "sha256_file fails loudly on a file it cannot read" {
+    if [ "$(id -u)" -eq 0 ]; then
+        skip "root bypasses permission checks, so this file would still be readable"
+    fi
+    printf 'hello\n' > "$BATS_TEST_TMPDIR/unreadable"
+    chmod 000 "$BATS_TEST_TMPDIR/unreadable"
+    run sha256_file "$BATS_TEST_TMPDIR/unreadable"
+    chmod 600 "$BATS_TEST_TMPDIR/unreadable"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot read"* ]]
+}
+
 @test "verify_sha256 accepts a matching checksum" {
     printf 'hello\n' > "$BATS_TEST_TMPDIR/f"
     run verify_sha256 "$BATS_TEST_TMPDIR/f" \
@@ -60,4 +72,40 @@ setup() {
     run cat "$BATS_TEST_TMPDIR/run.log"
     [[ "$output" == *"did a thing"* ]]
     [ ! -e "$REPO/run.log" ]
+    # The run log is the project's evidence trail: a UTC timestamp (ending
+    # in Z, not local time), a literal TAB, then the message verbatim. A
+    # silent drift in either would quietly corrupt its parseability.
+    [[ "$output" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z ]]
+    [[ "$output" == *"$(printf '\t')did a thing" ]]
+}
+
+@test "repo_root resolves to the actual repository root" {
+    want=$(git -C "$REPO" rev-parse --show-toplevel)
+    got=$(repo_root)
+    [ "$got" = "$want" ]
+}
+
+@test "log writes to stderr, not stdout, with the mqg: prefix" {
+    out=$(log "hello there" 2>/dev/null)
+    err=$(log "hello there" 2>&1 1>/dev/null)
+    [ -z "$out" ]
+    [ "$err" = "mqg: hello there" ]
+}
+
+@test "warn writes to stderr, not stdout, with the mqg: warning: prefix" {
+    out=$(warn "heads up" 2>/dev/null)
+    err=$(warn "heads up" 2>&1 1>/dev/null)
+    [ -z "$out" ]
+    [ "$err" = "mqg: warning: heads up" ]
+}
+
+@test "MQG_LOG_PREFIX override is honored" {
+    run bash -c '
+        MQG_LOG_PREFIX="custom"
+        # shellcheck source=/dev/null
+        source "'"$REPO"'/lib/common.sh"
+        log "hi"
+    '
+    [ "$status" -eq 0 ]
+    [ "$output" = "custom: hi" ]
 }

@@ -30,7 +30,9 @@ require_cmd() {
 
 sha256_file() {
     [ -f "$1" ] || die "no such file: $1"
-    sha256sum "$1" | cut -d' ' -f1
+    local sum
+    sum=$(sha256sum "$1") || die "cannot read: $1"
+    printf '%s\n' "${sum%% *}"
 }
 
 # Verify a file against an expected checksum. Reports both values, because
@@ -38,6 +40,10 @@ sha256_file() {
 # partial download.
 verify_sha256() {
     local file=$1 want=$2 got
+    # sha256_file's own `die` only kills the command-substitution subshell
+    # below, not this function -- without the explicit `|| exit 1`, a
+    # missing/unreadable file would fall through to the mismatch check and
+    # print a misleading "checksum mismatch" instead of the real error.
     got=$(sha256_file "$file") || exit 1
     if [ "$got" != "$want" ]; then
         die "checksum mismatch for $file: want $want, got $got"
