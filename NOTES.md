@@ -1177,3 +1177,129 @@ that could not be reproduced afterwards, so this is a suspicion rather than
 a finding. It has deliberately **not** been reconstructed by hand: a
 machine-generated log that someone typed is worse than an absent one.
 `vm/run.sh` recreates it on the next run.
+
+## 2026-09-17 — P3 Task 9 addendum — a failed reproduction, and a correction
+
+The coordinator could not reproduce the `p3-full` boot above and pushed
+back. They were right to. Two things came out of it: **the committed tree
+does boot**, and **my explanation of the `Already started` log was wrong in
+the way they suspected.** Both are recorded here because the write-up above
+now reads as more confident than it earned.
+
+### What they saw, and what it actually was
+
+Their report: "black screen (1280x800, 2 colours) at 13s, 16s, 75s and 86s.
+Never a picker." Their VM was still running when I looked at it. Screenshot:
+
+```
+20260917-210040-coord-current-state.png -> 2 distinct colours; (1280, 800)
+                                           non-black pixels: 3603 (0.352%)
+```
+
+**That screen is the picker.** White text on black is exactly two colours,
+and the picker occupies 0.35% of the frame. A truly black screen has *one*
+colour. Counting colours in a screendump is a reasonable automation, but the
+threshold has to be 1 vs 2, not "2 means blank" — and at 1280x800 a
+five-line menu is easy to miss if you never look at the image.
+
+For comparison, the desktop shot from the same series is 185,798 colours.
+Anything that uses "distinct colours" as a boot-progress signal from now on
+should treat **2 colours as text on screen**, not as failure.
+
+### The committed tree boots. Reproduced from their exact state.
+
+Not my session's leftovers: their freshly rebuilt `opencore-p3.img`
+(`BOOTx64.efi` 28,672 = Bootstrap, `OpenCore.efi` 712,704 in `EFI/OC`,
+`config.plist` byte-identical to HEAD), a fresh clone, a pristine NVRAM from
+`make-nvram.sh --force`, and `./vm/run.sh p3-full` — the committed profile,
+no hand-assembled command line:
+
+```
+rm -f  $MQG_IMAGE_DIR/work/p3-full.qcow2
+./vm/clone.sh p2-manual-install p3-full
+./boot/make-nvram.sh --force p3-full
+./vm/run.sh p3-full &
+# and, from t=0, every 0.6s for 20 iterations:
+#   sendkey 2   over the profile's monitor socket
+```
+
+Kernel log at +12s, desktop at +2m30s. The **only** difference from their
+sequence is the keypress.
+
+### The keypress is the finding I under-reported
+
+`Misc > Boot > Timeout = 5` and, with an empty NVRAM, the picker's default
+is entry 1, **`EFI (external)` — the OpenCore disk itself**. Do nothing for
+five seconds and OpenCore boots that, which re-enters `BOOTx64.efi`, which
+fails, and the machine sits there. The picker text stays on screen, which is
+why the frame still looks like a picker long after the choice was made.
+
+So `p3-full` as committed **needs a human (or a script) to press `2` within
+five seconds of the picker appearing**, or it hangs. That is a real defect
+in the artifact, not a quirk of how I drove it, and the entry above should
+have said so in the first paragraph instead of in passing. It is a
+`config.plist` problem — the one variable this task deliberately did not
+touch — so it is written down rather than fixed here.
+
+### Correction: what `Already started` is, with evidence this time
+
+My claim above was that the two-line log is written by a *second* OpenCore
+instance. The coordinator's objection was precise: the timestamps are
+`00:000` and `00:036`, so Bootstrap fails immediately, which is not a picker
+timing out after five seconds.
+
+**The conclusion I drew was right; the reasoning I gave for it was wrong,
+and I had not checked it.** Here is the checked version.
+
+1. Both lines come from **one** Bootstrap invocation, not two instances of
+   anything. `OCM: Failed to start image` is `Library/OcMiscLib/ImageRunner.c:110`,
+   inside `OcLoadAndRunImage`; `BS: Failed to start OpenCore image` is
+   `Application/Bootstrap/Bootstrap.c:134`, immediately after that call
+   returns. Inner then outer, 36ms apart. The coordinator read this
+   correctly.
+
+2. **`00:000` does not mean "0 ms into the boot".** `OcLog.c`'s `GetTiming`
+   calibrates the TSC lazily on the *first log entry* and sets
+   `TscStart = TscLast = AsmReadTsc()` at that moment. The first line OpenCore
+   ever logs therefore always prints `00:000 00:000`, whenever in the boot it
+   happens. This is the piece that makes the timestamps look damning and is
+   not.
+
+3. **In a RELEASE build a clean OpenCore boot logs nothing at all.**
+   `OpenCorePkg.dsc` sets `PcdFixedDebugPrintErrorLevel|0x80000002` for
+   `TARGET == RELEASE`, i.e. `DEBUG_ERROR | DEBUG_WARN` — every
+   `DEBUG_INFO` call is compiled out of the binary. So a two-line log is not
+   "OpenCore died after two lines"; it is "these were the only two warnings
+   of the entire boot".
+
+4. Confirmed by experiment. Same image, same profile, ESP log deleted first:
+
+   | Run | Keypress | Screen | `opencore-*.txt` |
+   |---|---|---|---|
+   | success | `2` at t=0 | desktop | one file, **262,144 bytes of NULs — zero entries** |
+   | control | none | picker, then hang | one file, **exactly the two lines** |
+
+   A boot that demonstrably reaches the macOS desktop leaves an *empty* log.
+   That alone disproves "two lines means Bootstrap failed at the start of the
+   boot".
+
+5. One file, not two, because **Bootstrap never calls
+   `OcConfigureLogProtocol`** — its `UefiMain` only locates the filesystem
+   and runs OpenCore. The log file is named once per boot, by the first
+   OpenCore instance, ~3s after power-on (control run: VM started 21:05:28,
+   file `opencore-2026-09-17-210531.txt`). The second Bootstrap's two
+   warnings land in that already-installed protocol and are written to that
+   same file.
+
+So: OpenCore #1 starts normally and logs nothing; the picker times out into
+`EFI (external)`; that starts `BOOTx64.efi` again; Bootstrap #2's
+`OcLoadAndRunImage` gets `EFI_ALREADY_STARTED` for an `OpenCore.efi` that is
+already running; two warnings are appended to instance #1's log with a
+freshly started TSC clock. The recursion reading stands — but on this
+evidence, not on the filename arithmetic I used before, which was wrong.
+
+### What I should have done
+
+Read the ESP log of a **successful** boot before explaining the log of a
+failing one. I had the successful boots and never looked. The control run
+that settles this took ninety seconds.

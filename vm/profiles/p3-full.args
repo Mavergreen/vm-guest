@@ -18,6 +18,28 @@
 #                                 VARS, which is the file it will scribble
 #                                 EFI variables into
 #
+# YOU MUST PRESS A KEY. This profile does not boot unattended.
+#
+# config.plist sets Misc > Boot > Timeout = 5, and with an empty NVRAM the
+# picker's default is entry 1, "EFI (external)" -- the OpenCore disk itself.
+# Let the five seconds run out and OpenCore boots that, re-entering
+# EFI/BOOT/BOOTx64.efi, which fails with EFI_ALREADY_STARTED and hangs.
+# Press 2 (Mavericks) within five seconds of the picker appearing:
+#
+#   ./vm/run.sh p3-full &
+#   # then, over the monitor socket, repeatedly:  sendkey 2
+#
+# Two traps for anyone automating this. The picker text STAYS ON SCREEN
+# after the timeout has already fired and chosen for you, so a late
+# screenshot of a picker is not proof that the picker is still waiting --
+# look for the word "Timeout" at the end of the prompt line. And a
+# screendump of the picker has exactly TWO distinct colours (white text on
+# black, 0.35% non-black pixels), so a "how many colours" heuristic reads it
+# as a blank screen. A genuinely blank screen has one colour.
+#
+# This is a config.plist defect, not a firmware one. See the P3 Task 9
+# addendum in NOTES.md.
+#
 # ORIGINAL HEADER:
 # p3-oc -- ONE VARIABLE: our own OpenCore, built from pinned source.
 #
