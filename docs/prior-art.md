@@ -180,8 +180,28 @@ The basis for P4's payload.
   was caused by `qemu-xhci`, which 10.9 cannot drive at all. Verified by
   control experiment: a clone of golden #1 that never had the kext installed
   tracks the host pointer correctly.
-  The project still keeps this reference, because the kext may matter for
-  other controller/OS combinations — but nothing here depends on it.
+  **Why it existed, and why it no longer does.** The kext is a guest-side
+  workaround for a *QEMU* bug, and its own author fixed that bug upstream
+  five months after writing it. Phil Dennis-Jordan's QEMU commit
+  `0cd089e937f2`, 2017-01-25, "hw/usb/dev-hid: Improve guest compatibility of
+  usb-tablet":
+
+  > The boot protocol of 0x02 specifically confused OS X/macOS' HID driver
+  > stack, causing it to generate additional bogus HID events with relative
+  > motion in addition to the tablet's absolute coordinate events.
+  >
+  > Absolute pointing devices with HID Report Descriptor usage of 0x01
+  > (pointing) are treated by the macOS HID driver as analog sticks, and
+  > absolute coordinates are not directly translated to absolute mouse cursor
+  > positions. Changing it to 0x02 (mouse) fixes the problem […] (VMWare does
+  > the same thing.)
+
+  So `bInterfaceProtocol` went to 0x00 and the report-descriptor usage to
+  0x02. Any QEMU from 2.9 onward has this; ours is 8.2.2. The kext's build
+  artefacts are dated September 2016 — five months *before* the fix.
+
+  Kept here as history, not as a dependency. **Nothing in this project uses
+  it, and a future reader should not re-add it.**
   - Covers 10.8 through 10.11+, with separate kexts per era. **LGPL**, with
     commercial licensing from the author.
   - The author's binaries are **code-signed**, so 10.9 accepts them without

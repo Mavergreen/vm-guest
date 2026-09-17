@@ -246,6 +246,20 @@ installed and had no transfer disk attached. The pointer tracked correctly.
 This is what the clone machinery is for. Testing the claim cost one clone and
 two minutes, because throwing away a guest is free.
 
+### The deeper reason the prior art misled me
+
+The kext's README was accurate — for QEMU as it stood in 2016. Its author,
+Phil Dennis-Jordan, then fixed the underlying bug *in QEMU* in January 2017
+(commit `0cd089e937f2`): `usb-tablet` was advertising `bInterfaceProtocol`
+0x02, a boot-protocol mouse it is not, and a HID usage of 0x01 (pointer),
+which macOS treats as an analog stick rather than an absolute cursor.
+
+So the kext was a stopgap that its own author obsoleted nine years ago. The
+briefs inherited the 2016 description without noting the upstream fix, and I
+inherited it from them. Prior art has a date, and this project's is mostly
+2016–2021; "X does not work" from that era needs re-testing before it is
+treated as a constraint.
+
 ### What this leaves
 
 - `p1-reference` uses `usb-tablet`, giving absolute pointing with no grab.
