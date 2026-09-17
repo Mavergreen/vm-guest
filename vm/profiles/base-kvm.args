@@ -1,0 +1,15 @@
+# base-kvm -- the machine-level settings common to every KVM profile.
+#
+# Provenance: machine/memory/smp from the umbrella design's starting flags,
+# themselves from the original bring-up brief's step 3.
+#
+# SMP is not optional here: Somlo reports that 10.9's first boot after
+# install fails without it. Do not "simplify" this to -smp 1.
+
+-enable-kvm
+-machine
+q35
+-m
+4096
+-smp
+2
