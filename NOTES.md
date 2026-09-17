@@ -601,10 +601,20 @@ unshare -rn ./boot/build-opencore.sh
 
 `unshare -rn` gives an unprivileged network namespace with nothing but a
 down `lo` — verified separately that `curl https://example.com` fails inside
-it. Two runs: a **cold** one that unpacked and patched the EDK II tree from
-scratch (2m6s, 2m27s wall) and a **warm** re-run over the existing tree
-(20s). Both exited 0 and produced the same five checksums as the floating
-build:
+it. Three runs, all exit 0:
+
+- **cold EDK II tree** — unpacked and patched `UDK` from the tarballs
+  (2m6s build, 2m27s wall);
+- **warm** — re-run over the existing tree (20s), so re-runs do not need
+  the network either;
+- **everything cold** — `$MQG_BUILD_DIR/OpenCorePkg-1.0.7` and
+  `artifacts/` deleted first, then
+  `unshare -rn sh -c './boot/fetch-opencorepkg.sh && ./boot/build-opencore.sh'`
+  (2m26s wall). The fetch script downloads nothing when the pinned tarball
+  is already on disk; it verifies and unpacks. This is the run that also
+  proves the patch applies to a pristine `build_oc.tool`.
+
+All three produced the same five checksums as the floating build:
 
 ```
 7b3ce1defa81257d8994961fb838cda765e6a990d7bf9d6773aa94ef9ea63819  OpenCore.efi
