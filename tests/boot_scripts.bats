@@ -82,3 +82,19 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"1.0.7"* ]]
 }
+
+@test "build-opencore.sh fails clearly when the source tree is absent" {
+    run env MQG_BUILD_DIR="$BATS_TEST_TMPDIR/nonexistent" \
+        "$REPO/boot/build-opencore.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"source tree"* ]]
+}
+
+@test "build-opencore.sh lists the artifacts it intends to produce" {
+    run "$REPO/boot/build-opencore.sh" --list-artifacts
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OpenCore.efi"* ]]
+    [[ "$output" == *"BOOTx64.efi"* ]]
+    [[ "$output" == *"OpenHfsPlus.efi"* ]]
+    [[ "$output" == *"OpenRuntime.efi"* ]]
+}

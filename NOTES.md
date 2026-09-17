@@ -416,3 +416,138 @@ a clone would not be harmless.
   change are both in play, and only the second is known to matter.
 - **Sound** is absent because `intel-hda` was left out to reduce variables.
 - **One resolution only**, and VRAM is not the reason.
+
+## 2026-09-17 — P3 — building OpenCore 1.0.7 from source on Linux
+
+The plan called this the riskiest task in P3. It was not: `build_oc.tool`
+worked on this Linux host on the first attempt, with three environment
+variables set and no patching. `OpenHfsPlus.efi` built as part of the default
+target, so `docs/decisions/0002` stands.
+
+### What worked
+
+```
+cd $MQG_BUILD_DIR/OpenCorePkg-1.0.7
+ARCHS=X64 TOOLCHAINS=GCC TARGETS=RELEASE ./build_oc.tool
+```
+
+Wall clock **3m23s** from a cold tree on 12 cores, including cloning EDK II.
+A second run over the warm tree took **20s** and produced byte-identical
+artifacts, so the script is re-runnable and does not need a clean tree.
+
+Each of the three variables was chosen, not defaulted:
+
+| Variable | Default | Why ours |
+|---|---|---|
+| `ARCHS` | `(X64 IA32)` in `build_oc.tool` | The guest is 64-bit. IA32 doubles the build for nothing. |
+| `TOOLCHAINS` | `(CLANGPDB GCC)` on Linux, in `efibuild.sh` | Two full builds, and there is no `clang` on this host, so CLANGPDB would have failed outright. |
+| `TARGETS` | `(DEBUG RELEASE NOOPT)` | A DEBUG build logs on every boot and is slower. |
+
+The toolchain question the plan flagged answered itself by reading rather than
+guessing: `efibuild.sh` picks `('CLANGPDB' 'GCC')` on anything that is not
+Darwin or Windows. Not `GCC5` — that is upstream EDK II's name; acidanthera's
+`audk` fork calls it `GCC`. Guessing `GCC5` would have failed.
+
+### Toolchain worries that did not materialise
+
+Recorded because each one cost time to rule out and the next person should
+not have to:
+
+- **`distutils`.** Python here is 3.12, which dropped it. Current `audk`
+  BaseTools does not want it. Nothing failed.
+- **`mtoc`.** `efibuild.sh` only demands it on Darwin; on Linux it sets
+  `valid_mtoc=true` unconditionally and moves on.
+- **`make` is `/home/schmonz/bin/make`,** a `nbpkg make` shim, which looked
+  like it might be BSD make. It resolves to GNU Make 4.3. Harmless.
+- **Staging gating.** The plan expected `Staging/OpenHfsPlus` to need an
+  explicit target. It does not: 1.0.7's `OpenCorePkg.dsc` lists
+  `OpenCorePkg/Staging/OpenHfsPlus/OpenHfsPlus.inf` in `[Components]` at line
+  352, right beside `AudioDxe` and `EnableGop`. `Staging/` is a source-layout
+  convention in this repo, not a build-target gate. **`OpenHfsPlus.efi`
+  needed nothing special at all.**
+- **`docker`/`podman`.** Absent, and never reached — `build_oc.tool` does not
+  touch `docker-compose.yaml` unless you invoke it that way.
+
+### Artifacts
+
+`$MQG_BUILD_DIR/artifacts/`, with `SHA256SUMS` beside them:
+
+```
+7b3ce1defa81257d8994961fb838cda765e6a990d7bf9d6773aa94ef9ea63819  OpenCore.efi
+eb05c27990e7162011b2ef5229d3e2b8be23a8e0bfd79d77c1891cee175e0094  BOOTx64.efi
+d5bece452e5c2180b7f588b40b12c2fe64663548dbbe0de01038c3db45083a5d  OpenRuntime.efi
+e0ee5f238725685eff2f423558b933497c5475c257f747aa281e2d88018723ea  OpenPartitionDxe.efi
+93f491375fbd4c0541b55d64b8d4e2f01cafde4f66b7f520f943d3351a45040a  OpenHfsPlus.efi
+```
+
+All five are PE32+ x86-64: `OpenCore.efi` and `BOOTx64.efi` as EFI
+applications, `OpenHfsPlus`/`OpenPartitionDxe` as boot service drivers,
+`OpenRuntime` as a runtime driver. That is the right shape for each.
+
+**`BOOTx64.efi` does not exist in the build tree.** Nothing produces a file
+by that name; `Bootstrap.efi` is what becomes the fallback boot path. The
+plan's collection step searched for `BOOTx64.efi` by name and would have
+found nothing, so `boot/build-opencore.sh` carries an explicit
+`Bootstrap.efi:BOOTx64.efi` mapping instead of a filename search.
+
+Cross-checked against `build_oc.tool`'s own `package()` output — all five
+checksums match the corresponding files inside
+`OpenCore-1.0.7-RELEASE.zip` (`EFI/BOOT/BOOTx64.efi`, `EFI/OC/OpenCore.efi`,
+`EFI/OC/Drivers/*`), so the rename is the same one upstream performs and we
+are shipping exactly what an official Linux build would.
+
+### ocvalidate
+
+Built, but **not** copied into `artifacts/`: it is a host ELF binary, not
+firmware, and `artifacts/` is what gets written into the EFI image. It lands
+at:
+
+```
+$MQG_BUILD_DIR/OpenCorePkg-1.0.7/Utilities/ocvalidate/ocvalidate
+```
+
+It announces "only compatible with OpenCore version 1.0.7", which is exactly
+the property Task 4 wants — the config is checked against the schema of the
+build we shipped, not whatever `ocvalidate` is lying around. The script logs
+the path on every run.
+
+### Concern: the build is *not* fully pinned
+
+This matters for P3's exit gate, and it is a gap between what Tier 0 claims
+and what actually happens.
+
+`boot/fetch-opencorepkg.sh` pins the OpenCorePkg tarball by SHA-256. But
+`build_oc.tool`'s last act is:
+
+```
+src=$(curl -LfsS https://raw.githubusercontent.com/acidanthera/ocbuild/master/efibuild.sh) && eval "$src"
+```
+
+— an unpinned fetch of a 569-line script from `master`, `eval`ed. That script
+then clones **`https://github.com/acidanthera/audk` at `master`, `--depth=1`**
+as the EDK II base, and on re-runs `git pull --rebase`es it.
+
+So two of the three inputs float. What this particular build used:
+
+| Input | Pinned? | Value today |
+|---|---|---|
+| OpenCorePkg 1.0.7 tarball | yes, `vendor/sources.tsv` | see that file |
+| `ocbuild/efibuild.sh` | **no**, `master` | sha256 `4ae2461427bf68be18276483b58e7e295bf77b83782b80b817586a2c817cdb30` |
+| `acidanthera/audk` | **no**, `master` | `0672a009e9ca85753d240324d761341adf0291b3` (2026-08-12) |
+
+Plus 5 patches from OpenCorePkg's own `Patches/`, applied to `UDK` as commits
+on top of that.
+
+Those two values are recorded here so a future rebuild can be compared
+against this one. `efibuild.sh` does honour `OFFLINE_MODE=1`, which skips
+both the `audk` clone and the `git pull`, so pinning this properly later is a
+matter of vendoring `audk` at a chosen commit rather than of patching
+upstream. Not done here: it is a change to the provenance machinery, not to
+this task, and one variable per experiment.
+
+### What is not yet known
+
+- Whether these binaries actually boot 10.9.5. Nothing has been booted with
+  them — that is Task 5 onward, and the golden-#1 comparison is the test.
+- The `OpenHfsPlus` vs Apple `HfsPlus` boot-time cost that `0002` asks P3 to
+  measure. Still unmeasured; it needs a booting image first.
