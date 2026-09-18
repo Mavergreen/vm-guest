@@ -2090,3 +2090,52 @@ what a backend for another image-build host would do:
 | `linux-sudo` | `mount -o loop` as root. Simplest, but a standing privilege on every build host. |
 | `libguestfs` | Same VM trick, packaged — but Linux-only, so useless for a macOS or NetBSD build host. |
 | `netbsd-makefs` | METALOG + `makefs`. Right shape, no HFS+ writer. |
+
+## 2026-09-17 — P4 — Linux-built media reaches the installer GUI
+
+**Answered: Linux can build working Mavericks installer media.** No Mac in
+the loop anywhere — `InstallESD.dmg` fetched from Apple, assembled with
+`dmg2img`/`mkfs.hfsplus`/`rsync`, ownership repaired in a QEMU microVM, and
+booted under our own OpenCore and OVMF. The screen says *Install OS X* with a
+Continue button.
+
+Build: 53 s, 6,686,769,152 bytes.
+
+### The ownership fix needed a second half
+
+`chown -R 0:0` alone was wrong, and the spot-check caught it: **chown clears
+setuid and setgid bits.** The reference media has exactly six such files:
+
+```
+4755  /bin/ps
+4555  /bin/rcp
+6755  /System/Library/.../Install.framework/Versions/A/Resources/runner
+4555  /usr/bin/login
+4555  /usr/libexec/authopen
+4555  /usr/sbin/traceroute
+```
+
+`runner` is the installer's own privileged helper, so losing its `-rwsr-sr-x`
+would have broken the thing we are building. The payload now records special
+modes before the chown and restores them after: 6 before, 6 after.
+
+This also settles who strips what. `rsync` **did** preserve setuid — six were
+present before the chown — so the earlier verification was right, and the
+chown is what removed them.
+
+### A mistake worth recording
+
+I ran `chown -R` before writing the code that preserves what chown destroys.
+By the time the preservation logic existed, the setuid bits were already
+gone, so the list it built was empty and it "worked" while restoring
+nothing. Rebuilding from scratch was the only way back.
+
+**A destructive operation should not run before the code that makes it
+reversible.** The cost here was two rebuild cycles; against a golden image it
+would not have been recoverable.
+
+### Still to do for an unattended install
+
+The installer GUI now waits for a human. Task 5's LaunchDaemon injection is
+next, and the blocker that stopped it — launchd rejecting daemons on
+non-root-owned media — is exactly what this fix removes.

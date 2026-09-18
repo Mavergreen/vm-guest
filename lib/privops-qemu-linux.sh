@@ -43,7 +43,17 @@ $B mount -t devtmpfs none /dev
 for m in $($B cat /proc/cmdline | $B tr ' ' '\n' | $B sed -n 's/^mqg_modules=//p' | $B tr ',' ' '); do
     [ -f "/lib/modules/$m.ko" ] && $B insmod "/lib/modules/$m.ko" 2>/dev/null
 done
-if $B mount -t hfsplus /dev/vda /mnt 2>/dev/null; then
+# Try partitions before the whole disk. A bare filesystem image lives at
+# /dev/vda, but a GPT-partitioned disk -- which is what real installer
+# media is -- puts it on /dev/vda1. Trying only the whole disk fails with
+# a bare "mount failed" that says nothing about why.
+MQG_DEV=
+for d in /dev/vda1 /dev/vda2 /dev/vda; do
+    [ -b "$d" ] || continue
+    if $B mount -t hfsplus "$d" /mnt 2>/dev/null; then MQG_DEV=$d; break; fi
+done
+if [ -n "$MQG_DEV" ]; then
+    echo "MQG-PRIVOPS-MOUNTED $MQG_DEV"
     MQG_MNT=/mnt; export MQG_MNT B
     $B sh /payload.sh
     rc=$?

@@ -31,6 +31,10 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$MQG_REPO_ROOT/lib/common.sh"
 # shellcheck source=../lib/hfs.sh
 . "$MQG_REPO_ROOT/lib/hfs.sh"
+# shellcheck source=../lib/privops.sh
+. "$MQG_REPO_ROOT/lib/privops.sh"
+# shellcheck source=../lib/privops-qemu-linux.sh
+. "$MQG_REPO_ROOT/lib/privops-qemu-linux.sh"
 
 # The size the Mac-produced reference's HFS+ partition actually is, which
 # is the number get.sh's `hdiutil resize` asks for. Measured, not guessed:
@@ -219,6 +223,17 @@ populate_target() {
     df -h "$tgt" >&2
 }
 
+# Everything above ran unprivileged, so the media is owned by the building
+# user and launchd would reject it. Fix that in a QEMU microVM, where we are
+# genuinely root -- see lib/privops.sh for why that is the mechanism and
+# what a different build host would substitute.
+fix_media_ownership() {
+    local img=$1
+    log "restoring root ownership (privops backend: ${MQG_PRIVOPS_BACKEND:-qemu-linux})"
+    privops_run "$img" "$MQG_REPO_ROOT/media/privops/fix-ownership.sh"
+}
+
+
 with_basesystem() {
     BS_MNT=$1
     log "BaseSystem volume mounted at $BS_MNT"
@@ -250,7 +265,12 @@ log "ESD raw image: $(stat -c %s "$esd_img") bytes"
 hfs_with_mounted_part "$esd_img" auto with_esd
 
 sync
+fix_media_ownership "$out"
+
 log "checksumming $out"
+# Ownership must be fixed BEFORE the checksum is taken: the microVM mounts
+# the image, and mounting an HFS+ volume rewrites its header. Checksumming
+# first would record a value that the very next step invalidates.
 sum=$(sha256_file "$out")
 # Recorded with its expiry date attached. udisks mounts HFS+ read-write,
 # and the kernel updates the volume header's modify time and last-mounted

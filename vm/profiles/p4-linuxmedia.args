@@ -1,0 +1,150 @@
+# p4-linuxmedia -- boot the media we built on Linux, against a blank disk.
+#
+# The question this answers: can Linux build working Mavericks media? The
+# content matches the Mac-produced reference file-for-file, but content
+# matching is not the same as booting.
+#
+# ORIGINAL HEADER:
+# p3-full -- ONE VARIABLE from p3-oc: the firmware.
+#
+# With this, NOTHING in the boot path is Tier 2. OpenCore is built from
+# pinned source offline; so now is the firmware, out of the same pinned
+# EDK II tree (acidanthera/audk), by boot/build-ovmf.sh. This is the profile
+# P3 exists to produce, and `bin/tier-check.sh --strict` passes with it.
+#
+# This file previously named Debian's stock OVMF 2024.02. That firmware does
+# not work with OpenCore on this host -- OpenCore runs, renders nothing, and
+# never boots macOS, and it fails identically with khronokernel's reference
+# OpenCore 0.6.6, so it is not our build. See the P3 Task 8 entry in
+# NOTES.md for the full diagnosis, and Task 9 for this replacement.
+#
+# Two setup steps this profile depends on, in order:
+#
+#   ./boot/build-ovmf.sh          produces the CODE/VARS pair below
+#   ./boot/make-nvram.sh p3-full  gives this VM its own writable copy of
+#                                 VARS, which is the file it will scribble
+#                                 EFI variables into
+#
+# YOU MUST PRESS A KEY. This profile does not boot unattended.
+#
+# config.plist sets Misc > Boot > Timeout = 5, and with an empty NVRAM the
+# picker's default is entry 1, "EFI (external)" -- the OpenCore disk itself.
+# Let the five seconds run out and OpenCore boots that, re-entering
+# EFI/BOOT/BOOTx64.efi, which fails with EFI_ALREADY_STARTED and hangs.
+# Press 2 (Mavericks) within five seconds of the picker appearing:
+#
+#   ./vm/run.sh p3-full &
+#   # then, over the monitor socket, repeatedly:  sendkey 2
+#
+# Two traps for anyone automating this. The picker text STAYS ON SCREEN
+# after the timeout has already fired and chosen for you, so a late
+# screenshot of a picker is not proof that the picker is still waiting --
+# look for the word "Timeout" at the end of the prompt line. And a
+# screendump of the picker has exactly TWO distinct colours (white text on
+# black, 0.35% non-black pixels), so a "how many colours" heuristic reads it
+# as a blank screen. A genuinely blank screen has one colour.
+#
+# This is a config.plist defect, not a firmware one. See the P3 Task 9
+# addendum in NOTES.md.
+#
+# ORIGINAL HEADER:
+# p3-oc -- ONE VARIABLE: our own OpenCore, built from pinned source.
+#
+# Everything else is held constant against p2-clone: same reference
+# firmware via -bios, same chipset, same CPU, same disks. So a failure here
+# is our OpenCore build or our config.plist, and nothing else.
+#
+# The bootloader is no longer Tier 2 -- but the firmware still is, which is
+# why tier-check will keep flagging this profile until p3-full.
+#
+# This is the template every later experiment copies: include the baseline,
+# override exactly the lines that differ, change nothing else. The diff IS
+# the experiment.
+#
+# Here the only differences from p1-reference are the target disk (a clone
+# instead of the original) and a headless display with a monitor socket, so
+# boot can be timed and screenshotted from the host without a window.
+#
+# p1-reference still names the installer ISO and the original disk, so this
+# profile cannot simply @include it -- a profile is a flat list of arguments
+# and QEMU would see two -drive entries with id=target. Until the hardware
+# profile is split further, this one spells out its own drives.
+
+@include base-kvm
+
+-machine
+q35,vmport=off
+-cpu
+Penryn,+ssse3,+sse4.1,+sse4.2
+
+# Our own OVMF, 4MB split CODE/VARS as a pflash pair.
+#
+# P1 tried pflash once and got a permanently black screen -- but that was
+# with the REFERENCE firmware, which is a complete -bios image, not the CODE
+# half of a pair. Ours is genuinely split: 3,653,632 + 540,672 = 4,194,304,
+# and QEMU sizes each flash device from its file, so the two have to add up.
+# Do not "fix" this back to -bios. The combined OVMF.fd the same build
+# produces is there if a -bios experiment is ever wanted.
+#
+# This is also what restores EFI variable persistence, which -bios has
+# denied us since P1: the VARS half is writable and survives a power cycle.
+# It is NOT the build's template -- boot/make-nvram.sh copies that here, and
+# refuses to hand out the template itself.
+-drive
+if=pflash,format=raw,unit=0,readonly=on,file=%BUILD%/firmware/OVMF_CODE.fd
+-drive
+if=pflash,format=raw,unit=1,file=%IMAGES%/work/p3-full-VARS.fd
+
+-device
+ich9-usb-ehci1,id=usb,bus=pcie.0,addr=0x1d.7,multifunction=on
+-device
+ich9-usb-uhci1,masterbus=usb.0,firstport=0,bus=pcie.0,addr=0x1d.0,multifunction=on
+-device
+ich9-usb-uhci2,masterbus=usb.0,firstport=2,bus=pcie.0,addr=0x1d.1
+-device
+ich9-usb-uhci3,masterbus=usb.0,firstport=4,bus=pcie.0,addr=0x1d.2
+
+# usb-storage, exactly as p3-oc has it. The IDE workaround this profile
+# carried for stock OVMF -- which never enumerated the OpenCore image over
+# USB at all -- is gone: our OVMF finds it over USB, like the reference
+# firmware did. That was a firmware difference, and this is the firmware
+# that does not have it.
+-drive
+id=opencore,if=none,format=raw,file=%IMAGES%/work/opencore-p3.img
+-device
+usb-storage,bus=usb.0,drive=opencore
+
+-drive
+id=target,if=none,format=qcow2,file=%IMAGES%/work/p4-target.qcow2
+-device
+ide-hd,bus=ide.0,drive=target
+
+-netdev
+user,id=net0
+-device
+usb-net,bus=usb.0,netdev=net0
+
+-device
+usb-kbd,bus=usb.0
+-device
+usb-mouse,bus=usb.0
+
+-device
+VGA,vgamem_mb=64
+
+-display
+none
+-monitor
+unix:%IMAGES%/work/monitor.sock,server,nowait
+
+# The Linux-built installer media, as ide-hd rather than ide-cd.
+#
+# Our build is a GPT *disk* image; the Mac-produced reference is an APM CD
+# image, which is why P2 attached that one as ide-cd. Attaching a disk image
+# as a CD made OpenCore classify it as ATAPI, which the tight ScanPolicy
+# (HFS+ on SATA only) correctly excludes -- "OCB: System has no boot
+# entries". ide-hd is both the accurate device type and already permitted.
+-drive
+id=installer,if=none,format=raw,file=%IMAGES%/media/installer-linux.img
+-device
+ide-hd,bus=ide.1,drive=installer
