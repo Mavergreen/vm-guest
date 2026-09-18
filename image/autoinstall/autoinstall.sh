@@ -222,6 +222,48 @@ done
 
 say "/Volumes/$VOLNAME is mounted"
 "$DISKUTIL" list >> "$LOG" 2>&1
+
+# What the installer is about to read, as it sees it rather than as we
+# hoped. rc.cdrom mounts a union RAM disk over /System/Installation, so
+# "the file is on the media" and "the file is visible to the installer"
+# are two different claims.
+{
+    echo "--- /System/Installation/Packages/Extras/"
+    ls -l /System/Installation/Packages/Extras/ 2>&1
+    echo "--- minstallconfig.xml as the installer will read it"
+    cat /System/Installation/Packages/Extras/minstallconfig.xml 2>&1
+    echo "--- OSInstall.collection as the installer will read it"
+    cat /System/Installation/Packages/OSInstall.collection 2>&1
+    echo "--- OSInstall.mpkg"
+    ls -l /System/Installation/Packages/OSInstall.mpkg 2>&1
+    echo "--- /var/log at handoff"
+    ls -la /var/log 2>&1
+} >> "$LOG" 2>&1
+
+# Ship whatever the installer logs to the target volume while it runs.
+#
+# /var/log is a RAM disk here, so everything in it evaporates at reboot.
+# Without this, a failed automated install can only be read off the screen
+# -- and the screen is a modal dialog saying "check the Installer Log",
+# with no way to open it that does not involve a human and a mouse. That
+# cost an attempt.
+#
+# The copies land on the target volume, survive the reboot, and are read
+# from the host with `qemu-img convert -O raw` and `7z`. On the run that
+# worked, /var/log held no .log files at all -- rc.install pipes the
+# installer through `logger`, and 10.9's syslog puts that in ASL's binary
+# store rather than a text file. The `ls -la /var/log` above is there to
+# say where it did go, next time one fails.
+mkdir -p "/Volumes/$VOLNAME/.mqg-logs" 2>/dev/null
+(
+    while :; do
+        cp /var/log/*.log "/Volumes/$VOLNAME/.mqg-logs/" 2>/dev/null
+        cp "$LOG" "/Volumes/$VOLNAME/$VOLUME_LOG_NAME" 2>/dev/null
+        sync
+        sleep 5
+    done
+) &
+
 say "handing off to the OS X Installer, which rc.install runs in automated"
 say "mode from Extras/minstallconfig.xml and reboots when it finishes"
 mirror_log

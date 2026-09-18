@@ -11,13 +11,19 @@
   install rather than injecting it into a finished volume afterwards,
   which is what the plan's Task 6 assumes and is worse.
 
-  Upstream (timsutton/osx-vm-templates) lists OSInstall.mpkg twice, then
-  its veewee-config.pkg. The repetition looks vestigial and is not copied
-  here; if an install ever fails in a way that implicates it, that is the
-  first thing to try.
+  OSInstall.mpkg IS LISTED TWICE, AND THAT IS NOT A TYPO. Upstream
+  (timsutton/osx-vm-templates) does the same, and it reads like a
+  copy/paste slip, so the first version of this file listed it once. That
+  install failed with "There was a problem with the automated
+  installation" before writing one byte to the target volume; putting the
+  second entry back is what made it run. See the P4 Task 5 entry in
+  NOTES.md.
+
+  Additional packages go after these two.
 -->
 <plist version="1.0">
 <array>
+	<string>/System/Installation/Packages/OSInstall.mpkg</string>
 	<string>/System/Installation/Packages/OSInstall.mpkg</string>
 </array>
 </plist>

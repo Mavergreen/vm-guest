@@ -2139,3 +2139,186 @@ would not have been recoverable.
 The installer GUI now waits for a human. Task 5's LaunchDaemon injection is
 next, and the blocker that stopped it — launchd rejecting daemons on
 non-root-owned media — is exactly what this fix removes.
+
+## 2026-09-17 — P4 Task 5 — the unattended install is Apple's own, not ours
+
+**The Linux-built media now installs Mavericks with nobody watching.**
+`./vm/run.sh p4-linuxmedia` against a blank 60 GB disk: boot, partition,
+install, reboot, and the installed system comes up on its own. No keypress,
+no click, no mouse. **15 min 17 s** wall clock, 01:11:49Z to 01:27:06Z —
+boot to the installer environment, disk prepared by ~40 s, install running
+by 1 min 40 s, and Setup Assistant's "Welcome" screen on the other side of
+the reboot. The installed volume is 8,363,180,032 bytes.
+
+Where it stops is exactly where Task 6 begins: Setup Assistant. That screen
+is what `.AppleSetupDone` and the first-boot payload replace, and the
+click-log's Setup Assistant section is the specification for it.
+
+Worth noting for Task 7: OpenCore picked the newly installed volume over
+the still-attached installer media on the reboot, with no NVRAM entry to
+remember and no help from us.
+
+### The mechanism, and where it is written down
+
+Task 5 was planned as a LaunchDaemon injected into the installer
+environment. That would have worked and it was a reinvention: **Apple ships
+an automated-install path, and it is already on our media.** Three hooks,
+all read by `/private/etc/rc.install` inside the installer environment:
+
+| Hook | Where rc.install reads it |
+|---|---|
+| `/etc/rc.cdrom.local` | line 39: `if [ -x /etc/rc.cdrom.local ]; then` / line 40: run it |
+| `/System/Installation/Packages/Extras/minstallconfig.xml` | line 104: `MINSTALL_CONF=...`; when it exists, the OS X Installer runs with `-f ${MINSTALL_CONF}`, with `CatchExit=Minstaller`, which ends in `/sbin/reboot` |
+| `/System/Installation/Packages/OSInstall.collection` | lines 107–108: used **instead of** `OSInstall.mpkg`, and it can list more packages |
+
+**`rc.cdrom` does not source `rc.cdrom.local`. `rc.install` does.** That is
+why the hook looks absent: `rc.cdrom` is the file you find first, and it
+reaches `rc.install` only indirectly, via `launchctl load -D system` at its
+very end. Reading only `rc.cdrom` is how this got reinvented once already.
+
+So we write no installer invocation and no reboot: Apple's installer
+installs and Apple's `rc.install` reboots. `image/autoinstall/autoinstall.sh`
+prepares the disk and stops.
+
+The prior art is `timsutton/osx-vm-templates`, which `docs/prior-art.md`
+already cited — for its *first-boot payload*. Its `prepare_iso/prepare_iso.sh`
+automates the entire install, and the `minstallconfig.xml` schema comes from
+there (and from Greg Neagle's `createOSXInstallPkg` before that). It was not
+invented here.
+
+### OSInstall.collection must list OSInstall.mpkg TWICE
+
+Upstream lists it twice and it reads like a copy/paste slip, so our first
+version listed it once. The result:
+
+> There was a problem with the automated installation. Check your
+> install-automation file for errors, or open the Installer Log for
+> additional information.
+
+Not one byte was written to the target volume. Adding the second entry is
+the **only** change between that run and the one that installed OS X to
+completion. Upstream's apparent typo is load-bearing, and the reading that
+fits is that the installer consumes the first entry as the OS product being
+installed and installs the remainder, so a one-entry collection leaves it
+nothing to do.
+
+### Choosing the target disk, and the finding that made the size guard matter
+
+The selection rule is **"the only disk with no partitions at all"**, with a
+16 GiB floor as a secondary guard and a refusal if the count is not exactly
+one. Upstream hardcodes `disk0` with a fallback to `disk1`; our layout
+attaches three disks, one of which is the installer we are booted from.
+
+What the log showed, and what nobody would have predicted from the host:
+**`diskutil list` in the installer environment shows fifteen disks, not
+three.** `rc.cdrom` creates twelve RAM disks (`/Volumes`, `/var/tmp`,
+`/var/run`, `/System/Installation`, `/var/db`, `/var/folders`, …), each
+`newfs_hfs`'d directly onto the raw device, so **each one is an
+unpartitioned whole disk** exactly like a virgin target:
+
+```
+/dev/disk2
+   0:                            untitled               *5.2 MB     disk2
+```
+
+Twelve of them, 524 KB to 6.3 MB. Without the size floor the script would
+have found thirteen candidates and correctly refused to do anything — which
+is a safe failure, and still a failure. The floor is what leaves exactly
+one. It was written as belt-and-braces and it turned out to be the load
+bearing half.
+
+The media (6.7 GB) and the OpenCore image (201 MB) are both excluded by
+being partitioned, not by size.
+
+### Logs: a failed unattended install has to be readable without watching it
+
+`/var/log` is a RAM disk here and evaporates at reboot. The first failure
+put a modal dialog on screen
+saying "open the Installer Log" — with no way to open it that does not
+involve a human and a mouse. Driving the mouse over the QEMU monitor did not
+work (relative `usb-mouse`, and the guest never tracked the moves), and
+chasing it further would have been the opposite of unattended.
+
+So `autoinstall.sh` now:
+
+- writes its own log to `/var/tmp` and mirrors it to the target volume;
+- dumps what the installer is about to read (`ls` of `Extras/`, and the two
+  automation files' contents) **as the installer sees them**, which is not
+  the same claim as "the files are on the media": `rc.cdrom` mounts a union
+  RAM disk over `/System/Installation`, and union fall-through was worth
+  verifying rather than assuming. It works;
+- ships every `/var/log/*.log` to the target volume every five seconds while
+  the install runs. On the run that worked there were none: `rc.install`
+  pipes the installer through `logger`, and 10.9's syslog puts that in ASL's
+  binary store rather than a text file. Hence the `ls -la /var/log` in the
+  dump above, so the next failure says where its log actually went. That
+  widening is the one change made after the successful run, and it is
+  re-verified only as far as the "Installing OS X" screen, not through a
+  second full install.
+
+From the host, with no root:
+
+```
+qemu-img convert -O raw work/p4-target.qcow2 target.raw
+7z x -so target.raw '1.Mavericks.hfsx' > mav.hfs
+7z x -so mav.hfs 'Mavericks/.mqg-autoinstall.log'
+```
+
+### Failing without a reboot loop
+
+If disk selection refuses, `autoinstall.sh` does **not** exit. Exiting would
+leave `minstallconfig.xml` in place, so the installer would launch against a
+target volume that does not exist, fail, and take the `Minstaller` branch —
+`/sbin/reboot`. That is a loop that erases its own evidence every forty
+seconds. Instead it prints why and sleeps: `rc.install` sources the hook
+synchronously, so sleeping stops the installer from ever starting, and the
+console text stays on the framebuffer where `vm/screenshot.sh` can read it.
+
+It also means the *second* boot of finished media is safe by construction:
+the target now has partitions, so there is no candidate, so nothing is
+erased.
+
+### Injection
+
+`media/build-installer-img.sh --autoinstall` copies the three files while the
+volume is already mounted for the main copy, before `fix_media_ownership`.
+That ordering is the point: the chown in the privops microVM is what makes
+them root-owned. Anything injected *after* it would be the one uid-1000 file
+on otherwise root-owned media — the exact state that produced "Dubious
+ownership on file (skipping)" and a stalled boot. `fix-ownership.sh` now
+reports all three, and `rc.cdrom.local` has to come out `-rwxr-xr-x`:
+`rc.install` tests it with `[ -x ]` and skips it silently otherwise.
+
+### Two smaller things found on the way
+
+**`p4-linuxmedia` was writing EFI variables into `p3-full`'s NVRAM.** It had
+inherited p3-full's pflash line verbatim, so two VMs shared one variable
+store — the thing `boot/make-nvram.sh` exists to prevent ("copy, never
+share"). Running `make-nvram.sh p4-linuxmedia` produced a file nothing
+pointed at. Fixed.
+
+**`media/privops/fix-ownership.sh` failed shellcheck** (no shebang, so
+SC2148), which meant `./bin/run-tests.sh` was already red before this task
+started. It has a `shell=sh` directive now.
+
+### Every boot, including the ones that changed nothing
+
+| # | What was different | Result |
+|---|---|---|
+| 1 | The three hooks, `OSInstall.collection` listing `OSInstall.mpkg` once | Disk prepared correctly in ~40 s; installer refused with "There was a problem with the automated installation". Nothing written to the target |
+| 2 | **No change to the automation.** Added the config dump and the log shipper, to find out *why* | Same failure, now diagnosable from the host: all three files visible to the installer with the right contents and owners. Ruled out the union mount, the paths and the ownership |
+| 3 | `OSInstall.mpkg` listed twice | Full install, reboot, Setup Assistant. 15 min 17 s |
+| 4 | Widened log shipping to `/var/log/*.log`, added `ls -la /var/log` | Re-verified as far as "Installing OS X on the disk Mavericks"; not run through a second full install |
+
+Attempt 2 changed no behaviour at all and was the one that mattered: it
+turned "it does not work" into a list of things that had been eliminated.
+Instrumenting before guessing again was cheaper than guessing, at about
+four minutes a guess.
+
+### An XML comment cost a cycle
+
+The first attempt at adding the second `OSInstall.mpkg` entry put `--`
+inside an XML comment, which is illegal, and `plistlib` rejected the file.
+That was caught on the host in a second rather than in a VM in four minutes,
+because both automation files are parsed by `tests/payload.bats`. Worth the
+test.

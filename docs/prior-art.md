@@ -159,6 +159,15 @@ This is why a Mac-produced reference image exists to diff against.
 First-boot automation payload: user creation, SSH, skipping Setup Assistant.
 The basis for P4's payload.
 
+**It also automates the whole install, and this entry used to hide that.**
+`prepare_iso/prepare_iso.sh` plus `prepare_iso/support/` are where P4 Task 5's
+mechanism comes from: `/etc/rc.cdrom.local`, `minstallconfig.xml` and
+`OSInstall.collection`, all read by Apple's own `/etc/rc.install` inside the
+installer environment. The `minstallconfig.xml` schema is upstream's, which
+took it from **Greg Neagle's `createOSXInstallPkg`** (munki). P4 Task 5 was
+planned as a LaunchDaemon injection before anyone read past the first line of
+this entry — see the P4 Task 5 entry in `NOTES.md`.
+
 ## Performance
 
 - **pmj/virtio-net-osx 0.9.4** — <https://github.com/pmj/virtio-net-osx>.

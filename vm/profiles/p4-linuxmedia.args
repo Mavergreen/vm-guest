@@ -92,8 +92,15 @@ Penryn,+ssse3,+sse4.1,+sse4.2
 # refuses to hand out the template itself.
 -drive
 if=pflash,format=raw,unit=0,readonly=on,file=%BUILD%/firmware/OVMF_CODE.fd
+# Its own variable store, not p3-full's.
+#
+# This profile inherited p3-full's line verbatim, so both VMs wrote EFI
+# variables into one file -- boot order and the picker's remembered choice,
+# trampling each other. boot/make-nvram.sh exists precisely to stop that
+# ("copy, never share"), and running it for this profile produced a file
+# nothing pointed at. Found while setting up the Task 5 install.
 -drive
-if=pflash,format=raw,unit=1,file=%IMAGES%/work/p3-full-VARS.fd
+if=pflash,format=raw,unit=1,file=%IMAGES%/work/p4-linuxmedia-VARS.fd
 
 -device
 ich9-usb-ehci1,id=usb,bus=pcie.0,addr=0x1d.7,multifunction=on
