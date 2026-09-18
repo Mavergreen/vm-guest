@@ -180,6 +180,10 @@ But reaching a usable resolution was never a driver problem.
 
 ## Deferred post-install changes
 
+> **This is a deferral, not a decision.** See `docs/open-questions.md` Q1,
+> which records the deadline: it must be answered before P4's pipeline is
+> finalized, because the pipeline decides what every future image contains.
+
 Apple's 2016 security update and Mavericks Forever's post-install hardening
 script are both candidates. **Neither is applied**, and neither should be
 without asking first.

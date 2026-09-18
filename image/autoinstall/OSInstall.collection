@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Injected as /System/Installation/Packages/OSInstall.collection, and named
+  by minstallconfig.xml's Package key.
+
+  A collection is a list of packages the installer installs in order, so
+  the OS and anything that should be part of it go in one pass. THIS IS
+  WHERE THE FIRST-BOOT PAYLOAD BELONGS: build it as a .pkg, drop it beside
+  OSInstall.mpkg, and add a line here. That installs it as part of the
+  install rather than injecting it into a finished volume afterwards,
+  which is what the plan's Task 6 assumes and is worse.
+
+  Upstream (timsutton/osx-vm-templates) lists OSInstall.mpkg twice, then
+  its veewee-config.pkg. The repetition looks vestigial and is not copied
+  here; if an install ever fails in a way that implicates it, that is the
+  first thing to try.
+-->
+<plist version="1.0">
+<array>
+	<string>/System/Installation/Packages/OSInstall.mpkg</string>
+</array>
+</plist>

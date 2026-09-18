@@ -18,6 +18,9 @@
 #      volume, dangling on media that has no ESD volume -- with the ESD's
 #      real Packages directory, plus BaseSystem.chunklist and
 #      BaseSystem.dmg, which the installer verifies the packages against.
+#   6. With --autoinstall, add the three files Apple's own /etc/rc.install
+#      looks for, which turn a boot of this media into an install that
+#      needs nobody watching. See image/autoinstall/.
 #
 # Ownership: udisks mounts hfsplus with uid=<you>,gid=<you>,umask=22, so
 # nothing written here can be owned by root or carry a setuid bit, whatever
@@ -63,24 +66,43 @@ PART_MIB=$(( (REFERENCE_PARTITION_BYTES + 1048575) / 1048576 + MARGIN_MIB ))
 
 VOLUME_NAME="OS X Base System"
 
+# The unattended-install hooks, as "<source under image/autoinstall/>
+# <destination on the media> <mode>". All three are Apple's own mechanism,
+# not ours: /etc/rc.install sources rc.cdrom.local (line 39), reads
+# Extras/minstallconfig.xml (line 104) and prefers OSInstall.collection
+# over OSInstall.mpkg (lines 107-108). See image/autoinstall/ and the P4
+# Task 5 entry in NOTES.md.
+#
+# rc.cdrom.local must be executable -- rc.install tests it with `[ -x ]`
+# and silently skips it otherwise, which would leave the media booting to
+# an automated installer with no target volume prepared.
+AUTOINSTALL_FILES="\
+autoinstall.sh|private/etc/rc.cdrom.local|755
+minstallconfig.xml|System/Installation/Packages/Extras/minstallconfig.xml|644
+OSInstall.collection|System/Installation/Packages/OSInstall.collection|644"
+
 usage() {
     cat <<EOF
-usage: $(basename "$0") [--describe] [--force] [--keep-work]
+usage: $(basename "$0") [--describe] [--force] [--keep-work] [--autoinstall]
 
-  --describe   Print the layout this would create and exit. Touches nothing.
-  --force      Replace an existing installer image.
-  --keep-work  Keep the multi-gigabyte raw conversions afterwards.
+  --describe     Print the layout this would create and exit. Touches nothing.
+  --force        Replace an existing installer image.
+  --keep-work    Keep the multi-gigabyte raw conversions afterwards.
+  --autoinstall  Inject the unattended-install hooks (image/autoinstall/),
+                 so booting this media installs without anyone watching.
 EOF
 }
 
 describe=0
 force=0
 keep_work=0
+autoinstall=0
 while [ $# -gt 0 ]; do
     case $1 in
         --describe) describe=1 ;;
         --force) force=1 ;;
         --keep-work) keep_work=1 ;;
+        --autoinstall) autoinstall=1 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -121,6 +143,23 @@ installer media layout
     System/Installation/BaseSystem.dmg
     System/Installation/BaseSystem.chunklist
 EOF
+    if [ "$autoinstall" -eq 1 ]; then
+        cat <<EOF
+
+  unattended-install hooks (--autoinstall)
+EOF
+        printf '%s\n' "$AUTOINSTALL_FILES" | while IFS='|' read -r src dst mode; do
+            printf '    %-46s mode %s\n' "$dst" "$mode"
+            printf '      from image/autoinstall/%s\n' "$src"
+        done
+        cat <<EOF
+
+    All three are read by Apple's own /etc/rc.install, which is already on
+    this media. They land root-owned like everything else, via the privops
+    microVM -- launchd and the installer both refuse what they do not
+    trust.
+EOF
+    fi
     exit 0
 fi
 
@@ -218,9 +257,32 @@ populate_target() {
         "$tgt/System/Installation/" \
         || die "could not copy BaseSystem.dmg/chunklist"
 
+    [ "$autoinstall" -eq 0 ] || inject_autoinstall "$tgt"
+
     count_tree "$tgt" "final volume"
     log "free space on the target volume:"
     df -h "$tgt" >&2
+}
+
+# The unattended-install hooks go on while the volume is already mounted
+# here, rather than in a pass of their own. That is not only cheaper: the
+# chown that follows (fix_media_ownership) is what makes them root-owned,
+# and anything injected after it would be the one uid-1000 file on
+# otherwise root-owned media -- exactly the state that made launchd say
+# "Dubious ownership on file (skipping)" and load nothing at all.
+inject_autoinstall() {
+    local tgt=$1 src dst mode
+    log "injecting the unattended-install hooks"
+    while IFS='|' read -r src dst mode; do
+        [ -n "$src" ] || continue
+        [ -f "$MQG_REPO_ROOT/image/autoinstall/$src" ] \
+            || die "missing image/autoinstall/$src"
+        mkdir -p "$(dirname "$tgt/$dst")" || die "cannot create $(dirname "$dst")"
+        cp "$MQG_REPO_ROOT/image/autoinstall/$src" "$tgt/$dst" \
+            || die "cannot write $dst"
+        chmod "$mode" "$tgt/$dst" || die "cannot chmod $mode $dst"
+        log "  $dst ($(stat -c %a "$tgt/$dst"), $(stat -c %s "$tgt/$dst") bytes)"
+    done <<< "$AUTOINSTALL_FILES"
 }
 
 # Everything above ran unprivileged, so the media is owned by the building
