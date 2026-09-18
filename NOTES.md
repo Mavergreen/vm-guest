@@ -2665,3 +2665,115 @@ considered and not taken. It widens what anyone who reaches the account can
 do, for the benefit of a tidier shutdown on a volume that survives the
 untidy one. If a later phase needs privileged commands over SSH (P5 might),
 that is the decision to revisit, with its own entry.
+
+## 2026-09-18 — P4 Task 7 — `image/build-image.sh`, and what each stage costs
+
+**One command, clean checkout to a bootable SSH-reachable image, nobody
+watching.** That is goal #2, and this is it.
+
+`image/build-image.sh` reimplements nothing. Every stage is a script that
+already existed and was already tested; what is new is the ordering, the
+skipping, the QEMU invocation, and the manifest.
+
+| Stage | What it runs | Skipped when |
+|---|---|---|
+| `esd` | `media/fetch-installesd.sh` | `InstallESD.dmg` is there |
+| `opencore` | `boot/fetch-*.sh`, `boot/build-opencore.sh` | `artifacts/SHA256SUMS` is there |
+| `ovmf` | `boot/build-ovmf.sh` | `OVMF_CODE.fd` is there |
+| `efi` | `boot/build-efi-image.sh` | the EFI image is there |
+| `payload` | `image/payload/build-firstboot-pkg.sh` | never — it is milliseconds and deterministic |
+| `media` | `media/build-installer-img.sh --autoinstall --firstboot-pkg` | the media is there |
+| `target` | `qemu-img create`, plus this VM's own EFI variable store | the qcow2 is there |
+| `install` | boots it, waits for SSH | the `installed` stamp is there |
+| `verify` | asks the guest what it is, over SSH | never |
+| `manifest` | writes `<name>.manifest` | never |
+
+`--force` redoes them anyway; `--from STAGE` and `--stage STAGE` pick up
+where a failure left off. A pipeline that cannot resume gets debugged an
+hour at a time.
+
+### The hardware is a parameter, because P6 is the second consumer
+
+`--accel kvm|tcg`, `--machine`, `--cpu`, `--ram`, `--smp`, `--disk-gb`,
+`--qemu`. P6 runs this same pipeline under TCG on arm64, and a second
+pipeline would be a second thing to keep correct.
+
+The QEMU command line is built by the script rather than read from
+`vm/profiles/`. That is deliberate and it is the one place this duplicates
+something: a profile is a flat list of arguments, which is exactly what
+makes a profile diff an experiment, and exactly what makes it unable to
+take parameters. `bin/tier-check.sh` still covers the profiles;
+`tests/image.bats` covers this script separately, including that it never
+names the Tier 2 quarantine.
+
+### SSH: the first time this project reaches into the guest
+
+`-netdev user,id=net0,hostfwd=tcp::2222-:22`. One line, and it changes what
+"done" can mean: before it, the only way to know what the guest was doing
+was to photograph its screen.
+
+`vm/screenshot.sh` is still used, every two minutes during the install,
+because it answers a different question — whether the install is *making
+progress*. Its verdict line is the honest one: a colour count of 2 is
+white-on-black **text**, not a blank screen, and reading that wrong cost an
+hour earlier in this project.
+
+### The manifest
+
+`<name>.manifest` records the checksum of Apple's `InstallESD.dmg`, of the
+media built from it, of the OpenCore EFI image, of the firmware, of
+`config.plist`, of the payload package, the fingerprint of the authorized
+key, the `--updates` selection, the hardware parameters, the QEMU version,
+the git commit and whether the tree was dirty, and the checksum and size of
+the qcow2 produced.
+
+`--updates` has exactly one value implemented, `none`.
+`docs/open-questions.md` Q1 names P4 as its deadline and this does not
+answer it. What it does is keep it answerable: the switch, the manifest
+field and the `OSInstall.collection` mechanism an answer would use are all
+in place, so answering it is configuration rather than a rewrite.
+
+### The progress report killed the thing it was reporting on
+
+The second run died at the two-minute mark and took QEMU with it. The line:
+
+```sh
+shot=$(... vm/screenshot.sh "$name-t$elapsed" 2>&1 | head -1)
+```
+
+`head -1` closes the pipe after one line; `screenshot.sh` takes SIGPIPE;
+`set -o pipefail` reports 141; and a command substitution that fails in an
+**assignment** is fatal under `set -e`. The cleanup trap then killed the
+VM, exactly as designed, for a failure that was nothing to do with the
+install.
+
+`sed -n 1p` instead, which reads its input to the end, plus `|| shot="(no
+screenshot)"`. Progress reporting must not be able to end the thing it is
+reporting on, and the belt is worth having even with the braces.
+
+Cost: ten minutes and one install. Worth writing down because the failure
+mode is invisible in the code — every piece of it is idiomatic, and the
+interaction is what bites.
+
+
+### Measured, on this host
+
+Build A, from a state with the media and the target disk deleted:
+
+| Stage | Wall clock |
+|---|---|
+| `esd`, `opencore`, `ovmf`, `efi`, `payload` | 0 s each (already built; the payload is milliseconds and deterministic) |
+| `media` | **54 s**, plus about 100 s of `dmg2img` before it |
+| `target` | 0 s |
+| `install` | **817 s** -- SSH answered 780 s after the VM started |
+| `verify` | 62 s (boots the image again, without the installer media) |
+| `manifest` | 44 s |
+| **total** | **977 s, 16 min 17 s** |
+
+Build B, the same from scratch: **991 s**, SSH at **780 s** -- the same
+number to the second.
+
+For P6's job budget: a cold build on a machine with nothing cached adds the
+OpenCore build (about 2 min 30 s, measured in P3) and the OVMF build, plus
+the InstallESD download. Under TCG rather than KVM the install will be the
+part that grows, and it is already 80% of the time.

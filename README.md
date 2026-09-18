@@ -7,6 +7,29 @@ GitHub Actions runner under TCG on arm64 macOS runners.
 The host is a Mac mini 2018 running Linux Mint, which makes this the case
 Apple's license contemplates: virtualizing OS X on Apple hardware.
 
+## Building an image
+
+One command, from a clean checkout to a bootable, SSH-reachable image, with
+nobody watching:
+
+```sh
+./image/build-image.sh
+```
+
+It fetches Apple's `InstallESD.dmg`, builds OpenCore and the guest firmware
+from pinned source, builds installer media on Linux without root, boots it,
+lets Apple's own installer install unattended, and lets a first-boot payload
+create the account and authorize your SSH key. It takes about half an hour
+on this host, is resumable stage by stage, and writes a manifest recording
+every input. `--describe` prints the plan without doing anything.
+
+The key it authorizes is yours: `--ssh-key PATH`, defaulting to the first of
+`~/.ssh/id_*.pub`. No key is generated into an image, and none is committed.
+
+`image/compare-images.sh A B` says in what sense two images are the same;
+`docs/decisions/0006-image-pipeline-reproducibility.md` says what that
+claim is.
+
 ## Where things are
 
 | Path | What |

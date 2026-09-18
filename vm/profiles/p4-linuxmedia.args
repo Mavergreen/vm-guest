@@ -126,8 +126,15 @@ id=target,if=none,format=qcow2,file=%IMAGES%/work/p4-target.qcow2
 -device
 ide-hd,bus=ide.0,drive=target
 
+# Forward the guest's SSH port, so a run of this profile can be reached
+# without a screenshot. Task 6's first-boot payload enables Remote Login and
+# installs a key; before that, this line does nothing and costs nothing.
+#
+# image/build-image.sh builds its own command line and does not read this
+# profile -- the port is a parameter there. This is here so the manual,
+# one-variable-at-a-time profile can be poked at the same way.
 -netdev
-user,id=net0
+user,id=net0,hostfwd=tcp::2223-:22
 -device
 usb-net,bus=usb.0,netdev=net0
 
