@@ -2024,3 +2024,69 @@ moment looks exactly like corruption, so `installer-linux.img.sha256` now
 carries comment lines saying when the sum was taken and what invalidates
 it. Task 5 will mount this image to inject a LaunchDaemon, so this is not
 a one-off.
+
+## 2026-09-17 — P4 — root-owned files without host root, using QEMU
+
+**The blocker.** The Linux-built media booted — kernel loaded, our HFS+
+volume mounted as root_device, launchd started — and then:
+
+```
+launchctl: Dubious ownership on file (skipping): /System/Library/LaunchDaemons
+nothing found to load
+```
+
+Every file was uid 1000, so launchd refused every daemon and userland never
+started. Not fixable by flags: the `hfsplus` driver's `uid=`/`gid=` mount
+options **override on-disk ownership**, and udisks always mounts with the
+caller's uid, so even a root `chown` through that mount would not stick.
+
+**Why the obvious escapes do not apply.** There is no HFS+ equivalent of
+NetBSD's `makefs`, `mke2fs -d`, `genext2fs` device tables or
+`mksquashfs -pf` — no way to write a populated HFS+ image offline with
+chosen metadata. `hfsprogs` is mkfs and fsck only. The NetBSD METALOG
+approach is the right *shape* and simply has no HFS+ writer.
+
+**The fix, prompted by the user: we already have QEMU.**
+
+libguestfs, anylinuxfs and smolBSD all wrap the same trick — boot a small VM,
+be genuinely root inside it, manipulate the filesystem, power off. This
+project already depends on QEMU and already pins it, so implementing that
+directly costs **no new dependency** and works anywhere QEMU does, including
+macOS, where libguestfs cannot go.
+
+`lib/privops.sh` + `lib/privops-qemu-linux.sh`: a ~1.2 MB busybox initramfs
+booted with the host's own kernel, image attached as `/dev/vda`, caller's
+script run as uid 0.
+
+Verified end to end: a file seeded at 1000:1000 comes back `OWNER: 0:0`,
+`DIRMODE: drwxr-xr-x 0:0`, read by a **second, independent** boot — so the
+ownership is on disk, not a mount artifact.
+
+### Four things cost an attempt each, all now documented in the backend
+
+1. **busybox applet symlinks do not resolve** inside the initramfs, so every
+   command returned `rc=127`. That looks exactly like a missing block
+   device, and I chased the device for two attempts. Applets are now invoked
+   as `busybox <applet>` explicitly.
+2. **devtmpfs must be mounted** or `/dev/vda` does not exist.
+3. **`nls_utf8.ko` must be loaded** or the mount fails with
+   `hfsplus: unable to load nls for utf8`.
+4. `virtio_blk`/`virtio_pci` are built into *this* kernel; a kernel with them
+   as modules would need them staged, so the module list is a variable.
+
+The pattern in all four: the symptom pointed at a layer below the fault.
+Printing the actual error — rather than inferring it from a failure mode —
+is what ended each one.
+
+### The seam, per the user's request
+
+`MQG_PRIVOPS_BACKEND` selects the technique, and `lib/privops.sh` documents
+what a backend for another image-build host would do:
+
+| Backend | Where it fits |
+|---|---|
+| `qemu-linux` | **Implemented.** Linux hosts, no privilege, no new packages. |
+| `macos-native` | On a Mac there is no problem: `hdiutil` honours ownership and `get.sh` already builds media this way. P4 exists only for the no-Mac case. |
+| `linux-sudo` | `mount -o loop` as root. Simplest, but a standing privilege on every build host. |
+| `libguestfs` | Same VM trick, packaged — but Linux-only, so useless for a macOS or NetBSD build host. |
+| `netbsd-makefs` | METALOG + `makefs`. Right shape, no HFS+ writer. |
