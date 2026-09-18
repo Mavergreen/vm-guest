@@ -2248,13 +2248,15 @@ So `autoinstall.sh` now:
   RAM disk over `/System/Installation`, and union fall-through was worth
   verifying rather than assuming. It works;
 - ships every `/var/log/*.log` to the target volume every five seconds while
-  the install runs. On the run that worked there were none: `rc.install`
-  pipes the installer through `logger`, and 10.9's syslog puts that in ASL's
-  binary store rather than a text file. Hence the `ls -la /var/log` in the
-  dump above, so the next failure says where its log actually went. That
-  widening is the one change made after the successful run, and it is
-  re-verified only as far as the "Installing OS X" screen, not through a
-  second full install.
+  the install runs, plus an `ls -la /var/log` at handoff.
+
+  **`/var/log/install.log` does not exist in the installer environment.**
+  The first version of the shipper copied only that, and got nothing. The
+  installer's own output goes to **`/var/log/system.log`** instead, which
+  the widened version does capture — 90 KB of it, including
+  `OSInstaller[552]: OS X Installer application started` and everything
+  after. That is what "check the Installer Log" would have shown, available
+  from the host without a VM running.
 
 From the host, with no root:
 
@@ -2308,7 +2310,10 @@ started. It has a `shell=sh` directive now.
 | 1 | The three hooks, `OSInstall.collection` listing `OSInstall.mpkg` once | Disk prepared correctly in ~40 s; installer refused with "There was a problem with the automated installation". Nothing written to the target |
 | 2 | **No change to the automation.** Added the config dump and the log shipper, to find out *why* | Same failure, now diagnosable from the host: all three files visible to the installer with the right contents and owners. Ruled out the union mount, the paths and the ownership |
 | 3 | `OSInstall.mpkg` listed twice | Full install, reboot, Setup Assistant. 15 min 17 s |
-| 4 | Widened log shipping to `/var/log/*.log`, added `ls -la /var/log` | Re-verified as far as "Installing OS X on the disk Mavericks"; not run through a second full install |
+| 4 | Widened log shipping to `/var/log/*.log`, added `ls -la /var/log` | Full install again, reboot, Setup Assistant. 8,384,937,984 bytes. Captured 7 log files off the guest including the 90 KB `system.log` the installer actually writes to |
+
+Two full unattended installs, then, on separate blank targets, both ending
+at the same screen.
 
 Attempt 2 changed no behaviour at all and was the one that mattered: it
 turned "it does not work" into a list of things that had been eliminated.
