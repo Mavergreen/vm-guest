@@ -66,3 +66,50 @@ servers at build time, which makes the build non-reproducible and
 network-dependent, and on a 2013 OS talking to 2026 servers it may hang.
 `image/payload/firstboot.sh` already has a rule that network-touching steps
 carry timeouts.
+
+
+---
+
+## Q2. Is `usb-net` the right NIC, or just the one that was verified?
+
+**Raised:** 2026-09-17, by the user asking why we did not pick e1000.
+**Must be answered before:** P5 reports a network baseline, and before P6
+budgets CI job time.
+
+### How we got here
+
+The briefs said `e1000-82545em`: DarwinKVM recommends it for 10.9, and the
+design took it as the first thing to try. Inspecting the UTM bundle showed
+`NetworkCard: usb-net`, and P1 applied its own rule — where the bundle
+disagrees with the briefs' guesses, the bundle wins, because it
+demonstrably booted a Mavericks install while the briefs' advice was
+inherited and undated.
+
+That was right **for P1**, whose job was to reach a known-good state with
+the fewest unknowns. It is probably wrong as a long-term answer.
+
+### Why it is probably wrong
+
+- **`usb-net` is CDC-ECM over EHCI** — USB Ethernet class. It works
+  (`AppleUSBCDCECMData` loads during boot) but CDC-ECM is an inefficient
+  transport, and it occupies a port on a USB controller 10.9 is already
+  demonstrably fussy about.
+- **`e1000-82545em` is gigabit-class emulation**, and is what DarwinKVM
+  recommends for this exact OS.
+- **`virtio-net` is likely fastest.** The perf brief cites
+  `pmj/virtio-net-osx` at roughly 2x send and 4x receive versus the
+  emulated Intel NIC, and Somlo confirmed it on 10.9.
+
+### The honest status
+
+**We never tested e1000.** It was recorded as "an experiment, not the
+baseline" and never run. This is an open question wearing the costume of a
+decision.
+
+### One ordering trap
+
+`virtio-net-osx` needs a kext, and this project has already been burned
+once by treating a 2016-era "X does not work" as current — `usb-tablet`
+turned out to need no kext at all, because its author fixed QEMU in 2017.
+**Re-test whether the kext is still required before ranking virtio against
+e1000**, rather than assuming the brief's description still holds.

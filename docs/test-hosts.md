@@ -172,3 +172,30 @@ the whole non-QEMU family.
 
 After P4. "Emit config for target X" is much cheaper once one command
 produces the image, and pointless before then.
+
+### Vagrant — the consumption layer, not another hypervisor
+
+Raised by the user. Everything above is a way to *run* a VM; Vagrant is how
+people *obtain and start* one, which is what makes interop concrete: "can
+someone else run this?" becomes `vagrant up`.
+
+It also closes a loop. **`timsutton/osx-vm-templates` — this project's prior
+art twice over — exists to produce Vagrant boxes.** Packer builds, Vagrant
+consumes. The chain it implies is the one P4 is most of the way along.
+
+Its providers split the same QEMU-family way as everything else here:
+
+| Provider | Our stack |
+|---|---|
+| `vagrant-libvirt`, `vagrant-qemu` | QEMU underneath — boot stack and all ports |
+| `virtualbox` (default), `vmware_desktop`, `parallels` | only the disk crosses |
+
+A box is a modest artifact: a tar of `metadata.json`, a `Vagrantfile`, and
+the disk image. Once P4 emits a qcow2 with a known configuration, a
+`vagrant-libvirt` box is closer to repackaging than to new work.
+
+**One constraint that shapes the whole idea:** boxes are normally *shared*,
+and ours never can be. Apple's licence and this project's own "never publish
+the guest image" rule mean any box stays local. That rules out Vagrant Cloud
+and means the box must be produced and consumed on the same trusted machine
+— which is a different workflow from how Vagrant is usually taught.
