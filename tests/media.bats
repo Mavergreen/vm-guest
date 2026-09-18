@@ -184,3 +184,14 @@ setup() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"installer-linux.img"* ]]
 }
+
+@test "build-installer-img.sh verifies its own copy by checksum" {
+    # A finished rsync proves nothing: one build in six produced a corrupt
+    # copy of Apple's 1.3 GB Essentials.pkg with rsync reporting success,
+    # and the install found out twelve minutes later. See NOTES.md, P4
+    # Task 8.
+    run grep -c 'verify_copy' "$REPO/media/build-installer-img.sh"
+    [ "$output" -ge 2 ]
+    run grep -c 'sha256sum' "$REPO/media/build-installer-img.sh"
+    [ "$output" -ge 2 ]
+}

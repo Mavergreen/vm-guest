@@ -47,10 +47,40 @@ done
 # /dev/vda, but a GPT-partitioned disk -- which is what real installer
 # media is -- puts it on /dev/vda1. Trying only the whole disk fails with
 # a bare "mount failed" that says nothing about why.
+#
+# And check that the mount is WRITABLE, which is not the same as the mount
+# succeeding. Linux's hfsplus driver silently falls back to read-only for a
+# volume whose header does not say it was cleanly unmounted -- the normal
+# state of any media a QEMU guest has booted, because powering a VM off is
+# not a clean unmount. The symptom is a successful mount followed by
+# "Read-only file system" from every chown, which reads like a permissions
+# problem and is not one.
+#
+# -o force is tried, and for this particular cause it does NOT help:
+# hfsplus_fill_super applies force only to the SOFTLOCK and JOURNALED
+# branches, and takes the "was not cleanly unmounted" branch first. The
+# repair is to mark the volume clean in its two volume headers, which
+# hfs_mark_clean in lib/hfs.sh does from the host without privilege. Say so
+# here rather than leave a reader to find that out from kernel source.
 MQG_DEV=
 for d in /dev/vda1 /dev/vda2 /dev/vda; do
     [ -b "$d" ] || continue
-    if $B mount -t hfsplus "$d" /mnt 2>/dev/null; then MQG_DEV=$d; break; fi
+    $B mount -t hfsplus "$d" /mnt 2>/dev/null || continue
+    if $B touch /mnt/.mqg-writable 2>/dev/null; then
+        $B rm -f /mnt/.mqg-writable
+        MQG_DEV=$d
+        break
+    fi
+    echo "MQG-PRIVOPS-READONLY $d (volume not marked cleanly unmounted;"
+    echo "  see hfs_mark_clean in lib/hfs.sh) -- trying -o force anyway"
+    $B umount /mnt 2>/dev/null
+    if $B mount -t hfsplus -o force "$d" /mnt 2>/dev/null &&
+       $B touch /mnt/.mqg-writable 2>/dev/null; then
+        $B rm -f /mnt/.mqg-writable
+        MQG_DEV=$d
+        break
+    fi
+    $B umount /mnt 2>/dev/null
 done
 if [ -n "$MQG_DEV" ]; then
     echo "MQG-PRIVOPS-MOUNTED $MQG_DEV"

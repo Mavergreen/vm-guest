@@ -190,3 +190,282 @@ print(d['Target'] == '/Volumes/' + d['TargetName'])
     [ "$status" -eq 0 ]
     [[ "$output" != *"rc.cdrom.local"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Task 6: the first-boot payload.
+#
+# It ships as a flat .pkg listed in OSInstall.collection, so the installer
+# installs it as part of the install -- upstream (timsutton/osx-vm-templates)
+# does the same with its create_firstboot_pkg. Building one on Linux means
+# writing the xar container ourselves; image/payload/mkflatpkg.py is that,
+# and these tests check the container it produces as well as what the
+# scripts inside it say.
+
+@test "firstboot.sh skips Setup Assistant" {
+    run grep -c 'AppleSetupDone' "$REPO/image/payload/firstboot.sh"
+    [ "$output" -ge 1 ]
+}
+
+@test "firstboot.sh creates the account the click-log recorded" {
+    run grep -cE 'mavsuser' "$REPO/image/payload/firstboot.sh"
+    [ "$output" -ge 1 ]
+    run grep -cE 'dscl' "$REPO/image/payload/firstboot.sh"
+    [ "$output" -ge 1 ]
+}
+
+@test "firstboot.sh never contains an embedded private key or password" {
+    run grep -ciE 'BEGIN (RSA|OPENSSH|DSA|EC) PRIVATE KEY' "$REPO/image/payload/firstboot.sh"
+    [ "$output" = "0" ]
+    run grep -ciE '^[^#]*password=[^$"]' "$REPO/image/payload/firstboot.sh"
+    [ "$output" = "0" ]
+}
+
+@test "no file under image/payload/ carries a public key either" {
+    # The key is a build-time parameter. One committed by accident would
+    # grant its holder every image this pipeline ever builds.
+    #
+    # Matches an actual key BLOB -- a type word followed by base64 starting
+    # AAAA -- not merely the words. The first version matched the words, and
+    # went red the moment build-firstboot-pkg.sh learned to name key types
+    # in order to reject Ed25519. A test that cannot tell a key from a
+    # mention of one is a test that will be deleted the first time it cries
+    # wolf.
+    run bash -c "grep -rlE '(ssh-(rsa|dss|ed25519)|ecdsa-sha2-[a-z0-9-]+) +AAAA' '$REPO/image/payload/' | grep -c ."
+    [ "$output" = "0" ]
+    # And the guard itself works: plant one and watch it fire.
+    printf 'ssh-rsa AAAAB3NzaC1yc2EAAAA notarealkey\n' \
+        > "$BATS_TEST_TMPDIR/planted.pub"
+    run bash -c "grep -rlE '(ssh-(rsa|dss|ed25519)|ecdsa-sha2-[a-z0-9-]+) +AAAA' '$BATS_TEST_TMPDIR/' | grep -c ."
+    [ "$output" = "1" ]
+}
+
+@test "every network-touching step has a timeout" {
+    # softwareupdate against Apple's 2026 servers can hang on a 2013 OS,
+    # and 10.9 has no timeout(1), so firstboot.sh carries its own.
+    run bash -c "grep -n 'softwareupdate' '$REPO/image/payload/firstboot.sh' | grep -vc 'timeout'"
+    [ "$output" = "0" ]
+}
+
+@test "firstboot.sh removes its own LaunchDaemon so it runs exactly once" {
+    run grep -cE 'rm .*com\.mqg\.firstboot|launchctl (unload|bootout)' \
+        "$REPO/image/payload/firstboot.sh"
+    [ "$output" -ge 1 ]
+}
+
+@test "the firstboot LaunchDaemon plist is valid and runs at load" {
+    run python3 -c "
+import plistlib,sys
+d=plistlib.load(open(sys.argv[1],'rb'))
+print(d['Label'], d.get('RunAtLoad'), ' '.join(d['ProgramArguments']))
+" "$REPO/image/payload/com.mqg.firstboot.plist"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"firstboot.sh"* ]]
+    [[ "$output" == *"True"* ]]
+}
+
+@test "the postinstall script installs the daemon and the script on the target" {
+    run grep -c 'LaunchDaemons' "$REPO/image/payload/postinstall"
+    [ "$output" -ge 1 ]
+    # $3 is the target volume when the installer runs a postinstall script.
+    run grep -c '\$3' "$REPO/image/payload/postinstall"
+    [ "$output" -ge 1 ]
+}
+
+# --- the package builder -------------------------------------------------
+
+@test "build-firstboot-pkg.sh --describe explains itself without building" {
+    run "$REPO/image/payload/build-firstboot-pkg.sh" --describe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"PackageInfo"* ]]
+    [[ "$output" == *"Scripts"* ]]
+}
+
+@test "build-firstboot-pkg.sh refuses to build without an SSH key" {
+    run env HOME="$BATS_TEST_TMPDIR/nohome" \
+        "$REPO/image/payload/build-firstboot-pkg.sh" \
+        --out "$BATS_TEST_TMPDIR/x.pkg"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"ssh"* || "$output" == *"SSH"* ]]
+}
+
+@test "build-firstboot-pkg.sh builds a package that 7z reads as a xar pkg" {
+    ssh-keygen -q -t rsa -b 2048 -N '' -C mqg-test \
+        -f "$BATS_TEST_TMPDIR/k" </dev/null
+    run "$REPO/image/payload/build-firstboot-pkg.sh" \
+        --ssh-key "$BATS_TEST_TMPDIR/k.pub" \
+        --out "$BATS_TEST_TMPDIR/fb.pkg"
+    [ "$status" -eq 0 ]
+    [ -f "$BATS_TEST_TMPDIR/fb.pkg" ]
+    run head -c 4 "$BATS_TEST_TMPDIR/fb.pkg"
+    [ "$output" = "xar!" ]
+    if command -v 7z >/dev/null 2>&1; then
+        run 7z l "$BATS_TEST_TMPDIR/fb.pkg"
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"PackageInfo"* ]]
+        [[ "$output" == *"Scripts"* ]]
+    fi
+}
+
+@test "the package contains exactly one file, with everything in it" {
+    # PackageKit materialises only the file PackageInfo's <scripts> element
+    # names. The first version shipped five files and copied four siblings;
+    # the install then said "not in this package: firstboot.sh" while
+    # running the fifth. One file, no siblings to be missing.
+    ssh-keygen -q -t rsa -b 2048 -N '' -C mqg-test \
+        -f "$BATS_TEST_TMPDIR/k" </dev/null
+    "$REPO/image/payload/build-firstboot-pkg.sh" \
+        --ssh-key "$BATS_TEST_TMPDIR/k.pub" \
+        --out "$BATS_TEST_TMPDIR/fb.pkg" >/dev/null
+    run python3 "$REPO/image/payload/mkflatpkg.py" --list-scripts \
+        "$BATS_TEST_TMPDIR/fb.pkg"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"./postinstall"* ]]
+    # No scaffolding: the builder assembles postinstall in a second
+    # directory, because everything in the staging directory is packaged.
+    [ "$(printf '%s\n' "$output" | grep -c '^')" = "2" ]
+}
+
+@test "the postinstall script installs the payload on a target, offline" {
+    # The whole first-boot payload, exercised against a directory instead of
+    # a volume. This is the check that used to cost a 20-minute VM boot.
+    ssh-keygen -q -t rsa -b 2048 -N '' -C mqg-test \
+        -f "$BATS_TEST_TMPDIR/k" </dev/null
+    "$REPO/image/payload/build-firstboot-pkg.sh" \
+        --ssh-key "$BATS_TEST_TMPDIR/k.pub" \
+        --out "$BATS_TEST_TMPDIR/fb.pkg" >/dev/null
+    python3 "$REPO/image/payload/mkflatpkg.py" --cat-script \
+        "$BATS_TEST_TMPDIR/fb.pkg" ./postinstall \
+        > "$BATS_TEST_TMPDIR/postinstall"
+
+    target="$BATS_TEST_TMPDIR/target"
+    mkdir -p "$target"
+    run sh "$BATS_TEST_TMPDIR/postinstall" /pkg /dest "$target" /
+    [ "$status" -eq 0 ]
+
+    # Setup Assistant is skipped at INSTALL time, not at first boot: a
+    # LaunchDaemon with RunAtLoad has no guarantee of beating loginwindow
+    # to it.
+    [ -f "$target/private/var/db/.AppleSetupDone" ]
+
+    conf="$target/private/var/db/.mqg-firstboot"
+    [ -x "$conf/firstboot.sh" ]
+    [ -f "$conf/firstboot.conf" ]
+    [ -f "$conf/authorized_keys" ]
+    [ -f "$target/Library/LaunchDaemons/com.mqg.firstboot.plist" ]
+
+    # The script in the image is the script in the repository.
+    run diff "$conf/firstboot.sh" "$REPO/image/payload/firstboot.sh"
+    [ "$status" -eq 0 ]
+    # The key in the image is the key that was asked for.
+    run diff "$conf/authorized_keys" "$BATS_TEST_TMPDIR/k.pub"
+    [ "$status" -eq 0 ]
+    # The LaunchDaemon survives the round trip as a valid plist.
+    run python3 -c "
+import plistlib, sys
+print(plistlib.load(open(sys.argv[1], 'rb'))['Label'])
+" "$target/Library/LaunchDaemons/com.mqg.firstboot.plist"
+    [ "$status" -eq 0 ]
+    [ "$output" = "com.mqg.firstboot" ]
+    # And the conf carries the parameters, with no secret unless asked.
+    run cat "$conf/firstboot.conf"
+    [[ "$output" == *"MQG_FB_USER=mavsuser"* ]]
+    [[ "$output" != *"MQG_FB_PASSWORD"* ]]
+}
+
+@test "the same inputs produce a byte-identical package" {
+    # The manifest records the payload's checksum, so the package has to be
+    # a function of its inputs and nothing else -- no build timestamp, no
+    # temp-directory name, no filesystem ordering.
+    ssh-keygen -q -t rsa -b 2048 -N '' -C mqg-test \
+        -f "$BATS_TEST_TMPDIR/k" </dev/null
+    for n in 1 2; do
+        "$REPO/image/payload/build-firstboot-pkg.sh" \
+            --ssh-key "$BATS_TEST_TMPDIR/k.pub" \
+            --out "$BATS_TEST_TMPDIR/fb$n.pkg" >/dev/null
+    done
+    run cmp "$BATS_TEST_TMPDIR/fb1.pkg" "$BATS_TEST_TMPDIR/fb2.pkg"
+    [ "$status" -eq 0 ]
+}
+
+@test "build-installer-img.sh --describe names the firstboot package" {
+    run "$REPO/media/build-installer-img.sh" --describe --autoinstall \
+        --firstboot-pkg /nonexistent/fb.pkg
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"OSInstall.collection"* ]]
+    [[ "$output" == *"fb.pkg"* || "$output" == *"firstboot"* ]]
+}
+
+@test "the package's cpio entries carry file-type bits" {
+    # The mistake that cost a full 20-minute install. The xar container was
+    # read, PackageInfo was parsed, the identifier was recognised, and then:
+    #
+    #   PackageKit: Got copier error 21 ... cpio read error: bad file format
+    #
+    # A mode of 000755 tells BOM's cpio reader the entry has no type, so it
+    # does not skip past the entry's data and everything after it is
+    # garbage. Apple's own packages write 040755 for a directory and 100644
+    # for a file. See the P4 Task 6 entry in NOTES.md.
+    ssh-keygen -q -t rsa -b 2048 -N '' -C mqg-test \
+        -f "$BATS_TEST_TMPDIR/k" </dev/null
+    "$REPO/image/payload/build-firstboot-pkg.sh" \
+        --ssh-key "$BATS_TEST_TMPDIR/k.pub" \
+        --out "$BATS_TEST_TMPDIR/fb.pkg" >/dev/null
+    run python3 - "$REPO/image/payload/mkflatpkg.py" "$BATS_TEST_TMPDIR/fb.pkg" <<'PY'
+import gzip
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("mkflatpkg", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+raw = gzip.decompress(mod.read_xar_member(sys.argv[2], "Scripts"))
+pos = 0
+seen = []
+while pos + 76 <= len(raw):
+    mode_field = raw[pos + 18:pos + 24].decode("ascii")
+    namesize = int(raw[pos + 59:pos + 65].decode("ascii"), 8)
+    filesize = int(raw[pos + 65:pos + 76].decode("ascii"), 8)
+    name = raw[pos + 76:pos + 76 + namesize - 1].decode()
+    seen.append((name, mode_field))
+    pos += 76 + namesize + filesize
+    if name == "TRAILER!!!":
+        break
+for name, mode_field in seen:
+    print(name, mode_field)
+    assert mode_field[0] in "01", "%s has no file-type bits: %s" % (name, mode_field)
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *". 040755"* ]]
+    [[ "$output" == *"./postinstall 100755"* ]]
+    [[ "$output" == *"TRAILER!!!"* ]]
+}
+
+@test "an Ed25519 key is refused, because 10.9 cannot use one" {
+    # OS X 10.9 ships OpenSSH 6.2. Ed25519 arrived in OpenSSH 6.5, three
+    # months after Mavericks shipped. The guest's sshd cannot parse such a
+    # line in authorized_keys, and the only symptom is "Permission denied
+    # (publickey)" from a server that is otherwise working perfectly --
+    # sshd running, account created, Remote Login on. That cost a full
+    # 20-minute install to diagnose. This test costs a second.
+    ssh-keygen -q -t ed25519 -N '' -C mqg-test \
+        -f "$BATS_TEST_TMPDIR/ed" </dev/null
+    run "$REPO/image/payload/build-firstboot-pkg.sh" \
+        --ssh-key "$BATS_TEST_TMPDIR/ed.pub" \
+        --out "$BATS_TEST_TMPDIR/fb.pkg"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"6.2"* ]]
+    [[ "$output" == *"6.5"* ]]
+    [ ! -f "$BATS_TEST_TMPDIR/fb.pkg" ]
+}
+
+@test "an RSA key is accepted" {
+    ssh-keygen -q -t rsa -b 2048 -N '' -C mqg-test \
+        -f "$BATS_TEST_TMPDIR/r" </dev/null
+    run "$REPO/image/payload/build-firstboot-pkg.sh" \
+        --ssh-key "$BATS_TEST_TMPDIR/r.pub" \
+        --out "$BATS_TEST_TMPDIR/fb.pkg"
+    [ "$status" -eq 0 ]
+    run python3 "$REPO/image/payload/mkflatpkg.py" --cat-script \
+        "$BATS_TEST_TMPDIR/fb.pkg" ./postinstall
+    [[ "$output" == *"$(cut -d' ' -f2 < "$BATS_TEST_TMPDIR/r.pub")"* ]]
+}

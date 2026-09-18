@@ -225,3 +225,53 @@ teardown() {
     run bash -c "losetup -a 2>/dev/null | grep -c -- '$IMG' || true"
     [ "$output" = "0" ]
 }
+
+# hfs_mark_clean: the repair for a volume a guest booted.
+#
+# Linux's hfsplus driver mounts read-only, silently, when the volume header
+# does not say the volume was cleanly unmounted -- which is the state of any
+# installer medium a VM has been powered off on. `mount -o force` does NOT
+# override that particular branch, so the fix has to be in the header.
+
+@test "hfs_mark_clean sets the cleanly-unmounted bit in both volume headers" {
+    hfs_create "$IMG" 32 MQGTEST
+    # Clear the bit in both headers, the way an unclean shutdown leaves it.
+    python3 - "$IMG" <<'PY'
+import os
+import struct
+import sys
+path = sys.argv[1]
+with open(path, "r+b") as fh:
+    fh.seek(1024 + 40)
+    block_size, total_blocks = struct.unpack(">II", fh.read(8))
+    for where in (1024, block_size * total_blocks - 1024):
+        fh.seek(where + 4)
+        attrs = struct.unpack(">I", fh.read(4))[0]
+        fh.seek(where + 4)
+        fh.write(struct.pack(">I", (attrs & ~0x100) | 0x800))
+PY
+    run hfs_mark_clean "$IMG"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"-> 0x"* ]]
+    # Both headers, not just the first: the kernel reads the alternate one
+    # from the end of the device, and a half-repaired volume still mounts
+    # read-only.
+    again=$(hfs_mark_clean "$IMG")
+    [ "$(printf '%s\n' "$again" | grep -c 'already clean')" = "2" ]
+}
+
+@test "hfs_mark_clean refuses a file that is not an HFS+ volume" {
+    head -c 8192 /dev/zero > "$IMG"
+    run hfs_mark_clean "$IMG"
+    [ "$status" -ne 0 ]
+}
+
+@test "hfs_mark_clean finds the alternate header inside a partitioned image" {
+    # The trap this test exists for: taking the end of the FILE rather than
+    # the end of the VOLUME finds the GPT backup header instead, and says
+    # there is no HFS+ volume there.
+    hfs_create_gpt "$IMG" 32 MQGTEST
+    run hfs_mark_clean "$IMG" 1048576
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"no HFS+ volume header"* ]]
+}

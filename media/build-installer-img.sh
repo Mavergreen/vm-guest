@@ -84,12 +84,18 @@ OSInstall.collection|System/Installation/Packages/OSInstall.collection|644"
 usage() {
     cat <<EOF
 usage: $(basename "$0") [--describe] [--force] [--keep-work] [--autoinstall]
+                             [--firstboot-pkg PATH]
 
   --describe     Print the layout this would create and exit. Touches nothing.
   --force        Replace an existing installer image.
   --keep-work    Keep the multi-gigabyte raw conversions afterwards.
   --autoinstall  Inject the unattended-install hooks (image/autoinstall/),
                  so booting this media installs without anyone watching.
+  --firstboot-pkg PATH
+                 Also carry this package and add it to OSInstall.collection,
+                 so the installer installs the first-boot payload as part of
+                 the install. Implies --autoinstall. Build one with
+                 image/payload/build-firstboot-pkg.sh.
 EOF
 }
 
@@ -97,12 +103,18 @@ describe=0
 force=0
 keep_work=0
 autoinstall=0
+firstboot_pkg=
+# The name the package gets on the media, and the name OSInstall.collection
+# then refers to. Fixed rather than taken from the source filename, so the
+# collection entry cannot drift from the file.
+FIRSTBOOT_PKG_NAME=mqg-firstboot.pkg
 while [ $# -gt 0 ]; do
     case $1 in
         --describe) describe=1 ;;
         --force) force=1 ;;
         --keep-work) keep_work=1 ;;
         --autoinstall) autoinstall=1 ;;
+        --firstboot-pkg) firstboot_pkg=$2; autoinstall=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -159,6 +171,17 @@ EOF
     microVM -- launchd and the installer both refuse what they do not
     trust.
 EOF
+        if [ -n "$firstboot_pkg" ]; then
+            cat <<EOF
+
+  first-boot payload (--firstboot-pkg)
+    System/Installation/Packages/$FIRSTBOOT_PKG_NAME
+      from $firstboot_pkg
+    ...and one more entry in OSInstall.collection naming it, so Apple's
+    installer installs the payload during the install rather than anything
+    being injected into a finished volume afterwards. See image/payload/.
+EOF
+        fi
     fi
     exit 0
 fi
@@ -168,6 +191,16 @@ require_cmd dmg2img sgdisk rsync truncate dd mkfs.hfsplus udisksctl \
 
 [ -f "$esd_dmg" ] || die "no InstallESD.dmg at $esd_dmg --" \
     "run media/fetch-installesd.sh first"
+
+# Checked here, before five gigabytes of dmg2img, rather than at the moment
+# it is copied: a missing package should cost a second, not twenty minutes.
+if [ -n "$firstboot_pkg" ]; then
+    [ -f "$firstboot_pkg" ] \
+        || die "no first-boot package at $firstboot_pkg --" \
+               "build one with image/payload/build-firstboot-pkg.sh"
+    [ "$(head -c 4 "$firstboot_pkg")" = "xar!" ] \
+        || die "$firstboot_pkg is not a flat package (no xar magic)"
+fi
 
 if [ -e "$out" ]; then
     [ "$force" -eq 1 ] || die "$out exists; pass --force to replace it"
@@ -257,11 +290,54 @@ populate_target() {
         "$tgt/System/Installation/" \
         || die "could not copy BaseSystem.dmg/chunklist"
 
+    verify_copy "$ESD_MNT/Packages" "$pkg_link"
+
     [ "$autoinstall" -eq 0 ] || inject_autoinstall "$tgt"
 
     count_tree "$tgt" "final volume"
     log "free space on the target volume:"
     df -h "$tgt" >&2
+}
+
+# Compare every file under <src> with its copy under <dst>, by SHA-256.
+#
+# WHY THIS EXISTS: A FINISHED RSYNC PROVES NOTHING.
+#
+# On the second of two identical media builds, Apple's own Essentials.pkg
+# -- 1.3 GB, the largest thing on the media -- arrived corrupt. rsync
+# reported success, the byte and entry counts matched, `7z t` on the
+# package failed, and the install got twelve minutes in before the OS X
+# Installer said "cpio read error: bad file format" and stopped. The first
+# build of the same script, from the same ESD, was fine.
+#
+# So the copy is now checked rather than assumed. It costs about a minute
+# against a failure that costs twelve, and -- more to the point -- it turns
+# an intermittent fault that looks like a mysterious installer bug into one
+# that names the file.
+#
+# The comparison is source-against-destination while both are mounted,
+# which tests the thing that actually went wrong. It does NOT cover
+# anything that happens after this point (the ownership pass in the privops
+# microVM); if a media build still produces a corrupt package with this
+# check passing, that narrows it to the chown, which is worth knowing.
+verify_copy() {
+    local src=$1 dst=$2 rel bad=0 n=0 want got
+    log "verifying the copy under $(basename "$dst") by checksum"
+    while IFS= read -r -d '' rel; do
+        n=$((n + 1))
+        want=$(sha256sum < "$src/$rel") || { bad=$((bad + 1)); continue; }
+        got=$(sha256sum < "$dst/$rel") || { bad=$((bad + 1)); continue; }
+        if [ "$want" != "$got" ]; then
+            warn "MISCOPIED: $rel"
+            warn "  source      ${want%% *}  ($(stat -c %s "$src/$rel") bytes)"
+            warn "  destination ${got%% *}  ($(stat -c %s "$dst/$rel") bytes)"
+            bad=$((bad + 1))
+        fi
+    done < <(find "$src" -type f -printf '%P\0')
+    log "  $n files checked, $bad mismatched"
+    [ "$bad" -eq 0 ] || die "$bad file(s) did not survive the copy." \
+        "This is the fault a finished rsync does not report; rebuild with" \
+        "--force. See the P4 Task 8 entry in NOTES.md."
 }
 
 # The unattended-install hooks go on while the volume is already mounted
@@ -283,6 +359,59 @@ inject_autoinstall() {
         chmod "$mode" "$tgt/$dst" || die "cannot chmod $mode $dst"
         log "  $dst ($(stat -c %a "$tgt/$dst"), $(stat -c %s "$tgt/$dst") bytes)"
     done <<< "$AUTOINSTALL_FILES"
+    [ -z "$firstboot_pkg" ] || inject_firstboot "$tgt"
+}
+
+# The first-boot payload, and the one extra line in OSInstall.collection
+# that makes the installer install it.
+#
+# The collection is copied from the repository first (it is one of
+# AUTOINSTALL_FILES) and then edited in place here, so image/autoinstall/
+# stays the single source of truth for what the file says -- including the
+# comment explaining why OSInstall.mpkg is listed twice, which is the kind
+# of thing that gets deleted by whoever finds it next.
+inject_firstboot() {
+    local tgt=$1 dst collection entry
+    dst="$tgt/System/Installation/Packages/$FIRSTBOOT_PKG_NAME"
+    collection="$tgt/System/Installation/Packages/OSInstall.collection"
+    entry="/System/Installation/Packages/$FIRSTBOOT_PKG_NAME"
+
+    log "injecting the first-boot payload"
+    cp "$firstboot_pkg" "$dst" || die "cannot write $dst"
+    chmod 644 "$dst"
+    log "  $FIRSTBOOT_PKG_NAME ($(stat -c %s "$dst") bytes," \
+        "sha256 $(sha256_file "$dst"))"
+
+    [ -f "$collection" ] || die "no OSInstall.collection to add the payload to"
+    python3 - "$collection" "$entry" <<'PYEOF' || die "cannot edit $collection"
+import plistlib
+import sys
+
+path, entry = sys.argv[1], sys.argv[2]
+with open(path) as fh:
+    text = fh.read()
+# Textual insert, not a plistlib round-trip: rewriting the file would drop
+# the comments, and one of them is the note that OSInstall.mpkg is listed
+# twice on purpose. That note cost a boot to learn.
+line = "\t<string>%s</string>\n" % entry
+if line in text:
+    sys.exit(0)
+if "</array>" not in text:
+    sys.exit("no </array> in %s" % path)
+text = text.replace("</array>", line + "</array>", 1)
+with open(path, "w") as fh:
+    fh.write(text)
+# And parse the result, because an unparseable collection fails the install
+# with a modal dialog and nothing written to the target volume.
+with open(path, "rb") as fh:
+    packages = plistlib.load(fh)
+if entry not in packages:
+    sys.exit("%s is not in the collection after editing" % entry)
+print("OSInstall.collection now lists %d package(s)" % len(packages))
+PYEOF
+    log "  collection: $(python3 -c '
+import plistlib, sys
+print(" ".join(plistlib.load(open(sys.argv[1], "rb"))))' "$collection")"
 }
 
 # Everything above ran unprivileged, so the media is owned by the building

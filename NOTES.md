@@ -2327,3 +2327,341 @@ inside an XML comment, which is illegal, and `plistlib` rejected the file.
 That was caught on the host in a second rather than in a VM in four minutes,
 because both automation files are parsed by `tests/payload.bats`. Worth the
 test.
+
+## 2026-09-18 — P4 Task 6 — the first-boot payload ships as a package Linux built
+
+**The payload is installed by Apple's installer, not injected afterwards.**
+`OSInstall.collection` already lists what gets installed, so the payload
+belongs there, and that is where it is: `mqg-firstboot.pkg`, a flat
+installer package, built on Linux, listed in the collection beside
+`OSInstall.mpkg`. That is upstream's shape — `timsutton/osx-vm-templates`'
+`create_firstboot_pkg` — with the one difference that upstream can call
+Apple's `pkgbuild` and we cannot.
+
+The plan said to inject the payload onto the target volume after the
+install. That would have worked and it would have been a second mechanism
+to keep correct, running against a volume the installer had just finished
+writing, with no installer to notice if it failed.
+
+### Building a .pkg on Linux, with neither xar(1) nor mkbom
+
+This host has neither, and the project installs nothing. So
+`image/payload/mkflatpkg.py` writes the container itself.
+
+**xar was not hard.** A flat package is a xar archive: a 28-byte header
+('xar!', header size, version, compressed and uncompressed TOC lengths,
+checksum algorithm), a zlib-compressed XML table of contents, then a heap
+whose first 20 bytes are the TOC's own SHA-1 and whose remainder is the
+members. The reference that settled every detail was a real Apple-signed
+package already in this project's media directory —
+`QemuUSBTablet-1.2.pkg` — which `7z` reads and which answered three
+questions guessing would have got wrong:
+
+- `<offset>` is relative to the start of the **heap**, not the file.
+- `<length>` is the size **in the heap**; `<size>` is the **extracted**
+  size. For an entry stored raw they are equal, and for a gzip'd one they
+  are not.
+- `Scripts` is a gzip-compressed cpio in the **odc** format (magic
+  `070707`) — checked by decompressing the reference's, not assumed.
+
+**mkbom was the problem, and the way around it was to not need one.** A
+component package normally carries `PackageInfo`, `Bom`, `Payload` and
+`Scripts`. The `Bom` is a binary bill of materials, `bomutils` exists
+precisely because the format is not trivial, and reimplementing it blind
+with a 16-minute VM boot as the only test would have been the most
+expensive thing in this phase.
+
+So the package is **payload-free**: `PackageInfo` and `Scripts` only, which
+is what `pkgbuild --nopayload` produces and which needs no Bom. Everything
+it installs, `postinstall` writes by hand, with the target volume in `$3`.
+That is not a workaround dressed up as a design: the things this payload
+has to do — create an account, enable Remote Login, disable sleep — cannot
+be done by copying files onto an unbooted volume anyway. The package's real
+job is to leave a LaunchDaemon behind, and a LaunchDaemon plus a script is
+two files.
+
+### The output is byte-identical for identical inputs
+
+Fixed timestamps (epoch), fixed uid/gid, entries sorted by name, gzip with
+`mtime=0`, no creation-time taken from the clock. `tests/payload.bats`
+builds the package twice and compares.
+
+This matters because the manifest records the payload's checksum, and a
+checksum that changes on its own says nothing about whether the payload
+changed.
+
+### What the payload does, and the two things it does at install time
+
+`docs/install-log.md`'s Setup Assistant section is the specification. The
+click-log was written for exactly this.
+
+At **install** time, `postinstall`:
+
+- writes `/private/var/db/.AppleSetupDone` — **at install time on purpose**.
+  Doing it at first boot is a race against loginwindow starting Setup
+  Assistant, and a LaunchDaemon with `RunAtLoad` has no guarantee of
+  winning it. Creating the marker before the system has ever booted removes
+  the race instead of hoping.
+- installs `firstboot.sh`, its conf file, the authorized key, and
+  `/Library/LaunchDaemons/com.mqg.firstboot.plist`.
+
+At **first boot**, `firstboot.sh` creates `mavsuser` (uid 501, gid 20,
+member of admin — what the click-log recorded Setup Assistant producing),
+installs the key at mode 600 under a 700 `.ssh`, enables Remote Login,
+disables sleep and the screensaver, turns the software-update schedule off,
+sets the hostname deliberately rather than letting Setup Assistant derive
+`Maverickss-iMac` from a full name, enables auto-login, and then removes
+its own LaunchDaemon.
+
+**10.9 has no `timeout(1)`**, so `firstboot.sh` carries its own:
+`run_with_timeout` runs the command with a watchdog beside it. Every step
+goes through it and every failure is non-fatal. The step this exists for is
+`softwareupdate`, a 2013 OS asking Apple's 2026 servers about updates —
+but the same applies to `dscl` and `systemsetup`, which talk to daemons on
+a system that has never booted before.
+
+**It runs exactly once, two ways.** The plist has `RunAtLoad` and no
+`KeepAlive`, and the script deletes the plist as its last act. There is
+also a `.done` marker, so a hand re-run is harmless. A first-boot script
+that keeps running silently undoes manual changes for the rest of an
+image's life, and the symptom turns up long after the cause.
+
+The SSH key is a build-time parameter, defaulting to the first of
+`~/.ssh/id_*.pub`. No key is generated into an image and none is
+committed; `tests/payload.bats` greps `image/payload/` for one.
+
+### Two findings on the way
+
+**Linux mounts a booted HFS+ volume read-only, and `-o force` does not
+help.** Re-injecting a rebuilt package into media a VM had already booted
+failed with "Read-only file system" from every `chown` in the privops
+microVM. That reads like a permissions problem and is not one: the hfsplus
+driver mounts read-only when the volume header does not say the volume was
+cleanly unmounted, which is the state of any medium a VM has been powered
+off on. `mount -o force` is the obvious fix and it does not work here —
+`hfsplus_fill_super` tests "was not cleanly unmounted" *before* it consults
+the force flag, and only the SOFTLOCK and JOURNALED branches are
+overridable.
+
+`hfs_mark_clean` in `lib/hfs.sh` is the repair: set
+`kHFSVolumeUnmountedBit` and clear `kHFSBootVolumeInconsistentBit` in both
+volume headers, from the host, on our own file, with no privilege. The trap
+in writing it: the alternate header is at the end of the **volume**, not of
+the file, and taking the end of a partitioned image finds the GPT backup
+header instead. There is a test for exactly that.
+
+The pipeline itself does not hit this — it builds media before booting it —
+but anyone iterating on the payload does, every time.
+
+**An XML comment cost a cycle again.** `--` is illegal inside an XML
+comment, and the first `com.mqg.firstboot.plist` had a pair in its header
+comment. `plistlib` rejected it, `tests/payload.bats` caught it in a
+second, and the comment now says so.
+
+### The boot that failed, and the one integer that caused it
+
+The first end-to-end run installed OS X 10.9.5 to completion — 675 seconds
+of `PackageKit` install time, every Apple package's receipt written — and
+then put **"Install Failed"** on screen. `/private/var/log/install.log` on
+the target volume, read from the host afterwards, named the cause exactly:
+
+```
+PackageKit: request=PKInstallRequest <1 packages, destination=/Volumes/Mavericks>
+PackageKit: packages=("PKLeopardPackage <file://localhost/System/Installation/Packages/mqg-firstboot.pkg>")
+PackageKit: Got copier error 21 extracting to ... : No such file or directory
+PackageKit: Install Failed: Error Domain=PKInstallErrorDomain Code=110
+  "An error occurred while extracting files from the package"
+  NSUnderlyingError=... "cpio read error: bad file format" ... offset=813
+```
+
+Everything about the container was right. The xar header parsed, the TOC
+decompressed, `PackageInfo` was read, the identifier `com.mqg.firstboot`
+came back in the error message, and the payload-free shape was accepted
+without complaint — no Bom was asked for. **The whole failure was the mode
+field of the cpio headers inside `Scripts`.**
+
+`070707` cpio's `mode` is a full `st_mode`, **file-type bits included**.
+Apple's own packages write `040755` for the `.` directory and `100755` for
+a script. We wrote `000755` and `000644`: correct permissions, no type. A
+reader that does not know an entry is a regular file does not know to skip
+its data, so it resumes parsing in the middle of the first file and
+everything after is garbage — "bad file format", 813 bytes in.
+
+The fix is one line. The reason it was not obvious is that everything
+*upstream* of it worked, which made "the package format is wrong" feel
+already ruled out.
+
+Two things made the diagnosis cheap rather than another round of guessing:
+
+- **`autoinstall.sh` already ships logs to the target volume**, so the
+  answer was on disk, readable from the host with `qemu-img convert -O raw`
+  and `7z`, with no VM running and no mouse. It cost about two minutes. The
+  Task 5 entry describes building that shipper; this is the run it paid for.
+- **The reference package.** `QemuUSBTablet-1.2.pkg` is a real Apple-signed
+  flat package this project already had on disk, and a hexdump of its
+  `Scripts` member shows `040755` in the fourth field. The field list alone
+  does not tell you the type bits belong there; the bytes do.
+
+`tests/payload.bats` now asserts that every cpio entry in a built package
+has a type nibble, with the error message quoted in the test.
+
+### PackageKit extracts only the script PackageInfo names
+
+The corrected package installed, and the machine came up **past Setup
+Assistant** — the marker worked — to a login window with **no account on
+it**. `postinstall.log`, on the target volume:
+
+```
+target volume: /Volumes/Mavericks
+not in this package: firstboot.sh
+not in this package: firstboot.conf
+not in this package: authorized_keys
+could not install the LaunchDaemon
+```
+
+Written by the script that was itself extracted from the same archive. The
+`Scripts` cpio held five files; PackageKit materialised exactly one — the
+one `PackageInfo`'s `<scripts>` element names — and nothing else.
+
+Rather than work out where the others went, the package now contains **one
+file**. `build-firstboot-pkg.sh` assembles `postinstall` from the template
+in `image/payload/postinstall` plus quoted heredocs carrying `firstboot.sh`,
+the LaunchDaemon plist, the generated conf and the authorized key. There is
+no sibling to fail to find.
+
+Two things came out of this beyond the fix:
+
+- `postinstall` now logs `$0`, `$PWD` and an `ls` of its own directory, so
+  the next person to wonder what PackageKit extracts can read the answer
+  rather than infer it.
+- **`tests/payload.bats` now runs the assembled `postinstall` against a
+  directory** and checks that `firstboot.sh` is byte-identical to the one
+  in the repository, that the key is the key that was asked for, that the
+  plist still parses, and that `.AppleSetupDone` exists. That is the check
+  that used to cost a twenty-minute VM boot, and it costs a second.
+
+Also found here: the builder was packaging its own scaffolding. Everything
+in the staging directory becomes the `Scripts` archive, and the assembly
+intermediates were in it. They live in a second temporary directory now.
+
+### And then: a 2013 sshd and a 2026 ssh client
+
+The next run did everything. `mqg-firstboot.log`, off the guest:
+
+```
+starting on 10.9.5 build 13F34
+.AppleSetupDone present: yes
+opendirectoryd answered after 0s
+creating account mavsuser
+...
+group 80 (admin) now: GroupMembership: root mavsuser
+createhomedir -c -u mavsuser -> created (/Users/mavsuser)
+installed 1 authorized key line(s)
+systemsetup -f -setremotelogin on -> Remote Login: On
+setsleep: Never (computer, display, hard disk)
+softwareupdate --schedule off -> Automatic check is off
+account: uid=501(mavsuser) gid=20(staff) groups=...,80(admin),...,399(com.apple.access_ssh)
+sshd job: 1 entries
+removing the LaunchDaemon so this never runs again
+```
+
+**Six seconds**, start to finish. Every line of the click-log's Setup
+Assistant section, done by a script, including the `com.apple.access_ssh`
+membership that Remote Login needs.
+
+And SSH from the host still failed, twice, for two unrelated reasons that
+both belong to the fifteen years between the two OpenSSHes:
+
+```
+Unable to negotiate with 127.0.0.1 port 2222: no matching host key type
+found. Their offer: ssh-rsa,ssh-dss
+```
+
+A modern client refuses SHA-1 host keys outright.
+`-o HostKeyAlgorithms=+ssh-rsa,ssh-dss` re-enables them. The option that
+does the same for the client's own key was renamed from
+`PubkeyAcceptedKeyTypes` to `PubkeyAcceptedAlgorithms` in OpenSSH 8.5, and
+an unknown `-o` is fatal, so both `image/build-image.sh` and
+`image/compare-images.sh` ask which one this `ssh` has with `ssh -G`, which
+parses the config and connects to nothing.
+
+Then:
+
+```
+mavsuser@localhost: Permission denied (publickey,keyboard-interactive).
+```
+
+**The key was Ed25519. 10.9 ships OpenSSH 6.2; Ed25519 arrived in 6.5, in
+January 2014, three months after Mavericks shipped.** The guest's sshd
+cannot parse that line in `authorized_keys`, so a server that is otherwise
+working perfectly — running, account created, user in the access group —
+says nothing more useful than "Permission denied".
+
+`build-firstboot-pkg.sh` now refuses an Ed25519 key with a message naming
+both version numbers, `--generate-ssh-key` makes a 4096-bit RSA key, and
+`tests/payload.bats` covers both. The check costs a second; finding it out
+cost an install.
+
+This is the same shape as the `usb-tablet` mistake recorded in
+`docs/install-log.md`, in the other direction: there, a 2016 limitation had
+been fixed upstream and we believed it anyway. Here, a 2026 default is
+correct for 2026 and wrong for the guest. **Anything crossing the gap
+between the host's software and a 2013 guest's needs its date checked in
+both directions.**
+
+### The LaunchDaemon did not remove itself, and the second guard is why that was harmless
+
+The run that finally reached SSH also showed this, on the built image:
+
+```
+$ ls /Library/LaunchDaemons/ | grep mqg
+com.mqg.firstboot.plist
+```
+
+Still there. The log's last line was `removing the LaunchDaemon so this
+never runs again`, and then nothing — no `done`, no `killall loginwindow`.
+
+The cause is the line after it: **`launchctl unload "$DAEMON"` unloads the
+job that is running this script, which terminates the script**, so the `rm
+-f` on the next line never ran. Removing a daemon from inside itself has an
+order, and it is: delete the file, do not unload.
+
+What made this harmless rather than the fault the header warns about is the
+`.done` marker, written *before* the removal. The next boot's log reads:
+
+```
+2026-09-18T04:06:03Z mqg-firstboot: already ran (marker ... exists); doing nothing
+```
+
+Two independent guards were written because "a first-boot script that runs
+on every boot silently undoes manual changes forever". One of them broke on
+the first real run, and the other one held. That is the argument for having
+both, made by events rather than by assertion.
+
+`stage_verify` in `image/build-image.sh` now reports
+`firstboot-daemon=removed` or `STILL-THERE`, and warns on the latter, so
+this cannot regress quietly.
+
+### There is no unprivileged clean shutdown for this guest
+
+The pipeline has to stop the VM it started. Three ways were tried:
+
+| Way | Result |
+|---|---|
+| QEMU monitor `system_powerdown` (ACPI power button) at the login window | **Nothing at all.** Tested with a screenshot either side: same login window sixty seconds later. No dialog, no shutdown. |
+| the same, with a session logged in | 10.9 raises a modal "Are you sure you want to shut down?" and waits for a mouse nobody is driving |
+| `shutdown -h now` over SSH | needs root, and the guest account has no password by design |
+
+So `power_down_vm` syncs the guest, asks over ACPI anyway, waits a minute,
+and then terminates QEMU. **That is a power cut**, and it is survivable by
+construction rather than by hope: the target volume is journalled HFS+
+(docs/install-log.md step 8), QEMU flushes and closes the qcow2 on SIGTERM,
+and macOS replays the journal on the next mount. The assumption is under
+standing test, because `image/compare-images.sh` boots every image again
+afterwards, every time.
+
+The obvious fix — passwordless `sudo` for the guest account — was
+considered and not taken. It widens what anyone who reaches the account can
+do, for the benefit of a tidier shutdown on a volume that survives the
+untidy one. If a later phase needs privileged commands over SSH (P5 might),
+that is the decision to revisit, with its own entry.

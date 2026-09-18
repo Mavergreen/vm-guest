@@ -11,3 +11,7 @@ vendor/cache/
 
 # Run log: machine-generated, append-only, noisy.
 run.log
+
+# Python bytecode from image/payload/mkflatpkg.py being imported by tests.
+__pycache__/
+*.pyc

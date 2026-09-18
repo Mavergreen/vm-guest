@@ -1,0 +1,114 @@
+#!/bin/sh
+# Put the first-boot payload on the target volume, at install time.
+#
+# THIS FILE IS A TEMPLATE. `build-firstboot-pkg.sh` replaces the
+# `#MQG_EMBEDDED_FILES` line below with the heredocs that write
+# firstboot.sh, its conf file, the authorized key and the LaunchDaemon. So
+# the copy in the repository is the logic, and the copy in a package is the
+# logic plus its data. Running this one directly writes nothing.
+#
+# WHERE THIS RUNS
+#
+# Inside the OS X Installer, as root, because mqg-firstboot.pkg is listed in
+# /System/Installation/Packages/OSInstall.collection alongside
+# OSInstall.mpkg. So the payload is installed as part of the install, the
+# way timsutton/osx-vm-templates does it, rather than being injected into a
+# finished volume afterwards.
+#
+# The installer's postinstall argument convention:
+#
+#   $1  full path to the package
+#   $2  install destination
+#   $3  THE TARGET VOLUME -- /Volumes/Mavericks during our install
+#   $4  root directory of the target system
+#
+# WHY EVERYTHING IS EMBEDDED RATHER THAN READ FROM NEXT DOOR
+#
+# The first version shipped five files in the package's Scripts archive and
+# copied its four siblings from `dirname $0`. The install then reported:
+#
+#   not in this package: firstboot.sh
+#   not in this package: firstboot.conf
+#   not in this package: authorized_keys
+#
+# ...while running this very script. PackageKit had materialised only the
+# file PackageInfo's <scripts> element names, and nothing else in the
+# archive. Rather than guess at where the others went, the package now
+# contains exactly one file and that file contains everything. There is no
+# sibling to fail to find.
+#
+# The `ls` of the script directory below is there so that the next person to
+# wonder what PackageKit actually extracts can read the answer instead of
+# inferring it.
+#
+# WHY THE PACKAGE HAS NO PAYLOAD
+#
+# It is a payload-free package: PackageInfo and Scripts, no Bom, no Payload.
+# That is what `pkgbuild --nopayload` makes, and it is the only flat-package
+# shape this project can build on Linux without reimplementing mkbom, which
+# neither the host nor the rules (install nothing) allow. See
+# ./mkflatpkg.py.
+#
+# WHAT IS DONE HERE RATHER THAN AT FIRST BOOT
+#
+# Only .AppleSetupDone, and only because of a race: loginwindow starts Setup
+# Assistant at boot, and a LaunchDaemon with RunAtLoad has no guarantee of
+# beating it. Creating the marker at install time removes the race instead
+# of hoping to win it. Everything else needs a booted system -- dscl,
+# systemsetup, launchctl -- and is firstboot.sh's job.
+
+set -u
+
+TARGET=${3:-}
+
+# $3 is the target volume. Empty or "/" means something is installing this
+# onto the running system, which during an OS install it is not; fall back
+# rather than silently writing to the wrong place.
+if [ -z "$TARGET" ] || [ "$TARGET" = "/" ]; then
+    TARGET=${MQG_FIRSTBOOT_TARGET:-/}
+fi
+
+CONF_DIR="$TARGET/private/var/db/.mqg-firstboot"
+DAEMON="$TARGET/Library/LaunchDaemons/com.mqg.firstboot.plist"
+LOG="$CONF_DIR/postinstall.log"
+
+mkdir -p "$CONF_DIR" || exit 1
+mkdir -p "$TARGET/Library/LaunchDaemons" || exit 1
+
+say() {
+    echo "mqg-firstboot-postinstall: $*"
+    echo "$*" >> "$LOG" 2>/dev/null
+}
+
+say "target volume: $TARGET"
+say "package: ${1:-none}  destination: ${2:-none}"
+say "\$0: $0"
+say "cwd: $(pwd 2>&1)"
+say "script directory holds: $(ls -a "$(dirname "$0")" 2>&1 | tr '\n' ' ')"
+
+#MQG_EMBEDDED_FILES
+
+chmod 755 "$CONF_DIR/firstboot.sh" 2>/dev/null
+chmod 600 "$CONF_DIR/firstboot.conf" 2>/dev/null
+chmod 644 "$CONF_DIR/authorized_keys" 2>/dev/null
+chmod 644 "$DAEMON" 2>/dev/null
+chown -R 0:0 "$CONF_DIR" 2>/dev/null
+chown 0:0 "$DAEMON" 2>/dev/null
+
+# The race described above. Do this last, so a failure earlier leaves Setup
+# Assistant in place and the image visibly unfinished rather than an image
+# that boots to a login window with no account on it.
+mkdir -p "$TARGET/private/var/db"
+touch "$TARGET/private/var/db/.AppleSetupDone"
+touch "$TARGET/private/var/db/.AppleDiagnosticsSetupDone"
+
+say "installed: $(ls "$CONF_DIR" 2>&1 | tr '\n' ' ')"
+say "LaunchDaemon: $(ls -l "$DAEMON" 2>&1)"
+say "firstboot.sh: $(wc -c < "$CONF_DIR/firstboot.sh" 2>&1) bytes"
+say "authorized_keys: $(wc -l < "$CONF_DIR/authorized_keys" 2>&1) line(s)"
+say "done"
+
+# A postinstall that exits non-zero fails the whole install, and this
+# payload is a convenience next to an installed operating system. Report,
+# then succeed.
+exit 0

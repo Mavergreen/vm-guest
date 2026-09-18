@@ -291,3 +291,78 @@ hfs_with_mounted() {
     shift 2
     hfs_with_mounted_part "$img" - "$body" "$@"
 }
+
+# hfs_mark_clean <img> [byte-offset-of-the-volume]
+#
+# Mark an HFS+ volume as cleanly unmounted, in place, from the host, with no
+# privilege at all -- the image is our own file.
+#
+# WHY THIS IS NEEDED
+#
+# Linux's hfsplus driver mounts read-only, silently, when the volume header
+# does not carry kHFSVolumeUnmountedBit. Any media a QEMU guest has booted
+# is in exactly that state, because powering a VM off is not a clean
+# unmount. The failure then arrives as "Read-only file system" from a chown
+# in the privops microVM, which reads like a permissions problem, and
+# `mount -o force` does not fix it: hfsplus_fill_super tests "was not
+# cleanly unmounted" before it consults the force flag, and that branch is
+# not overridable.
+#
+# WHAT IT DOES
+#
+# Sets kHFSVolumeUnmountedBit (0x100) and clears kHFSVolumeInconsistentBit
+# (0x800) in the volume header at offset 1024 of the volume, and in the
+# alternate header 1024 bytes before its end. fsck.hfsplus would do this
+# properly after checking the filesystem; hfsprogs is not installed here and
+# the project installs nothing, so this does the one thing that is needed.
+#
+# THIS IS NOT A FILESYSTEM CHECK. It asserts that the volume is consistent
+# rather than verifying it. Use it on a volume nothing was writing to -- a
+# read-only installer medium a guest booted -- and rebuild rather than
+# repair anything else.
+hfs_mark_clean() {
+    local img=$1 start=${2:-0}
+    [ -f "$img" ] || die "no such image: $img"
+    require_cmd python3
+    python3 - "$img" "$start" <<'PY'
+import os
+import struct
+import sys
+
+path, start = sys.argv[1], int(sys.argv[2])
+UNMOUNTED = 0x00000100
+INCONSISTENT = 0x00000800
+
+with open(path, "r+b") as fh:
+    size = os.fstat(fh.fileno()).st_size
+    # The volume header lives 1024 bytes into the VOLUME, and the alternate
+    # header in the volume's last 1024 bytes. The volume's length comes from
+    # the header itself (blockSize * totalBlocks) rather than from the file,
+    # because a partitioned image is longer than the volume inside it and
+    # taking the end of the file finds a GPT backup header instead.
+    fh.seek(start + 1024 + 40)
+    block_size, total_blocks = struct.unpack(">II", fh.read(8))
+    length = block_size * total_blocks
+    if length <= 0 or start + length > size:
+        sys.exit("volume at %d claims %d bytes, which does not fit in %s"
+                 % (start, length, path))
+    for where in (start + 1024, start + length - 1024):
+        fh.seek(where)
+        head = fh.read(8)
+        if len(head) < 8:
+            continue
+        signature, _version, attributes = struct.unpack(">2sHI", head)
+        if signature not in (b"H+", b"HX"):
+            sys.exit("no HFS+ volume header at offset %d (found %r)"
+                     % (where, signature))
+        fixed = (attributes | UNMOUNTED) & ~INCONSISTENT
+        if fixed != attributes:
+            fh.seek(where + 4)
+            fh.write(struct.pack(">I", fixed))
+            print("hfs_mark_clean: %d: attributes 0x%08x -> 0x%08x"
+                  % (where, attributes, fixed))
+        else:
+            print("hfs_mark_clean: %d: already clean (0x%08x)"
+                  % (where, attributes))
+PY
+}
