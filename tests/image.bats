@@ -151,3 +151,16 @@ setup() {
     run grep -c 'efi_img.sha256' "$BUILD"
     [ "$output" -ge 1 ]
 }
+
+@test "a build directory too long for EDK II is refused in a millisecond" {
+    # EDK II enforces a 255-byte limit on debug symbol paths and says so
+    # about ten minutes into compiling. Its own deepest module path is
+    # ~125 characters, so the build directory has to be well short of that.
+    long="$BATS_TEST_TMPDIR/$(printf 'x%.0s' $(seq 1 200))"
+    run env MQG_IMAGE_DIR="$long" "$BUILD" --describe
+    [ "$status" -eq 0 ]   # --describe touches nothing and must still work
+    run env MQG_IMAGE_DIR="$long" "$BUILD" --stage esd
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"255"* ]]
+    [[ "$output" == *"EDK II"* ]]
+}

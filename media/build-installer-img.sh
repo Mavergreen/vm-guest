@@ -61,7 +61,16 @@ REFERENCE_PARTITION_BYTES=6550020096
 # USB stick someone has to buy -- but a number picked out of the air would
 # have been a guess at whether the packages fit, which is the one thing
 # this must not be.
-MARGIN_MIB=128
+# Raised from 128 to 512 MiB on 2026-09-18. The file that arrives corrupt
+# is always the largest one, Essentials.pkg at 1.3 GB, written into a
+# volume that 128 MiB of margin leaves 99% full. That is a guess at the
+# cause and it is labelled as one: the Linux hfsplus driver is the only
+# thing in the chain that could be writing the wrong bytes, and low free
+# space with heavy fragmentation is the condition it is most likely to
+# get wrong. The margin costs nothing -- the image is sparse and this is a
+# QEMU disk, not a USB stick someone has to buy -- and the verification
+# added beside it is what actually catches the fault either way.
+MARGIN_MIB=512
 PART_MIB=$(( (REFERENCE_PARTITION_BYTES + 1048575) / 1048576 + MARGIN_MIB ))
 
 VOLUME_NAME="OS X Base System"
@@ -290,7 +299,7 @@ populate_target() {
         "$tgt/System/Installation/" \
         || die "could not copy BaseSystem.dmg/chunklist"
 
-    verify_copy "$ESD_MNT/Packages" "$pkg_link"
+    record_source_checksums "$ESD_MNT/Packages"
 
     [ "$autoinstall" -eq 0 ] || inject_autoinstall "$tgt"
 
@@ -299,45 +308,61 @@ populate_target() {
     df -h "$tgt" >&2
 }
 
-# Compare every file under <src> with its copy under <dst>, by SHA-256.
+# WHY THESE TWO FUNCTIONS EXIST: A FINISHED RSYNC PROVES NOTHING, AND
+# NEITHER DOES READING BACK WHAT YOU JUST WROTE.
 #
-# WHY THIS EXISTS: A FINISHED RSYNC PROVES NOTHING.
+# Three media builds in six put a corrupt copy of Apple's Essentials.pkg on
+# the media -- 1.3 GB, the largest file there. rsync reported success, the
+# entry and byte counts matched, and the install got several minutes in
+# before the OS X Installer stopped with
 #
-# On the second of two identical media builds, Apple's own Essentials.pkg
-# -- 1.3 GB, the largest thing on the media -- arrived corrupt. rsync
-# reported success, the byte and entry counts matched, `7z t` on the
-# package failed, and the install got twelve minutes in before the OS X
-# Installer said "cpio read error: bad file format" and stopped. The first
-# build of the same script, from the same ESD, was fine.
+#   BOMCopierFatalError ... offset=13899638, sourcePath=.../Essentials.pkg
 #
-# So the copy is now checked rather than assumed. It costs about a minute
-# against a failure that costs twelve, and -- more to the point -- it turns
-# an intermittent fault that looks like a mysterious installer bug into one
-# that names the file.
+# twice at the SAME offset, with two different messages ("cpio read error:
+# bad file format" and "FinishStreamCompressorQueue error (-1)"). The same
+# offset twice says this is not random: the file on the media is wrong in a
+# particular place.
 #
-# The comparison is source-against-destination while both are mounted,
-# which tests the thing that actually went wrong. It does NOT cover
-# anything that happens after this point (the ownership pass in the privops
-# microVM); if a media build still produces a corrupt package with this
-# check passing, that narrows it to the chown, which is worth knowing.
-verify_copy() {
-    local src=$1 dst=$2 rel bad=0 n=0 want got
-    log "verifying the copy under $(basename "$dst") by checksum"
-    while IFS= read -r -d '' rel; do
-        n=$((n + 1))
-        want=$(sha256sum < "$src/$rel") || { bad=$((bad + 1)); continue; }
-        got=$(sha256sum < "$dst/$rel") || { bad=$((bad + 1)); continue; }
-        if [ "$want" != "$got" ]; then
-            warn "MISCOPIED: $rel"
-            warn "  source      ${want%% *}  ($(stat -c %s "$src/$rel") bytes)"
-            warn "  destination ${got%% *}  ($(stat -c %s "$dst/$rel") bytes)"
-            bad=$((bad + 1))
-        fi
-    done < <(find "$src" -type f -printf '%P\0')
-    log "  $n files checked, $bad mismatched"
-    [ "$bad" -eq 0 ] || die "$bad file(s) did not survive the copy." \
-        "This is the fault a finished rsync does not report; rebuild with" \
-        "--force. See the P4 Task 8 entry in NOTES.md."
+# THE FIRST VERSION OF THIS CHECK PASSED WHILE THE MEDIA WAS CORRUPT, and
+# that is the more useful half of the finding. It compared source to
+# destination through the same mount that had just written the file, so it
+# read the page cache, not the disk. `7z t` on the same package, via a
+# later mount, failed. Verification that shares a cache with the thing it
+# is verifying is not verification.
+#
+# So: record what the source is while both volumes are mounted, and check
+# the destination AFTER the volume has been unmounted and the ownership
+# pass has run, on a fresh mount, where the bytes have to come off the
+# disk. That also covers the privops microVM, which the first version did
+# not.
+record_source_checksums() {
+    local src=$1
+    log "recording the checksums of $(basename "$src") from the ESD"
+    ( cd "$src" && find . -type f -print0 | LC_ALL=C sort -z \
+        | xargs -0 -r sha256sum ) > "$work/packages.sha256" \
+        || die "cannot checksum the ESD's Packages directory"
+    log "  $(grep -c . "$work/packages.sha256") files recorded"
+}
+
+verify_media_packages() {
+    local mnt=$1 bad
+    log "verifying the packages on the finished media, from a fresh mount"
+    bad=$(
+        cd "$mnt/System/Installation/Packages" \
+            || die "no Packages directory on the finished media"
+        # `|| true` on the grep, not on the subshell: sha256sum exits
+        # non-zero on a mismatch, which is the case we want to REPORT, and
+        # grep exits non-zero when everything is fine.
+        sha256sum -c "$work/packages.sha256" 2>&1 | grep -v ': OK$' || true
+    )
+    if [ -n "$bad" ]; then
+        printf '%s\n' "$bad" | sed 's/^/    /' >&2
+        die "the media does not contain what the ESD does." \
+            "This is the fault that a finished rsync, and a read-back" \
+            "through the same mount, both fail to report. Re-run with" \
+            "--force. See the P4 Task 8 entry in NOTES.md."
+    fi
+    log "  $(grep -c . "$work/packages.sha256") packages match the ESD"
 }
 
 # The unattended-install hooks go on while the volume is already mounted
@@ -457,6 +482,11 @@ hfs_with_mounted_part "$esd_img" auto with_esd
 
 sync
 fix_media_ownership "$out"
+
+# On a fresh mount, after the ownership pass, so the bytes come off the
+# disk rather than out of the cache that wrote them. See the comment above
+# record_source_checksums.
+hfs_with_mounted_part "$out" 1 verify_media_packages
 
 log "checksumming $out"
 # Ownership must be fixed BEFORE the checksum is taken: the microVM mounts

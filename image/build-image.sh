@@ -736,6 +736,25 @@ stage_manifest() {
 require_cmd qemu-img ssh ssh-keygen python3 sha256sum
 command -v "$qemu_bin" >/dev/null 2>&1 || die "no such QEMU: $qemu_bin"
 
+# EDK II refuses to build when the path to a debug symbol exceeds 255
+# bytes, and it says so about 10 minutes into compiling:
+#
+#   ERROR: Debug symbol path exceeds maximum allowed range of 255 bytes!
+#
+# The deepest module path under $MQG_BUILD_DIR is about 125 characters
+# (MdeModulePkg/Bus/Isa/Ps2MouseDxe/...), so the build directory itself has
+# to be comfortably shorter than that. Found the first time this pipeline
+# was run from a fresh clone with $MQG_IMAGE_DIR under a long scratch path.
+# Checked here, in a millisecond, rather than there.
+MAX_BUILD_DIR=120
+if [ "${#MQG_BUILD_DIR}" -gt "$MAX_BUILD_DIR" ]; then
+    die "MQG_BUILD_DIR is ${#MQG_BUILD_DIR} characters, and EDK II cannot" \
+        "build under a path longer than about $MAX_BUILD_DIR (it enforces a" \
+        "255-byte limit on debug symbol paths, and its own module paths use" \
+        "the rest). Point MQG_IMAGE_DIR or MQG_BUILD_DIR somewhere shorter:" \
+        "$MQG_BUILD_DIR"
+fi
+
 resolve_ssh_key
 log "building $name (accel $accel, machine $machine, cpu $cpu, ${ram}MB)"
 mkdir -p "$images_dir" "$work_dir" "$(dirname "$payload_pkg")"
