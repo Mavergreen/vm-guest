@@ -61,18 +61,26 @@ REFERENCE_PARTITION_BYTES=6550020096
 # USB stick someone has to buy -- but a number picked out of the air would
 # have been a guess at whether the packages fit, which is the one thing
 # this must not be.
-# Raised from 128 to 512 MiB on 2026-09-18. The file that arrives corrupt
-# is always the largest one, Essentials.pkg at 1.3 GB, written into a
-# volume that 128 MiB of margin leaves 99% full. That is a guess at the
-# cause and it is labelled as one: the Linux hfsplus driver is the only
-# thing in the chain that could be writing the wrong bytes, and low free
-# space with heavy fragmentation is the condition it is most likely to
-# get wrong. The margin costs nothing -- the image is sparse and this is a
-# QEMU disk, not a USB stick someone has to buy -- and the verification
-# added beside it is what actually catches the fault either way.
-# Overridable so that the margin can be varied experimentally without
-# editing this file -- the 128-vs-512 comparison is how the guess above
-# gets tested rather than believed.
+# 512 RATHER THAN 128, AND THIS IS NOT WHY THE CORRUPTION STOPPED.
+#
+# Raised from 128 on 2026-09-18, on the theory that the file which arrived
+# corrupt was always the largest and was being written into a volume that
+# 128 MiB of margin left 99% full. **That reason is false.** rsync copies
+# Packages in sorted order, so Essentials.pkg is the seventh of sixteen: it
+# starts at 33.4% of the volume and its last byte lands at 83.6%, with 1.05
+# GiB still free even at 128 MiB of margin. The volume reaches 99% about a
+# gigabyte of copying later, by which time the file is long written. And
+# the corruption was never in one place -- two failing builds broke 110 MB
+# and 1.99 GB into the same file. See the Task 34 entry in NOTES.md, which
+# concludes the cause was concurrent access to the image file.
+#
+# So the margin is UNPROVEN as a mitigation and known to be irrelevant to
+# the mechanism the evidence supports. It stays because it costs nothing --
+# the image is sparse and this is a QEMU disk, not a USB stick someone has
+# to buy -- and because shrinking it would be a change made for no reason
+# in the other direction. Do not cite it as a fix for anything.
+#
+# Overridable so the margin can be varied without editing this file.
 MARGIN_MIB=${MQG_MEDIA_MARGIN_MIB:-512}
 PART_MIB=$(( (REFERENCE_PARTITION_BYTES + 1048575) / 1048576 + MARGIN_MIB ))
 
