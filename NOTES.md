@@ -3509,6 +3509,10 @@ the code that builds it.** The evidence:
    changed was the working style: the pipeline became one command run end
    to end, the media got `snapshot=on` so the guest cannot write to it, and
    nobody hand-injects into mounted media any more.
+5. **Ten builds at the failing era's exact geometry, on an idle host, one
+   at a time, produced byte-perfect media every time** — see the experiment
+   below. At the observed rate that is about a one-in-a-thousand
+   coincidence. The build, run alone, does not do this.
 
 **Confidence: high for the mechanism, not certain for every one of the
 three builds.** Build D is documented almost to the second. Build B has
@@ -3539,7 +3543,7 @@ the conclusion.
 | 1 | The corruption recurs at a fixed offset, so something structural is at 13,899,638 | **Dead** | 13,899,638 is where Apple's `Payload` member begins in `Essentials.pkg` (28 + 809 + 13,898,801). It is a constant of the file. Confirmed twice more: the same number is reported for two failures 1.9 GB apart, and this project's own `offset=813` is where `Scripts` begins in `mqg-firstboot.pkg` |
 | 2 | An HFS+ allocation-block or extent boundary | **Dead** | Needs a fixed offset; there isn't one. Also: `Essentials.pkg` is a **single extent** and the volume's extents-overflow B-tree is empty, so the multi-extent path is never entered |
 | 3 | A 2 GiB or 4 GiB limit, or a write path that switches strategy by size | **Dead** | Same. And the two observed breaks are at about 110 MB and about 1.99 GB into the same file |
-| 4 | Free space at write time — the 128 MiB margin | **Dead as stated** | rsync writes `Essentials.pkg` seventh of sixteen: it starts at 33.4% of the volume and ends at 83.6%, with 1.05 GiB still free at 128 MiB of margin. The volume only reaches 99% a gigabyte later, and by then the file is written. Mitigation kept anyway; it costs nothing |
+| 4 | Free space at write time — the 128 MiB margin | **Dead, by arithmetic and by experiment** | Ten builds at 128 MiB produced byte-perfect media, 401,920 file comparisons, zero mismatches (below). And rsync writes `Essentials.pkg` seventh of sixteen: it starts at 33.4% of the volume and ends at 83.6%, with 1.05 GiB still free at 128 MiB of margin. The volume only reaches 99% a gigabyte later, and by then the file is written. Mitigation kept anyway; it costs nothing |
 | 5 | Heavy fragmentation near ENOSPC | **Dead** | Nothing on the media has more than eight extents; the largest file has one |
 | 6 | It is the largest file *because* it is the largest — a size-dependent code path | **Dead** | It is the largest file because it is half the bytes on the media, so half of anything uniformly placed lands in it, and because its payload is one bzip2 stream, so it is the only file that notices a wrong bit |
 | 7 | The privops microVM exits without flushing | **Dead** | QEMU's default `cache=writeback` is the host page cache, which is what every later host read uses; the guest `sync`s and `umount`s first; and the post-unmount verification would fail on every build if it were true |
