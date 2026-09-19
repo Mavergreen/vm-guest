@@ -167,6 +167,13 @@ setup() {
     # guest, and the guest writes to both: the bootloader image changed on
     # every boot, and macOS put a .Spotlight-V100 store with a fresh UUID
     # on the media. An input that the run modifies is not one.
+    #
+    # It has a second reason now. A guest that can write to the installer
+    # media can corrupt it, and in the era when it could, three media
+    # builds in six produced a corrupt Essentials.pkg -- see the Task 34
+    # entry in NOTES.md, which concludes the cause was something other than
+    # the build writing to that file. This assertion is what keeps the
+    # guest out of it.
     run bash -c "'$BUILD' --dry-run | tr ' ' '\n' | grep -c 'snapshot=on'"
     [ "$output" = "2" ]
     run bash -c "'$BUILD' --dry-run | tr ' ' '\n' | grep 'snapshot=on'"
