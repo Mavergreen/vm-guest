@@ -259,8 +259,15 @@ qemu_args() {
         -display none \
         -monitor "unix:$monitor,server,nowait"
     if [ "$with_media" = with-media ]; then
+        # snapshot=on here too, and for the same reason as the OpenCore
+        # image above: the guest writes to the installer media. It mounts
+        # it read-write long enough for mds to create a .Spotlight-V100
+        # store on it, with a fresh UUID in the directory name -- which is
+        # why two builds from one ESD recorded different `mediacontent`
+        # digests even though every installed file matched. The media is an
+        # input; an input that the run modifies is not one.
         printf '%s\n' \
-            -drive "id=installer,if=none,format=raw,file=$media_img" \
+            -drive "id=installer,if=none,format=raw,snapshot=on,file=$media_img" \
             -device "ide-hd,bus=ide.1,drive=installer"
     fi
 }

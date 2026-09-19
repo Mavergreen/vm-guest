@@ -142,9 +142,6 @@ setup() {
     run "$BUILD" --dry-run
     [ "$status" -eq 0 ]
     [[ "$output" == *"opencore"*"snapshot=on"* ]]
-    # And only the bootloader: the target disk must keep what it is given.
-    run bash -c "'$BUILD' --dry-run | tr ' ' '\n' | grep -c 'snapshot=on'"
-    [ "$output" = "1" ]
 }
 
 @test "the manifest records the EFI image as built, not as last run" {
@@ -163,4 +160,19 @@ setup() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"255"* ]]
     [[ "$output" == *"EDK II"* ]]
+}
+
+@test "neither input the guest can write to is left writable" {
+    # The OpenCore image and the installer media are both attached to the
+    # guest, and the guest writes to both: the bootloader image changed on
+    # every boot, and macOS put a .Spotlight-V100 store with a fresh UUID
+    # on the media. An input that the run modifies is not one.
+    run bash -c "'$BUILD' --dry-run | tr ' ' '\n' | grep -c 'snapshot=on'"
+    [ "$output" = "2" ]
+    run bash -c "'$BUILD' --dry-run | tr ' ' '\n' | grep 'snapshot=on'"
+    [[ "$output" == *"opencore"* ]]
+    [[ "$output" == *"installer"* ]]
+    # ...and the target disk is NOT one of them.
+    run bash -c "'$BUILD' --dry-run | tr ' ' '\n' | grep 'id=target'"
+    [[ "$output" != *"snapshot=on"* ]]
 }

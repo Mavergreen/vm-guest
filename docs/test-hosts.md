@@ -199,3 +199,29 @@ and ours never can be. Apple's licence and this project's own "never publish
 the guest image" rule mean any box stays local. That rules out Vagrant Cloud
 and means the box must be produced and consumed on the same trusted machine
 — which is a different workflow from how Vagrant is usually taught.
+
+### Containerised QEMU — a second consumption layer, with the same constraint
+
+Raised by the coordinator. `dockur/macos` and `sickcodes/Docker-OSX` are the
+same idea as Vagrant one layer down: QEMU inside a container, with
+`/dev/kvm` passed through, so "can someone else run this?" becomes
+`docker run`.
+
+They are **QEMU underneath**, so the whole boot stack and every profile
+argument carry across unchanged. The work would be a Dockerfile and an
+entrypoint that expands a profile, not a re-derivation of anything.
+
+The interesting part is what they do about the OS, because it is the same
+line this project has already drawn. Both fetch Apple's installer **at
+runtime, inside the container**, rather than baking it into a published
+layer — `dockur/macos` downloads from Apple's servers on first start, much
+as `media/fetch-installesd.sh` does. That is not a coincidence of design: a
+published layer containing macOS is exactly what neither they nor we may
+ship. So a container image built here would carry the machinery and fetch
+the OS on the user's own machine, and the guest image would still never
+leave it.
+
+**A P7 interop emitter, not core path.** Worth recording now because it is
+the second thing after Vagrant that consumes what P4 produces, and because
+it independently confirms the never-publish constraint is the normal way
+this is done rather than a restriction peculiar to us.

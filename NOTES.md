@@ -2777,3 +2777,266 @@ For P6's job budget: a cold build on a machine with nothing cached adds the
 OpenCore build (about 2 min 30 s, measured in P3) and the OVMF build, plus
 the InstallESD download. Under TCG rather than KVM the install will be the
 part that grows, and it is already 80% of the time.
+
+## 2026-09-18 — P4 Task 8 — two builds, one fresh clone, and what "the same" means
+
+`image/compare-images.sh` is the method, `--describe` prints it, and
+`docs/decisions/0006-image-pipeline-reproducibility.md` is the argument. An
+unstated comparison method is not reproducible either, which is why the
+method is a program.
+
+**The claim is not byte-identity and never was.** An install writes
+timestamps, a volume UUID, a machine UUID, caches built at first boot,
+Spotlight indexes, random seeds and SSH host keys; a sparse qcow2 records
+the order the installer happened to allocate blocks in. Two builds from
+identical inputs differ in all of that, and none of it is a difference
+anyone can observe from inside the guest.
+
+What is claimed, and checked separately so a failure names itself:
+
+1. both manifests list identical inputs, bar `name`, `built` and `image`;
+2. both boot unattended, **with no installer media attached**, and accept
+   SSH with the key they were built for;
+3. `sw_vers`, `hw.model`, `hw.ncpu`, `hw.memsize`, the account's uid, gid
+   and groups, Remote Login, sleep, auto-login, `.AppleSetupDone`, and that
+   the first-boot LaunchDaemon removed itself, all match;
+4. the installed file sets match — same paths, same sizes — outside the
+   prefixes an install is expected to vary, which are listed in the script
+   rather than buried in a pipeline.
+
+### First comparison: 321,104 files, identical
+
+Builds A and B, both from a deleted media and a blank target disk, 16 min
+17 s and 16 min 31 s, SSH answering at **780 s in both**.
+
+| Check | Result |
+|---|---|
+| boot and SSH | **SAME** — both booted with no installer media attached and accepted the key |
+| identity | **SAME** — 10.9.5 13F34, `iMac14,2`, 2 cpu, 4 GiB, uid 501 gid 20 in admin and `com.apple.access_ssh`, Remote Login on, sleep never, auto-login `mavsuser`, `.AppleSetupDone` present, first-boot daemon **removed** |
+| file sets | **SAME** — 321,104 files each, **zero** differing paths, **zero** differing sizes |
+| manifests | **DIFFER**, in two fields, and both were defects this comparison found |
+
+The only line that varies in the identity check is when the first-boot
+payload ran, which is a clock reading.
+
+Before the exclusion list was right, the raw comparison found exactly
+**seven differing files out of 321,130** — and each one was a per-machine
+identity nobody had thought to list: CrashReporter's
+`AnonymousIdentifier_<UUID>.plist` (a fresh UUID in the filename),
+`System.keychain` and `apsd.keychain` (8 bytes apart),
+`com.apple.PowerManagement.plist`, and `ssh_host_dsa_key`. An image that
+shipped identical SSH host keys would be the defect, not the variation.
+They are in `EXCLUDE_PREFIXES` now, with that reasoning next to them.
+
+**Filtering moved from collection time to comparison time** because of
+this: the exclusion list is the part most likely to need changing, and
+re-collecting means booting two VMs for five minutes to learn nothing new.
+`inventory.raw` is what was observed; `inventory.txt` is the reading of it.
+
+### The two manifest differences were both real defects
+
+**`opencore` differed between two builds that used the same bootloader.**
+The EFI image is attached to the VM read-write, and something in the guest
+writes to it on every boot: built as `ba9eab36`, `7f4ce3aa` after one run,
+`0ad83718` after the next, `11c5ca9a` after the one after that. So P3's
+pinned checksum for the boot stack stopped matching the file on disk the
+first time anyone booted it, and the manifest was recording a
+post-run value as though it were an input.
+
+`snapshot=on` on that drive: the guest may write, and QEMU throws the
+writes away at exit. The manifest reads the `.sha256` that
+`boot/build-efi-image.sh` wrote beside the image, which is the artifact as
+built rather than as last run.
+
+**`media` differs and always will.** `mkfs.hfsplus` stamps the volume's
+creation date from the clock, mounting an HFS+ volume rewrites its header,
+and catalog layout follows write order. So the media file's checksum
+answers "is this the exact artifact I built" and cannot answer "do two
+builds contain the same thing". `media/content-digest.sh` answers the
+second: one SHA-256 over a sorted list of every file's own SHA-256.
+`mediacontent` is in the manifest and is *not* on the expected-to-vary
+list.
+
+### The finding that mattered most: a corrupt package the checks missed
+
+Three media builds in six put a corrupt copy of Apple's `Essentials.pkg`
+on the media. 1.3 GB, the largest file there. The install ran for several
+minutes and then stopped:
+
+```
+BOMCopierFatalError ... offset=13899638, sourcePath=.../Essentials.pkg
+    "cpio read error: bad file format"              (build B)
+    "FinishStreamCompressorQueue error (-1)"        (build D)
+```
+
+**The same offset in both.** That is not random corruption; it is the same
+wrong bytes in the same place, twice.
+
+What makes this worth writing down is the shape of the mistake in the
+first fix. The check added after build B compared the ESD's copy with the
+media's while **both were mounted** — and it passed, on a build whose
+media was corrupt, because it read the page cache of the mount that had
+just written the file. `7z t` on the same package through a *later* mount
+failed. **Verification that shares a cache with the thing it verifies is
+not verification.**
+
+So the checksums are recorded from the ESD during the copy, and checked
+after the volume is unmounted and the ownership pass has run, on a fresh
+mount, where the bytes come off the disk. That also covers the privops
+microVM, which the first version did not.
+
+The cause is not established. The Linux hfsplus driver is the only thing
+in the chain that could be writing the wrong bytes, the file that fails is
+always the largest, and 128 MiB of margin left the volume 99% full — so
+the margin is now 512 MiB, labelled as a guess. The verification is what
+actually makes the pipeline safe either way, and it costs about ten
+seconds.
+
+**One of the failures was self-inflicted and is worth admitting**: killing
+`image/build-image.sh` leaves its child scripts running, and an orphaned
+`media/build-installer-img.sh` was found still rsyncing into the same
+image a newer build had started writing. `build-image.sh`'s cleanup trap
+kills QEMU and nothing else. Any conclusion about the failure rate has to
+allow for that.
+
+### Running the pipeline from a fresh clone found a constraint nobody had
+
+EDK II refuses to build when the path to a debug symbol exceeds 255 bytes:
+
+```
+ERROR: Debug symbol path exceeds maximum allowed range of 255 bytes!
+```
+
+The first fresh-clone attempt put `MQG_IMAGE_DIR` under a long scratch
+path, and the OpenCore build failed **ten minutes in**, after compiling
+most of EDK II. Its own deepest module path
+(`MdeModulePkg/Bus/Isa/Ps2MouseDxe/...`) is about 125 characters, so the
+build directory has to be well short of that. `image/build-image.sh`
+checks it in a millisecond now, and says which limit and why.
+
+This is exactly what the fresh-clone test is for, and it is the kind of
+thing it finds: not a bug in the code, but an assumption about the
+environment that the working copy happened to satisfy.
+
+### The boot stack is rebuildable, but not byte-for-byte
+
+The fresh clone built its own OpenCore and its own firmware, from the same
+pinned sources, and got **different bytes**:
+
+| Artifact | This working copy | Fresh clone |
+|---|---|---|
+| `OVMF_CODE.fd` | `195c4dcf…` (the value `docs/decisions/0004` records) | `deee45dd…` |
+| `opencore-p3.img` | `ba9eab36…` | `c54caf29…` |
+
+This does not contradict P3 — the claim there is that the boot stack is
+**rebuildable from pinned source**, and it was, on a machine that had never
+seen this project, in 174 seconds. But it does mean the checksums in
+`decisions/0004` identify *this host's build* rather than *the source*, and
+anyone checking them on another machine will find they do not match and
+will reasonably wonder what is wrong.
+
+Two separate causes, neither surprising once looked at:
+
+- **EDK II stamps its build into the firmware.** Build timestamps and
+  absolute paths end up inside the firmware volume.
+- **`mformat` writes a volume serial number** into the EFI image's FAT
+  header, and `mcopy` carries file mtimes.
+
+Both are fixable in principle (`SOURCE_DATE_EPOCH`, a fixed FAT serial),
+and neither is fixed here. What P4 needs is that the manifest says which
+build went into an image, and it does. Recorded as an open item rather than
+repaired in passing: doing it properly means re-verifying that a
+deterministic firmware still boots, which is a P3 question.
+
+### Two macOS installs at once wedged one of them
+
+The fresh-clone build and a local build were started together, to halve the
+wall clock. The local one finished in 1147 s -- slower than its usual 977 s,
+as expected. The fresh-clone one **stopped writing to its target disk
+entirely** 6 minutes in, with the installer's progress bar at about 20% and
+"about 19 minutes remaining" frozen there for the next 43 minutes, QEMU
+still burning 23% of a core.
+
+Run alone afterwards, the same fresh clone built cleanly in **940 s**.
+
+**What it is not.** Memory is ruled out: the host has 62 GiB, 8 in use and
+54 available, against two 4 GiB guests. Disk space is ruled out: 1.6 TiB
+free. A shared path is ruled out: the two builds had separate
+`MQG_IMAGE_DIR`s (`~/mqg-fresh-img` and `~/.local/share/...`), separate
+monitor sockets, separate forwarded ports, separate NVRAM copies and
+separate target disks; nothing under either directory is named by the
+other. The privops microVM is ruled out by timing -- both media builds had
+finished, minutes before either install started.
+
+**What I think it is, labelled as a guess: I/O, not `/dev/kvm`.** The
+evidence that points there is that the guest was not wedged as a whole --
+the installer's progress spinner kept animating in every screenshot, so the
+GUI and the scheduler were alive -- while writes to the target disk stopped
+completely and never resumed. That is the shape of a storage stall, not of a
+starved vCPU. Two concurrent macOS installs are close to the worst case for
+this host's emulated AHCI: each is streaming several gigabytes off a 6.4 GB
+raw media image and writing it into a growing sparse qcow2, all four files
+on the same NVMe, with the host page cache holding 48 GiB of it. If 10.9's
+AHCI driver has a timeout it does not recover from, this is where it would
+be found.
+
+**What would settle it**, and was not done because the fresh-clone result
+was what the phase needed: re-run the pair with `-drive ...,cache=none` or
+with the two image directories on different devices, and watch
+`/proc/<pid>/io` for the stalled guest rather than the file size. If it is
+I/O, the guest's read counter stops too; if it is KVM, it does not.
+
+**For P6:** do not assume two of these can share a runner. One per host
+until the above is settled.
+
+### The fresh clone, alone: it works, in 940 seconds
+
+`git clone` into `~/mqg-fresh-clone`, `MQG_IMAGE_DIR=~/mqg-fresh-img` with
+nothing in it but Apple's `InstallESD.dmg` (reflink-copied rather than
+re-downloaded from Apple, which is the one shortcut taken and is an input
+the manifest pins by checksum anyway).
+
+| Stage | Wall clock |
+|---|---|
+| `opencore` | **174 s** — OpenCore built from pinned source on a machine that had never seen this project |
+| `ovmf` | ~170 s |
+| `efi`, `payload` | seconds |
+| `media` | **84 s** |
+| `install` | **816 s** — SSH answered |
+| `verify` | 62 s |
+| `manifest` | 62 s |
+| **total** (second run, everything but the install already built) | **940 s** |
+
+`firstboot-daemon=removed`, `setupdone=yes`, `autologin=mavsuser`, the
+account exactly as on the local builds. **The repository carries everything
+needed.**
+
+### And the media the fresh clone built is the same media
+
+```
+$ ./media/content-digest.sh ~/.local/share/mavericks-qemu-guest/media/installer-linux.img
+439c32a2fcb05104aa8f09311e272ea7c23faf2a877492e602c3786f543a05f5  39413 files  6415404902 bytes  1 unreadable
+$ ./media/content-digest.sh ~/mqg-fresh-img/media/installer-linux.img
+439c32a2fcb05104aa8f09311e272ea7c23faf2a877492e602c3786f543a05f5  39413 files  6415404902 bytes  1 unreadable
+```
+
+Byte-for-byte the same content, from two working copies, on two image
+directories, hours apart. The media *files* differ, as they always will.
+
+Getting to that number found one more input the guest mutates. The first
+comparison of the two digests differed in exactly 41 files, all of them
+under `.Spotlight-V100/` with a different UUID in the directory name:
+**macOS writes a Spotlight store onto the installer media while it boots
+from it.** The installer media is attached `ide-hd` read-write, so it could.
+
+`snapshot=on` on that drive too, beside the OpenCore one — the guest may
+write, QEMU throws the writes away — and `media/content-digest.sh` prunes
+`.Spotlight-V100`, `.fseventsd` and `.Trashes`, which are things a volume
+accumulates rather than content of it.
+
+That is now **three** inputs found to be mutated by the run that consumed
+them: the bootloader image, the installer media, and (harmlessly) the EFI
+variable store, which `boot/make-nvram.sh` already copies per VM. The
+pattern is worth stating plainly: **anything handed to QEMU without
+`snapshot=on` or `readonly=on` is writable, and a guest will write to more
+of it than you expect.**

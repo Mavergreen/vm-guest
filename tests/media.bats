@@ -190,8 +190,54 @@ setup() {
     # copy of Apple's 1.3 GB Essentials.pkg with rsync reporting success,
     # and the install found out twelve minutes later. See NOTES.md, P4
     # Task 8.
-    run grep -c 'verify_copy' "$REPO/media/build-installer-img.sh"
+    # Recorded from the ESD during the copy, checked after the volume has
+    # been unmounted and the ownership pass has run, on a FRESH mount --
+    # the first version read the page cache of the mount that had just
+    # written the file, and passed on a build whose media was corrupt.
+    run grep -c 'record_source_checksums' "$REPO/media/build-installer-img.sh"
     [ "$output" -ge 2 ]
-    run grep -c 'sha256sum' "$REPO/media/build-installer-img.sh"
+    run grep -c 'verify_media_packages' "$REPO/media/build-installer-img.sh"
     [ "$output" -ge 2 ]
+    # The verification must happen after the ownership pass, not before:
+    # the microVM mounts the volume, and a check that ran first would not
+    # cover it. Compare the line numbers of the last call to each.
+    own=$(grep -n '^fix_media_ownership ' \
+        "$REPO/media/build-installer-img.sh" | tail -1 | cut -d: -f1)
+    ver=$(grep -n 'verify_media_packages$' \
+        "$REPO/media/build-installer-img.sh" | tail -1 | cut -d: -f1)
+    [ -n "$own" ]
+    [ -n "$ver" ]
+    [ "$ver" -gt "$own" ]
+}
+
+@test "content-digest.sh explains itself and needs an image" {
+    run "$REPO/media/content-digest.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--list"* ]]
+    run "$REPO/media/content-digest.sh"
+    [ "$status" -ne 0 ]
+    run "$REPO/media/content-digest.sh" /nonexistent.img
+    [ "$status" -ne 0 ]
+}
+
+@test "the content digest skips what booting a volume leaves behind" {
+    # macOS creates .Spotlight-V100 on the installer media the first time a
+    # guest boots it, with a fresh UUID in the directory name. That made two
+    # media built from one ESD produce different digests while every one of
+    # their 39,413 real files matched. See NOTES.md, P4 Task 8.
+    for d in .Spotlight-V100 .fseventsd .Trashes; do
+        run grep -c -- "$d" "$REPO/media/content-digest.sh"
+        [ "$output" -ge 1 ] || { echo "digest does not skip $d"; return 1; }
+    done
+}
+
+@test "the content digest reports unreadable files rather than dying on them" {
+    # BaseSystem ships /.file at mode 0000 -- the marker OS X looks for to
+    # decide a volume has a filesystem on it. One sha256sum per file also
+    # took five minutes for 39,000 files, against twenty seconds for one
+    # xargs, so the bulk path has to stay.
+    run grep -c 'UNREADABLE' "$REPO/media/content-digest.sh"
+    [ "$output" -ge 1 ]
+    run grep -c 'xargs' "$REPO/media/content-digest.sh"
+    [ "$output" -ge 1 ]
 }

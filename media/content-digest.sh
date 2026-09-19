@@ -62,21 +62,53 @@ img=$1
 require_cmd sha256sum find sort
 
 digest_body() {
-    local mnt=$1 tmp
+    local mnt=$1 tmp n=0 unreadable=0 bytes=0
     tmp=$(mktemp) || die "cannot create a temporary file"
     # Sorted by path, under LC_ALL=C, so the order is a property of the
     # content and not of anyone's locale.
-    ( cd "$mnt" && find . -type f -print0 \
-        | LC_ALL=C sort -z \
-        | xargs -0 -r sha256sum ) > "$tmp" 2>/dev/null \
-        || die "could not checksum the contents of $img"
+    #
+    # Unreadable files are listed rather than skipped or fatal. BaseSystem
+    # ships /.file at mode 0000 -- the marker OS X looks for to decide a
+    # volume has a filesystem on it -- and /.Trashes is not ours either.
+    # A digest that silently omitted them would be a digest of a different
+    # thing depending on who ran it; one that died on them would never run
+    # at all. So they appear by name and size, with no checksum, which is
+    # exactly as much as can honestly be said about them.
+    # In bulk, not one sha256sum per file: 39,000 processes took five
+    # minutes and one xargs takes twenty seconds. Sorted afterwards, by
+    # path, so the order is still a property of the content.
+    #
+    # Three directories are skipped, all of them written BY a volume rather
+    # than being content OF it: a Spotlight store, an FSEvents log and a
+    # trash. macOS creates .Spotlight-V100 on the installer media the first
+    # time a guest boots it, with a fresh UUID in the directory name, which
+    # made two media built from one ESD produce different digests while
+    # every one of their 39,414 real files matched. The media is now
+    # attached snapshot=on so the guest cannot write to it at all; this
+    # stays because media built before that change still carry the
+    # directory, and because a digest of "what is on the media" should not
+    # include what booting it left behind.
+    (
+        cd "$mnt" || die "cannot enter $mnt"
+        find . \( -name .Spotlight-V100 -o -name .fseventsd \
+                  -o -name .Trashes \) -prune -o \
+             -type f -readable -print0 2>/dev/null \
+            | xargs -0 -r sha256sum 2>/dev/null
+        find . \( -name .Spotlight-V100 -o -name .fseventsd \
+                  -o -name .Trashes \) -prune -o \
+             -type f ! -readable -printf 'UNREADABLE-%s  %p\n' 2>/dev/null
+    ) | LC_ALL=C sort -k2 > "$tmp"
+    n=$(grep -c . "$tmp")
+    unreadable=$(grep -c '^UNREADABLE-' "$tmp" || true)
+    bytes=$( cd "$mnt" && find . \( -name .Spotlight-V100 -o -name .fseventsd \
+                                    -o -name .Trashes \) -prune -o \
+                            -type f -printf '%s\n' 2>/dev/null \
+        | awk '{ total += $1 } END { print total + 0 }' )
     if [ "$list" -eq 1 ]; then
         cat "$tmp"
     fi
-    printf '%s  %s files  %s bytes\n' \
-        "$(sha256sum < "$tmp" | cut -d' ' -f1)" \
-        "$(grep -c . "$tmp")" \
-        "$(cd "$mnt" && find . -type f -printf '%s\n' | paste -sd+ | bc)"
+    printf '%s  %s files  %s bytes  %s unreadable\n' \
+        "$(sha256sum < "$tmp" | cut -d' ' -f1)" "$n" "$bytes" "$unreadable"
     rm -f "$tmp"
 }
 

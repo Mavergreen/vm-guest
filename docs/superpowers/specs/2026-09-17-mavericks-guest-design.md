@@ -214,7 +214,7 @@ rather than aspirational: a profile diff is the experiment.
 | P1 — Known-good boot | **complete** 2026-09-17 | Installer GUI under KVM. Cost four failures worth reading in `NOTES.md`; the fix was SMBIOS, not the shipped `Kernel > Block`. |
 | P2 — Manual install | **complete** 2026-09-17 | 10.9.5 installed and rebooting; golden #1 (`p2-manual-install`) promoted and verified after being cloned from. |
 | P3 — Reproducible boot stack | **complete** 2026-09-17 | See below. |
-| P4 — Unattended pipeline | not started | Depends on `decisions/0004` and on the keypress defect below. |
+| P4 — Unattended pipeline | **complete** 2026-09-18 | `image/build-image.sh`: one command, clean checkout to a bootable, SSH-reachable image, no interaction. Media built on Linux without root; the install driven by Apple's own `rc.cdrom.local` / `minstallconfig.xml` / `OSInstall.collection` hooks; the first-boot payload installed as a flat package this project builds on Linux. See `decisions/0006` for what "reproducible" means here. **Not delivered:** post-10.9.5 updates (`--updates` has one value; `open-questions.md` Q1 is still open), and byte-identical images, which is deliberately not the claim. |
 | P5 — Interactive performance | not started | Display work is now about *changing* modes, not reaching a usable one. |
 | P6 — GitHub Actions runner | not started | Also depends on the keypress defect. |
 | P7 — Guest integration | deferred | |
@@ -367,6 +367,38 @@ semi-automatic and we say so plainly rather than claiming otherwise.
 
 **Exit:** one command from a clean checkout produces a bootable, SSH-reachable
 image with zero human interaction. Run twice; outputs equivalent.
+
+**Met, 2026-09-17.** `image/build-image.sh`. Two things went differently from
+the plan above, both for the better and both recorded in `NOTES.md`:
+
+- **The scripted install is Apple's own.** Neither candidate mechanism was
+  needed: `/etc/rc.install` already reads `/etc/rc.cdrom.local`,
+  `Extras/minstallconfig.xml` and `OSInstall.collection`. We prepare the disk
+  and Apple's installer does the rest, including the reboot.
+- **The first-boot payload is installed by the installer**, as a flat package
+  listed in `OSInstall.collection`, rather than injected onto a finished
+  volume. Building a `.pkg` on Linux with neither `xar` nor `mkbom` turned out
+  to be possible: `image/payload/mkflatpkg.py`.
+
+"Equivalent" is defined, and checked, by `image/compare-images.sh` and
+`docs/decisions/0006-image-pipeline-reproducibility.md`. Two local builds:
+**321,104 installed files, zero differing paths, zero differing sizes**,
+both answering SSH 780 s after the VM started. A build from a fresh `git
+clone` with an empty image directory: **940 s**, and media whose content
+digest matches the local one exactly.
+
+**What P4 does not deliver**, stated here so nobody has to infer it:
+
+- **Byte-identical images.** Deliberately not the claim; `decisions/0006`
+  says what is claimed instead.
+- **A byte-reproducible boot stack.** The fresh clone rebuilt OpenCore and
+  OVMF from the same pinned source and got different bytes -- EDK II stamps
+  its build into the firmware, and `mformat` writes a volume serial. The
+  stack is *rebuildable*, which is what P3 claimed; the checksums in
+  `decisions/0004` identify this host's build rather than the source.
+- **An answer to `open-questions.md` Q1.** `--updates` exists with one
+  value implemented, so answering it is configuration rather than a rewrite.
+- **Two concurrent builds on one host.** One of them wedged; see `NOTES.md`.
 
 ### P5 — Interactive performance (goal #3)
 
