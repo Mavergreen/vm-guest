@@ -280,7 +280,11 @@ populate_target() {
     # for. No -X: the Linux hfsplus driver exposes no extended attributes
     # at all (getfattr on the source returns nothing), so there is nothing
     # for rsync to carry.
-    rsync -rlptDH --info=stats2 "${excludes[@]}" "$BS_MNT/" "$tgt/" >&2 \
+    # `${excludes[@]+...}`: excludes is empty when every file was readable,
+    # and before bash 4.4 expanding an empty array under `set -u` is an
+    # "unbound variable" error. See bin/bash32-check.sh.
+    rsync -rlptDH --info=stats2 ${excludes[@]+"${excludes[@]}"} \
+        "$BS_MNT/" "$tgt/" >&2 \
         || die "rsync of BaseSystem failed"
     recreate_unreadable "$BS_MNT" "$tgt"
     count_tree "$tgt" "after BaseSystem"

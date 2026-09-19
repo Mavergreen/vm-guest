@@ -658,7 +658,10 @@ ssh_guest() {
     # The command is sent to the guest as written: it expands there, not
     # here, which is what we want -- these are commands about the guest.
     # shellcheck disable=SC2029
-    ssh "${opts[@]}" "${idopt[@]}" "$ssh_user@localhost" "$@"
+    # `${idopt[@]+...}`: idopt is empty when there is no key file, and
+    # before bash 4.4 expanding an empty array under `set -u` is an
+    # "unbound variable" error. See bin/bash32-check.sh.
+    ssh "${opts[@]}" ${idopt[@]+"${idopt[@]}"} "$ssh_user@localhost" "$@"
 }
 
 ssh_ready() { ssh_guest true >/dev/null 2>&1; }

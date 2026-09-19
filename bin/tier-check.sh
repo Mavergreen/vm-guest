@@ -43,7 +43,12 @@ fi
 
 dirty=0
 expanded=""
-for name in "${names[@]}"; do
+# `${names[@]+"${names[@]}"}` rather than a plain `"${names[@]}"`: before
+# bash 4.4, expanding an empty array under `set -u` is an "unbound
+# variable" error, so on stock 10.9 bash 3.2 a repository with no profiles
+# would abort here instead of reaching the warning above. See
+# bin/bash32-check.sh.
+for name in ${names[@]+"${names[@]}"}; do
     # Grepped against the EXPANDED profile (after %REPO%/%IMAGES%/%VENDOR%
     # substitution), matching the resolved $MQG_VENDOR_DIR path rather than
     # a textual convention like "vendor/reference/". This is stronger than
