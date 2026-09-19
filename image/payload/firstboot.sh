@@ -49,6 +49,13 @@ MQG_FB_REALNAME="Mavericks User"
 MQG_FB_SHELL=/bin/bash
 MQG_FB_HOSTNAME=mavericks
 MQG_FB_AUTOLOGIN=1
+MQG_FB_OPENSSH=0
+MQG_FB_OPENSSH_TAG=
+# Read by ./postinstall, which sources this same conf file at install time
+# to learn which packages to copy off the media. Declared here so the
+# defaults are all in one place and a hand run in a rescue shell has them.
+# shellcheck disable=SC2034
+MQG_FB_EXTRA_PKGS=
 
 [ -r "$CONF_DIR/firstboot.conf" ] && . "$CONF_DIR/firstboot.conf"
 
@@ -190,6 +197,137 @@ else
     say "no authorized_keys in the package; SSH will accept no key"
 fi
 
+# --- the family's own OpenSSH ---------------------------------------------
+#
+# WHAT THIS FIXES
+#
+# Stock 10.9 is OpenSSH 6.2p2. Ed25519 arrived in 6.5, so a modern key in
+# authorized_keys is a line this sshd cannot parse -- "Permission denied
+# (publickey)" from a server that is otherwise working perfectly. And 6.2
+# offers only ssh-rsa and ssh-dss host keys, which a 2026 client refuses
+# outright. Both cost a full install to find; see NOTES.md.
+#
+# ModernMavericks/openssh already builds current OpenSSH for 10.9. The
+# packages travel on the installer media and ./postinstall copied them to
+# $CONF_DIR/pkgs at install time -- read that file for why they are not
+# listed in OSInstall.collection.
+#
+# ORDER MATTERS, TWICE
+#
+# 1. Base package first, replacement second: the replacement symlinks the
+#    system paths at files the base package installs.
+# 2. This whole block runs BEFORE Remote Login is enabled. ssh.plist is an
+#    inetd-style job: launchd holds the listening socket and execs
+#    /usr/libexec/sshd-keygen-wrapper per connection, so the very first
+#    connection already gets the new sshd and nothing has to be restarted
+#    underneath a live session.
+#
+# THE WRAPPER WE WRITE OURSELVES, AND WHY
+#
+# 10.9's /System/Library/LaunchDaemons/ssh.plist names
+# /usr/libexec/sshd-keygen-wrapper as its Program. The replacement
+# package's postinstall symlinks that path to
+# /usr/local/libexec/sshd-keygen-wrapper -- but its payload does not
+# contain that file (checked: the published 10.5p1-mavericks.2 Payload has
+# no sshd-keygen-wrapper). The symlink therefore dangles, launchd cannot
+# exec it, and the guest ends up with NO working sshd at all.
+#
+# So we write it, before installing the replacement, and the symlink lands
+# on a real file. Ours also does the other thing a 10.9 guest needs:
+# Apple's wrapper only ever generates rsa1/rsa/dsa host keys in /etc, and a
+# modern sshd reads /usr/local/etc/ssh_host_{rsa,ecdsa,ed25519}_key. Without
+# an Ed25519 host key the second defect above is only half fixed.
+#
+# EXIT CONDITION: delete write_sshd_keygen_wrapper when
+# ModernMavericks/openssh ships a sshd-keygen-wrapper of its own. Until
+# then this is a compensation for a sibling defect, stated as one.
+say "openssh: requested=$MQG_FB_OPENSSH tag=${MQG_FB_OPENSSH_TAG:-none}"
+
+write_sshd_keygen_wrapper() {
+    mkdir -p /usr/local/libexec 2>/dev/null
+    cat > /usr/local/libexec/sshd-keygen-wrapper <<'MQG_WRAPPER_EOF'
+#!/bin/sh
+# Written by mqg-firstboot. Apple's /usr/libexec/sshd-keygen-wrapper, but
+# for the OpenSSH in /usr/local: generate whatever host keys are missing,
+# then exec the modern sshd. See image/payload/firstboot.sh.
+for _t in rsa ecdsa ed25519; do
+    _f="/usr/local/etc/ssh_host_${_t}_key"
+    [ -f "$_f" ] || /usr/local/bin/ssh-keygen -q -t "$_t" -f "$_f" \
+        -N "" -C "" < /dev/null > /dev/null 2>&1
+done
+exec /usr/local/sbin/sshd "$@"
+MQG_WRAPPER_EOF
+    chmod 755 /usr/local/libexec/sshd-keygen-wrapper 2>/dev/null
+}
+
+# Everything the replacement package moved aside, put back. Its preinstall
+# copies the vanilla binaries and configs here before it touches anything,
+# which is what makes a rollback a copy rather than a reinstall of the OS.
+restore_vanilla_openssh() {
+    _bk=/var/backups/vanilla-openssh
+    [ -d "$_bk" ] || { say "no $_bk to restore from"; return 0; }
+    cd "$_bk" || return 0
+    find . -type f -print | while read -r _rel; do
+        _rel=${_rel#./}
+        rm -f "/$_rel" 2>/dev/null
+        cp -p "$_bk/$_rel" "/$_rel" 2>/dev/null
+    done
+    cd / || :
+    say "restored the vanilla OpenSSH from $_bk"
+}
+
+# Would launchd's ssh job actually work? Three questions, in the order they
+# fail: is there a modern sshd, does the path ssh.plist execs resolve to
+# something runnable, and does that sshd accept its own configuration.
+openssh_usable() {
+    [ -x /usr/local/sbin/sshd ] || { say "  no /usr/local/sbin/sshd"; return 1; }
+    [ -x /usr/libexec/sshd-keygen-wrapper ] \
+        || { say "  /usr/libexec/sshd-keygen-wrapper does not resolve"; return 1; }
+    /usr/local/sbin/sshd -t -f /usr/local/etc/sshd_config >> "$LOG" 2>&1 \
+        || { say "  sshd -t rejected /usr/local/etc/sshd_config"; return 1; }
+    return 0
+}
+
+if [ "$MQG_FB_OPENSSH" = "1" ]; then
+    fb_base=
+    fb_replace=
+    for _p in "$CONF_DIR"/pkgs/*.pkg; do
+        [ -f "$_p" ] || continue
+        case $_p in
+            *System-Replace*) fb_replace=$_p ;;
+            *)                fb_base=$_p ;;
+        esac
+    done
+    if [ -z "$fb_base" ] || [ -z "$fb_replace" ]; then
+        say "openssh: packages missing from $CONF_DIR/pkgs" \
+            "(base=${fb_base:-none} replace=${fb_replace:-none});" \
+            "leaving the stock OpenSSH 6.2 in place"
+    else
+        run_with_timeout 900 installer -verbose -pkg "$fb_base" -target /
+        write_sshd_keygen_wrapper
+        run_with_timeout 300 installer -verbose -pkg "$fb_replace" -target /
+        # Generate the host keys now rather than on the first connection,
+        # so `sshd -t` below has something to validate and so the verdict
+        # this script logs is about a system that is actually ready.
+        for _t in rsa ecdsa ed25519; do
+            _f="/usr/local/etc/ssh_host_${_t}_key"
+            [ -f "$_f" ] || run_with_timeout 120 /usr/local/bin/ssh-keygen \
+                -q -t "$_t" -f "$_f" -N "" -C ""
+        done
+        if openssh_usable; then
+            say "openssh: $(/usr/local/bin/ssh -V 2>&1) is now the system ssh"
+            say "openssh: host keys: $(echo /usr/local/etc/ssh_host_*_key)"
+            rm -rf "$CONF_DIR/pkgs"
+        else
+            say "openssh: the replacement did not come up clean; ROLLING BACK"
+            restore_vanilla_openssh
+            say "openssh: system ssh is now $(ssh -V 2>&1)"
+        fi
+    fi
+else
+    say "openssh: not requested; this image keeps the stock OpenSSH 6.2"
+fi
+
 # --- Remote Login ----------------------------------------------------------
 #
 # Both spellings, because they fail differently. systemsetup is the
@@ -266,6 +404,7 @@ fi
 
 # --- verdict ---------------------------------------------------------------
 say "account: $(id "$MQG_FB_USER" 2>&1)"
+say "ssh: $(ssh -V 2>&1)"
 say "sshd job: $(launchctl list 2>/dev/null | grep -c com.openssh.sshd) entries"
 
 # Copy the log somewhere a host can find it without a running VM: the log in

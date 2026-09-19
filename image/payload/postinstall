@@ -88,6 +88,46 @@ say "script directory holds: $(ls -a "$(dirname "$0")" 2>&1 | tr '\n' ' ')"
 
 #MQG_EMBEDDED_FILES
 
+# EXTRA PACKAGES CARRIED ON THE MEDIA, COPIED ONTO THE TARGET VOLUME
+#
+# The guest's OpenSSH (ModernMavericks/openssh) ships as two real product
+# archives -- Distribution, Bom, Payload, scripts -- not as the payload-free
+# script package this one is. Whether the OS installer will install such a
+# thing from OSInstall.collection during the install is UNPROVEN, and its
+# Distribution declares <allowed-os-versions min="10.9.5"/>, a check whose
+# answer mid-install is not something to guess at. So they are carried
+# beside this package on the media, copied here to the target volume, and
+# installed by firstboot.sh with `installer -pkg ... -target /` on the
+# booted system -- where a product archive is an ordinary thing to install.
+#
+# $1 is the full path to THIS package, so its directory is where
+# media/build-installer-img.sh put the others. The absolute path is tried
+# too, because the installer environment's root IS the media (that is why
+# OSInstall.collection can name /System/Installation/Packages/...), and a
+# second candidate costs nothing next to an install that silently ships no
+# SSH.
+if [ -r "$CONF_DIR/firstboot.conf" ]; then
+    . "$CONF_DIR/firstboot.conf"
+fi
+if [ -n "${MQG_FB_EXTRA_PKGS:-}" ]; then
+    mkdir -p "$CONF_DIR/pkgs"
+    for pkgname in $MQG_FB_EXTRA_PKGS; do
+        copied=no
+        for dir in "$(dirname "${1:-/nonexistent}")" \
+                   /System/Installation/Packages; do
+            if [ -f "$dir/$pkgname" ]; then
+                if cp "$dir/$pkgname" "$CONF_DIR/pkgs/$pkgname"; then
+                    copied=yes
+                    say "carried $pkgname from $dir"
+                    break
+                fi
+            fi
+        done
+        [ "$copied" = yes ] || say "NOT FOUND on the media: $pkgname"
+    done
+    say "pkgs now: $(ls "$CONF_DIR/pkgs" 2>&1 | tr '\n' ' ')"
+fi
+
 chmod 755 "$CONF_DIR/firstboot.sh" 2>/dev/null
 chmod 600 "$CONF_DIR/firstboot.conf" 2>/dev/null
 chmod 644 "$CONF_DIR/authorized_keys" 2>/dev/null

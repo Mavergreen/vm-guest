@@ -38,6 +38,12 @@ secret=${MQG_FIRSTBOOT_PASSWORD:-}
 identifier=com.mqg.firstboot
 version=1.0
 ssh_key=${MQG_FIRSTBOOT_SSH_KEY:-}
+# The guest's own OpenSSH. Not carried IN this package -- it is payload-free
+# and the OpenSSH packages are 12 MB of product archive -- only named in the
+# conf file, so ./postinstall knows what to copy off the media and
+# firstboot.sh knows what to install. See image/fetch-openssh.sh.
+openssh_pkgs=()
+openssh_tag=
 out=
 describe=0
 
@@ -53,6 +59,16 @@ usage: $(basename "$0") [options]
   --realname TEXT  (default: $realname)
   --hostname NAME  ComputerName/HostName/LocalHostName (default: $hostname)
   --no-autologin   Do not enable auto-login.
+  --openssh-pkg PATH
+                   A ModernMavericks/openssh package the media carries.
+                   Pass both: the base package and the System-Replace one.
+                   firstboot.sh installs them on the guest, which is what
+                   lifts OpenSSH 6.2's Ed25519 and ssh-rsa limits. Without
+                   any, the image keeps the stock OpenSSH 6.2 and an
+                   Ed25519 key is refused below.
+  --openssh-tag TAG
+                   The release tag those packages came from, recorded in
+                   the conf file so the guest can say what it has.
   --out PATH       Where to write the package
                    (default: \$MQG_IMAGE_DIR/payload/mqg-firstboot.pkg)
   --describe       Print what would be built and exit. Touches nothing.
@@ -72,6 +88,8 @@ while [ $# -gt 0 ]; do
         --realname) realname=$2; shift ;;
         --hostname) hostname=$2; shift ;;
         --no-autologin) autologin=0 ;;
+        --openssh-pkg) openssh_pkgs+=("$2"); shift ;;
+        --openssh-tag) openssh_tag=$2; shift ;;
         --out) out=$2; shift ;;
         --describe) describe=1 ;;
         -h|--help) usage; exit 0 ;;
@@ -111,6 +129,11 @@ first-boot payload package
                     /Library/LaunchDaemons/com.mqg.firstboot.plist
                     /private/var/db/.AppleSetupDone
 
+  openssh           ${openssh_tag:-none}$([ "${#openssh_pkgs[@]}" -gt 0 ] && printf ' (%s)' "$(for p in ${openssh_pkgs[@]+"${openssh_pkgs[@]}"}; do printf '%s ' "$(basename "$p")"; done)")
+                    named in firstboot.conf, carried on the media by
+                    media/build-installer-img.sh --extra-pkg, installed on
+                    the guest by firstboot.sh
+
   account           $user, uid $uid, gid $gid, admin
   hostname          $hostname
   auto-login        $([ "$autologin" = 1 ] && echo yes || echo no)
@@ -140,22 +163,55 @@ case $(head -c 64 "$ssh_key") in
     *PRIVATE*) die "$ssh_key looks like a PRIVATE key. Pass the .pub." ;;
 esac
 
-# 10.9 ships OpenSSH 6.2. Ed25519 arrived in OpenSSH 6.5, in January 2014,
-# three months after Mavericks shipped -- so an Ed25519 key in
-# authorized_keys is a line the guest's sshd cannot parse, and the only
-# symptom is "Permission denied (publickey)" from a server that is
-# otherwise working perfectly. That cost a full install to find; refuse it
-# here, in a second, instead.
-case $(awk '{print $1}' < "$ssh_key") in
-    ssh-ed25519|*ed25519*)
-        die "$ssh_key is an Ed25519 key, and OS X 10.9 cannot use one:" \
-            "it ships OpenSSH 6.2, and Ed25519 arrived in 6.5." \
-            "Use an RSA or ECDSA key --" \
-            "ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa" ;;
-    ssh-rsa|ssh-dss|ecdsa-sha2-*) : ;;
-    *) warn "$ssh_key is a $(awk '{print $1}' < "$ssh_key") key;" \
-            "OS X 10.9's OpenSSH 6.2 may not understand it" ;;
-esac
+# THE ED25519 QUESTION, WHICH --openssh-pkg ANSWERS
+#
+# Stock 10.9 ships OpenSSH 6.2. Ed25519 arrived in 6.5, in January 2014,
+# three months after Mavericks shipped -- so on a stock guest an Ed25519
+# key in authorized_keys is a line sshd cannot parse, and the only symptom
+# is "Permission denied (publickey)" from a server that is otherwise
+# working perfectly. That cost a full install to find.
+#
+# When the image carries ModernMavericks/openssh, the guest's sshd is
+# current and an Ed25519 key is simply a key. So this is no longer a
+# property of "OS X 10.9"; it is a property of "an image built with
+# --no-openssh", which is the only shape that still needs the refusal.
+if [ "${#openssh_pkgs[@]}" -gt 0 ]; then
+    case $(awk '{print $1}' < "$ssh_key") in
+        ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-*|sk-*) : ;;
+        *) warn "$ssh_key is a $(awk '{print $1}' < "$ssh_key") key;" \
+                "OpenSSH $openssh_tag may not understand it" ;;
+    esac
+else
+    case $(awk '{print $1}' < "$ssh_key") in
+        ssh-ed25519|*ed25519*)
+            die "$ssh_key is an Ed25519 key, and a stock OS X 10.9 guest" \
+                "cannot use one: it ships OpenSSH 6.2, and Ed25519 arrived" \
+                "in 6.5. Build the image with the family's OpenSSH (the" \
+                "default -- see image/build-image.sh --openssh), or use an" \
+                "RSA or ECDSA key:" \
+                "ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa" ;;
+        ssh-rsa|ssh-dss|ecdsa-sha2-*) : ;;
+        *) warn "$ssh_key is a $(awk '{print $1}' < "$ssh_key") key;" \
+                "OS X 10.9's OpenSSH 6.2 may not understand it" ;;
+    esac
+fi
+
+# The names travel through a space-separated shell list in firstboot.conf,
+# so a name carrying whitespace would silently become two names that are
+# not there. Reject it here, where the message can say so.
+for pkg in ${openssh_pkgs[@]+"${openssh_pkgs[@]}"}; do
+    [ -f "$pkg" ] || die "no such --openssh-pkg: $pkg"
+    [ "$(head -c 4 "$pkg")" = "xar!" ] \
+        || die "$pkg is not a flat package (no xar magic)"
+    case $(basename "$pkg") in
+        *[[:space:]]*) die "--openssh-pkg name contains whitespace:" \
+                           "$(basename "$pkg")" ;;
+    esac
+done
+if [ "${#openssh_pkgs[@]}" -gt 0 ] && [ -z "$openssh_tag" ]; then
+    die "--openssh-pkg needs --openssh-tag: an image must record which" \
+        "OpenSSH it was built with"
+fi
 
 mkdir -p "$(dirname "$out")" || die "cannot create $(dirname "$out")"
 
@@ -180,6 +236,19 @@ trap 'rm -rf "$staging" "$assembly"' EXIT
     printf 'MQG_FB_SHELL=%q\n' "$shell"
     printf 'MQG_FB_HOSTNAME=%q\n' "$hostname"
     printf 'MQG_FB_AUTOLOGIN=%q\n' "$autologin"
+    if [ "${#openssh_pkgs[@]}" -gt 0 ]; then
+        printf 'MQG_FB_OPENSSH=1\n'
+        printf 'MQG_FB_OPENSSH_TAG=%q\n' "$openssh_tag"
+        # Space-separated basenames, deliberately unquoted where it is read:
+        # ./postinstall walks the list with `for x in $MQG_FB_EXTRA_PKGS`.
+        # A package name with a space in it would break that, which is why
+        # the names are checked below rather than hoped about.
+        printf 'MQG_FB_EXTRA_PKGS=%q\n' \
+            "$(for p in ${openssh_pkgs[@]+"${openssh_pkgs[@]}"}; do \
+                   printf '%s ' "$(basename "$p")"; done)"
+    else
+        printf 'MQG_FB_OPENSSH=0\n'
+    fi
     if [ -n "$secret" ]; then
         printf 'MQG_FB_PASSWORD=%q\n' "$secret"
     fi

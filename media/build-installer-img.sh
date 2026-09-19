@@ -93,7 +93,7 @@ OSInstall.collection|System/Installation/Packages/OSInstall.collection|644"
 usage() {
     cat <<EOF
 usage: $(basename "$0") [--describe] [--force] [--keep-work] [--autoinstall]
-                             [--firstboot-pkg PATH]
+                             [--firstboot-pkg PATH] [--extra-pkg PATH]...
 
   --describe     Print the layout this would create and exit. Touches nothing.
   --force        Replace an existing installer image.
@@ -105,6 +105,20 @@ usage: $(basename "$0") [--describe] [--force] [--keep-work] [--autoinstall]
                  so the installer installs the first-boot payload as part of
                  the install. Implies --autoinstall. Build one with
                  image/payload/build-firstboot-pkg.sh.
+  --extra-pkg PATH
+                 Also carry this package on the media, beside the first-boot
+                 payload, WITHOUT adding it to OSInstall.collection. The
+                 first-boot payload's postinstall copies these onto the
+                 target volume and firstboot.sh runs "installer -pkg" on
+                 them. Repeatable. Implies --autoinstall.
+
+                 Why not the collection? A package listed there is
+                 installed by the OS installer itself, and that is proven
+                 only for the payload-free script package we build. The
+                 OpenSSH packages are real product archives with a
+                 Distribution that declares <allowed-os-versions
+                 min="10.9.5"/> -- a check whose answer mid-install is not
+                 something to guess at. See image/payload/firstboot.sh.
 EOF
 }
 
@@ -113,6 +127,7 @@ force=0
 keep_work=0
 autoinstall=0
 firstboot_pkg=
+extra_pkgs=()
 # The name the package gets on the media, and the name OSInstall.collection
 # then refers to. Fixed rather than taken from the source filename, so the
 # collection entry cannot drift from the file.
@@ -124,6 +139,7 @@ while [ $# -gt 0 ]; do
         --keep-work) keep_work=1 ;;
         --autoinstall) autoinstall=1 ;;
         --firstboot-pkg) firstboot_pkg=$2; autoinstall=1; shift ;;
+        --extra-pkg) extra_pkgs+=("$2"); autoinstall=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
@@ -191,6 +207,23 @@ EOF
     being injected into a finished volume afterwards. See image/payload/.
 EOF
         fi
+        if [ "${#extra_pkgs[@]}" -gt 0 ]; then
+            cat <<EOF
+
+  extra packages (--extra-pkg), carried but NOT in OSInstall.collection
+EOF
+            for extra in ${extra_pkgs[@]+"${extra_pkgs[@]}"}; do
+                printf '    System/Installation/Packages/%s\n' \
+                    "$(basename "$extra")"
+                printf '      from %s\n' "$extra"
+            done
+            cat <<EOF
+    The first-boot payload's postinstall copies these to the target volume;
+    firstboot.sh installs them with "installer -pkg ... -target /" on the
+    installed system, where a product archive's version checks and scripts
+    run against a real booted OS.
+EOF
+        fi
     fi
     exit 0
 fi
@@ -210,6 +243,15 @@ if [ -n "$firstboot_pkg" ]; then
     [ "$(head -c 4 "$firstboot_pkg")" = "xar!" ] \
         || die "$firstboot_pkg is not a flat package (no xar magic)"
 fi
+
+# Same reasoning: a missing or bogus extra package should cost a second.
+# `${arr[@]+...}`: before bash 4.4, expanding an empty array under `set -u`
+# is an error rather than nothing. See bin/bash32-check.sh.
+for extra in ${extra_pkgs[@]+"${extra_pkgs[@]}"}; do
+    [ -f "$extra" ] || die "no such --extra-pkg: $extra"
+    [ "$(head -c 4 "$extra")" = "xar!" ] \
+        || die "$extra is not a flat package (no xar magic)"
+done
 
 if [ -e "$out" ]; then
     [ "$force" -eq 1 ] || die "$out exists; pass --force to replace it"
@@ -389,6 +431,27 @@ inject_autoinstall() {
         log "  $dst ($(stat -c %a "$tgt/$dst"), $(stat -c %s "$tgt/$dst") bytes)"
     done <<< "$AUTOINSTALL_FILES"
     [ -z "$firstboot_pkg" ] || inject_firstboot "$tgt"
+    [ "${#extra_pkgs[@]}" -eq 0 ] || inject_extra_pkgs "$tgt"
+}
+
+# Packages carried beside OSInstall.mpkg but deliberately absent from
+# OSInstall.collection. They are installed later, by firstboot.sh, on the
+# installed system -- see --extra-pkg in the usage above for why.
+#
+# They land in the same directory as the first-boot payload because that
+# directory is what the payload's postinstall can find: the installer
+# passes it the full path to the package it is running, so `dirname "$1"`
+# is exactly here.
+inject_extra_pkgs() {
+    local tgt=$1 extra dst
+    log "injecting ${#extra_pkgs[@]} extra package(s), not in the collection"
+    for extra in ${extra_pkgs[@]+"${extra_pkgs[@]}"}; do
+        dst="$tgt/System/Installation/Packages/$(basename "$extra")"
+        cp "$extra" "$dst" || die "cannot write $dst"
+        chmod 644 "$dst"
+        log "  $(basename "$extra") ($(stat -c %s "$dst") bytes," \
+            "sha256 $(sha256_file "$dst"))"
+    done
 }
 
 # The first-boot payload, and the one extra line in OSInstall.collection

@@ -440,13 +440,41 @@ PY
     [[ "$output" == *"TRAILER!!!"* ]]
 }
 
-@test "an Ed25519 key is refused, because 10.9 cannot use one" {
-    # OS X 10.9 ships OpenSSH 6.2. Ed25519 arrived in OpenSSH 6.5, three
-    # months after Mavericks shipped. The guest's sshd cannot parse such a
-    # line in authorized_keys, and the only symptom is "Permission denied
-    # (publickey)" from a server that is otherwise working perfectly --
-    # sshd running, account created, Remote Login on. That cost a full
-    # 20-minute install to diagnose. This test costs a second.
+@test "an Ed25519 key is accepted, because the guest gets a modern OpenSSH" {
+    # THIS TEST USED TO ASSERT THE OPPOSITE, AND THAT IS THE POINT.
+    #
+    # OS X 10.9 ships OpenSSH 6.2. Ed25519 arrived in 6.5, three months
+    # after Mavericks shipped, so the guest's sshd could not parse such a
+    # line in authorized_keys -- and the only symptom was "Permission
+    # denied (publickey)" from a server that was otherwise working
+    # perfectly: sshd running, account created, Remote Login on. That cost
+    # a full 20-minute install to diagnose, and the workaround was to
+    # refuse the key at build time.
+    #
+    # The guest now installs ModernMavericks/openssh (image/fetch-openssh.sh,
+    # default on), so the defect is gone rather than worked around. The
+    # test stays; what it asserts is inverted.
+    ssh-keygen -q -t ed25519 -N '' -C mqg-test \
+        -f "$BATS_TEST_TMPDIR/ed" </dev/null
+    printf 'xar!stand-in for a package\n' > "$BATS_TEST_TMPDIR/o.pkg"
+    printf 'xar!stand-in for a package\n' > "$BATS_TEST_TMPDIR/o-System-Replace.pkg"
+    run "$REPO/image/payload/build-firstboot-pkg.sh" \
+        --ssh-key "$BATS_TEST_TMPDIR/ed.pub" \
+        --openssh-tag 0.0p0-mavericks.0 \
+        --openssh-pkg "$BATS_TEST_TMPDIR/o.pkg" \
+        --openssh-pkg "$BATS_TEST_TMPDIR/o-System-Replace.pkg" \
+        --out "$BATS_TEST_TMPDIR/fb.pkg"
+    [ "$status" -eq 0 ]
+    [ -f "$BATS_TEST_TMPDIR/fb.pkg" ]
+    run python3 "$REPO/image/payload/mkflatpkg.py" --cat-script \
+        "$BATS_TEST_TMPDIR/fb.pkg" ./postinstall
+    [[ "$output" == *"$(cut -d' ' -f2 < "$BATS_TEST_TMPDIR/ed.pub")"* ]]
+}
+
+@test "an Ed25519 key is still refused for a --no-openssh stock image" {
+    # The refusal is not deleted, it is SCOPED: an image built without the
+    # family's OpenSSH really is running 6.2, and silently authorizing a
+    # key it cannot parse is the 20-minute failure above, restored.
     ssh-keygen -q -t ed25519 -N '' -C mqg-test \
         -f "$BATS_TEST_TMPDIR/ed" </dev/null
     run "$REPO/image/payload/build-firstboot-pkg.sh" \
@@ -455,6 +483,7 @@ PY
     [ "$status" -ne 0 ]
     [[ "$output" == *"6.2"* ]]
     [[ "$output" == *"6.5"* ]]
+    [[ "$output" == *"--openssh"* ]]
     [ ! -f "$BATS_TEST_TMPDIR/fb.pkg" ]
 }
 
