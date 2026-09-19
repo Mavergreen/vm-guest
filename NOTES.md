@@ -3387,3 +3387,63 @@ verification that passed on media that was later found corrupt.
 What it does not explain by itself is why the failures stopped on
 2026-09-18, when the margin was raised and the guest kept its write access
 for another day. Hence the experiments below.
+
+### The two failures were 1.9 GB apart, and both reported the same offset
+
+The installer logs from both failing builds survived, in this session's
+scratch area, shipped off the guest by `autoinstall.sh` at the time. They
+settle the question the offset could not.
+
+**Build B**, 2026-09-17 21:32:55 → 21:33:05:
+
+```
+PackageKit: Extracting .../Essentials.pkg (destination=..., uid=0)   21:32:55
+PackageKit: Install Failed ... "cpio read error: bad file format"     21:33:05
+    offset=13899638
+```
+
+Ten seconds of extraction, no file named.
+
+**Build D**, 2026-09-17 22:39:33 → 22:42:38:
+
+```
+PackageKit: Extracting .../Essentials.pkg ...                         22:39:33
+PackageKit: Got copier error 2 extracting to path
+            ./System/Library/LinguisticData/zh/lm.dat: No such file    22:42:38
+PackageKit: Install Failed ... "FinishStreamCompressorQueue error (-1)"
+    offset=13899638
+```
+
+**Three minutes and five seconds**, and this one names where it was. Find
+that path in Apple's own payload — decompress the bzip2 stream and look:
+
+| | |
+|---|---|
+| cpio-stream offset of `LinguisticData/zh/lm.dat` | 3,913,347,947 (3.64 GiB) |
+| position in the compressed payload | 61.7% |
+| byte offset in `Essentials.pkg` | about 1,989,000,000 |
+
+Build D's stream broke about **1.99 GB** into the package. Build B's broke
+after ten seconds of an extraction that took D 185 seconds to get 61.7%
+through — call it three percent, about **110 MB** in.
+
+**Two failures, roughly 1.9 GB apart in the same file, both reporting
+`offset=13899638`.** There is no clearer demonstration that the number is a
+constant of the package and not a measurement, and no clearer
+demonstration that the corruption is in a *different place every time*.
+
+That rules out the whole class of hypotheses the offset invited: a
+boundary, an extent edge, a size limit, a write path that changes
+strategy. A fault that lands 110 MB into one file and 1.99 GB into the
+next copy of it is not a code path being taken; it is an event happening
+somewhere.
+
+**And it means the observed failure rate understates the event rate.**
+`Essentials.pkg` is 3.2 GB of 6.4 GB of content, so an event landing
+uniformly in the media's data is noticed about half the time and is
+silent the other half — landing in a font, a framework resource, an icon,
+where nothing ever checks. Three noticed failures in six builds is
+consistent with something like one corrupting event per build, half of
+them invisible. Which is why the experiment below checks **every file on
+the media** against Apple's reference, not just the sixteen packages: it
+is about twice as sensitive as the thing that found the bug.
