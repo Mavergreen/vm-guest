@@ -214,8 +214,19 @@ fi
 priv_key=${ssh_key%.pub}
 [ -f "$priv_key" ] || die "no private key at $priv_key"
 
-# 10.9's sshd offers only ssh-rsa and ssh-dss host keys, which a modern
-# client refuses outright. See the same comment in image/build-image.sh.
+# KEPT HERE, UNLIKE IN image/build-image.sh, AND FOR A REASON.
+#
+# Since the guest carries the family's own OpenSSH (image/fetch-openssh.sh,
+# default on), build-image.sh connects with no algorithm overrides at all:
+# the workaround was deleted along with the defect. This script cannot do
+# that. It compares two images it did not build, either of which may have
+# been built --no-openssh and really be running OpenSSH 6.2 -- and it has
+# no argument that says which. The options below are additive (+), so a
+# modern sshd is unaffected by them; a stock 10.9 one is unreachable
+# without them.
+#
+# If this ever grows a "which image is this" question, read the manifest's
+# `openssh` field rather than guessing.
 ssh_legacy_opts=(-o 'HostKeyAlgorithms=+ssh-rsa,ssh-dss')
 if ssh -o PubkeyAcceptedAlgorithms=+ssh-rsa -G localhost >/dev/null 2>&1; then
     ssh_legacy_opts+=(-o PubkeyAcceptedAlgorithms=+ssh-rsa)

@@ -47,6 +47,7 @@ esd|Fetch Apple's InstallESD.dmg, SHA-256 verified (media/fetch-installesd.sh)
 opencore|Build OpenCore from pinned source (boot/build-opencore.sh)
 ovmf|Build the guest's UEFI firmware from the same tree (boot/build-ovmf.sh)
 efi|Assemble the OpenCore EFI image (boot/build-efi-image.sh)
+openssh|Fetch the guest's own OpenSSH, pinned and verified (image/fetch-openssh.sh)
 payload|Build the first-boot payload package (image/payload/build-firstboot-pkg.sh)
 media|Build installer media with the unattended hooks and the payload
 target|Create the blank target disk and this VM's own EFI variable store
@@ -66,10 +67,13 @@ ovmf|sha256 of the guest firmware (OVMF_CODE.fd)
 config|sha256 of boot/config/config.plist
 payload|sha256 of the first-boot payload package
 sshkey|fingerprint of the public key authorized in the image
+openssh|the ModernMavericks/openssh release the guest got, or none
 updates|which post-10.9.5 updates the image carries
 accel|accelerator, machine, cpu, memory and disk size
 qemu|the QEMU this was built with
-image|sha256 and size of the qcow2 produced"
+image|sha256 and size of the qcow2 produced
+ingredients|digest over every pin this repo controls (bin/ingredient-fingerprint.sh)
+ingredient.*|each of those pins, one line each, so a diff names what moved"
 
 # --- defaults --------------------------------------------------------------
 
@@ -90,6 +94,15 @@ ssh_user=mavsuser
 # one value implemented, rather than the absence of a switch.
 updates=none
 UPDATES_CHOICES="none"
+# THE GUEST'S OWN OPENSSH, ON BY DEFAULT.
+#
+# Goal #1 is a guest that is usable for development work, and SSH is the
+# entire interface to it. A stock 10.9 guest answers on OpenSSH 6.2p2,
+# which cannot read an Ed25519 authorized_keys line and offers only host
+# keys a 2026 client refuses -- so the default has to be the one where the
+# thing works when you try it. --no-openssh still builds the stock image,
+# and the manifest says which you got.
+openssh=1
 describe=0
 dry_run=0
 force=0
@@ -117,6 +130,10 @@ usage: $(basename "$0") [options]
   --generate-ssh-key   If no key is found, create one under
                        \$MQG_IMAGE_DIR/keys. Opt-in: this pipeline does not
                        invent secrets unless asked.
+  --openssh            Install the family's OpenSSH in the guest (default)
+  --no-openssh         Leave the guest on stock OpenSSH 6.2. An Ed25519 key
+                       is then refused at build time, and reaching the guest
+                       needs a client that still speaks ssh-rsa.
   --updates WHICH      Post-10.9.5 updates to include ($UPDATES_CHOICES)
   --from STAGE         Start at this stage, skipping earlier ones
   --stage STAGE        Run only this stage
@@ -154,6 +171,8 @@ while [ $# -gt 0 ]; do
         --ssh-key) ssh_key=$2; shift ;;
         --ssh-user) ssh_user=$2; shift ;;
         --generate-ssh-key) generate_key=1 ;;
+        --openssh) openssh=1 ;;
+        --no-openssh) openssh=0 ;;
         --updates) updates=$2; shift ;;
         --from) from_stage=$2; shift ;;
         --stage) only_stage=$2; shift ;;
@@ -287,6 +306,7 @@ image pipeline
   target disk         $disk_gb GB
   qemu                $qemu_bin
   ssh                 localhost:$ssh_port -> guest 22, user $ssh_user
+  openssh             $([ "$openssh" -eq 1 ] && cat "$MQG_REPO_ROOT/components/openssh/version" || echo "none (stock OpenSSH 6.2)")
   --updates           $updates (choices: $UPDATES_CHOICES)
                       docs/open-questions.md Q1 is not answered here; the
                       switch is what keeps it answerable.
@@ -457,9 +477,60 @@ resolve_ssh_key() {
     log "authorizing $ssh_key"
 }
 
+# The guest's OpenSSH packages, once fetched. Empty when --no-openssh, and
+# also on a resumed run that skips this stage -- which is why the payload
+# and media stages ask for them again rather than assuming.
+openssh_tag=
+openssh_base_pkg=
+openssh_replace_pkg=
+
+resolve_openssh() {
+    [ "$openssh" -eq 1 ] || return 0
+    [ -z "$openssh_base_pkg" ] || return 0
+    openssh_tag=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' \
+        "$MQG_REPO_ROOT/components/openssh/version" | grep -v '^$' | head -1)
+    # `while read` rather than `mapfile`, which is bash 4 -- see
+    # bin/bash32-check.sh.
+    local line paths=()
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        paths+=("$line")
+    done < <("$MQG_REPO_ROOT/image/fetch-openssh.sh")
+    [ "${#paths[@]}" -eq 2 ] \
+        || die "image/fetch-openssh.sh did not name two packages"
+    openssh_base_pkg=${paths[0]}
+    openssh_replace_pkg=${paths[1]}
+}
+
+stage_openssh() {
+    if [ "$openssh" -eq 0 ]; then
+        log "--no-openssh: the guest keeps its stock OpenSSH 6.2"
+        return 0
+    fi
+    resolve_openssh
+    log "guest OpenSSH $openssh_tag: $(basename "$openssh_base_pkg")," \
+        "$(basename "$openssh_replace_pkg")"
+}
+
+# openssh_args <--openssh-pkg|--extra-pkg> -- one flag per package, or
+# nothing at all when the image is a stock one.
+openssh_args() {
+    [ "$openssh" -eq 1 ] || return 0
+    resolve_openssh
+    printf '%s\n' "$1" "$openssh_base_pkg" "$1" "$openssh_replace_pkg"
+}
+
 stage_payload() {
+    local arg
+    local -a extra=()
+    while IFS= read -r arg; do
+        [ -n "$arg" ] || continue
+        extra+=("$arg")
+    done < <(openssh_args --openssh-pkg)
+    [ "$openssh" -eq 0 ] || extra+=(--openssh-tag "$openssh_tag")
     "$MQG_REPO_ROOT/image/payload/build-firstboot-pkg.sh" \
-        --ssh-key "$ssh_key" --out "$payload_pkg" >/dev/null
+        --ssh-key "$ssh_key" --out "$payload_pkg" \
+        ${extra[@]+"${extra[@]}"} >/dev/null
 }
 
 stage_media() {
@@ -467,8 +538,14 @@ stage_media() {
         log "installer media is already here ($(stat -c %s "$media_img") bytes)"
         return 0
     fi
+    local arg
+    local -a extra=()
+    while IFS= read -r arg; do
+        [ -n "$arg" ] || continue
+        extra+=("$arg")
+    done < <(openssh_args --extra-pkg)
     "$MQG_REPO_ROOT/media/build-installer-img.sh" --force --autoinstall \
-        --firstboot-pkg "$payload_pkg" >/dev/null
+        --firstboot-pkg "$payload_pkg" ${extra[@]+"${extra[@]}"} >/dev/null
 }
 
 stage_target() {
@@ -611,36 +688,83 @@ stage_install() {
     fi
     log "  (install is ~15 min; first boot and the payload add a few more)"
     boot_vm with-media "$install_timeout"
+    wait_for_firstboot
     date -u +%Y-%m-%dT%H:%M:%SZ > "$installed_stamp"
 }
 
-# A 2026 OpenSSH client will not talk to a 2013 OpenSSH server without
-# being told to. 10.9's sshd offers ssh-rsa and ssh-dss host keys, both of
-# which a modern client refuses outright:
+# SSH ANSWERING IS NOT THE SAME AS THE FIRST BOOT BEING FINISHED.
+#
+# firstboot.sh turns Remote Login on part-way through. After that come the
+# sleep settings, the hostname, auto-login, and only then the .done marker
+# and the removal of its own LaunchDaemon. So there has always been a
+# window in which the guest is reachable and not yet finished.
+#
+# The window used to be accidentally wide enough not to matter: Apple's
+# /usr/libexec/sshd-keygen-wrapper generates three host keys on the FIRST
+# connection, which takes several seconds, and firstboot always won the
+# race. Once the guest started installing the family's OpenSSH -- whose
+# wrapper we write, and whose host keys firstboot generates up front --
+# the first connection became instant and the window closed to about one
+# second. The verify stage promptly reported "the first-boot LaunchDaemon
+# did not remove itself" about an image where it removed itself a second
+# later. A race that was being won by an accident is a race, and finding
+# it this way is the whole argument for running the pipeline rather than
+# reasoning about it.
+#
+# Bounded and non-fatal. An image whose payload never finishes is a real
+# failure, but it is one for the verify stage to report with the log in
+# hand, not one to hang the build on.
+wait_for_firstboot() {
+    local waited=0 limit=${MQG_FIRSTBOOT_WAIT:-300}
+    while [ "$waited" -lt "$limit" ]; do
+        if ssh_guest test -e /private/var/db/.mqg-firstboot/.done \
+            >/dev/null 2>&1; then
+            log "the first-boot payload finished after ${waited}s"
+            return 0
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+    warn "the first-boot payload has not finished after ${limit}s;" \
+        "carrying on, so the verify stage can say what state it is in"
+    return 0
+}
+
+# A DEFAULT IMAGE NEEDS NO LEGACY SSH OPTIONS, AND A STOCK ONE STILL DOES.
+#
+# Until the guest carried its own OpenSSH, every connection here had to
+# re-enable algorithms a 2026 client retired: 10.9's sshd offers ssh-rsa
+# and ssh-dss host keys and a modern client refuses both outright --
 #
 #   Unable to negotiate with 127.0.0.1 port 2222: no matching host key type
 #   found. Their offer: ssh-rsa,ssh-dss
 #
-# HostKeyAlgorithms=+... re-enables them. PubkeyAcceptedAlgorithms does the
-# same for the client's own RSA key, which a modern client would otherwise
-# only offer with an rsa-sha2 signature the guest cannot verify. That option
-# was called PubkeyAcceptedKeyTypes before OpenSSH 8.5, and an unknown -o is
-# fatal, so ask this ssh which one it has -- `ssh -G` parses the config and
-# connects to nothing.
+# -- and it would only offer its own RSA key with an rsa-sha2 signature
+# that OpenSSH 6.2 cannot verify. The guest's OpenSSH removes both, so the
+# default path connects with nothing special, which is the point: the
+# workaround is not kept beside its fix.
+#
+# --no-openssh is the one shape that still needs it, because that image
+# really is running OpenSSH 6.2. PubkeyAcceptedAlgorithms was called
+# PubkeyAcceptedKeyTypes before OpenSSH 8.5 and an unknown -o is fatal, so
+# ask this ssh which one it has -- `ssh -G` parses the config and connects
+# to nothing.
 ssh_opts() {
     printf '%s\n' \
         -o BatchMode=yes \
         -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR \
-        -o ConnectTimeout=10 \
-        -o HostKeyAlgorithms=+ssh-rsa,ssh-dss
-    if ssh -o PubkeyAcceptedAlgorithms=+ssh-rsa -G localhost >/dev/null 2>&1
-    then
-        printf '%s\n' -o PubkeyAcceptedAlgorithms=+ssh-rsa
-    elif ssh -o PubkeyAcceptedKeyTypes=+ssh-rsa -G localhost >/dev/null 2>&1
-    then
-        printf '%s\n' -o PubkeyAcceptedKeyTypes=+ssh-rsa
+        -o ConnectTimeout=10
+    if [ "$openssh" -eq 0 ]; then
+        printf '%s\n' -o HostKeyAlgorithms=+ssh-rsa,ssh-dss
+        if ssh -o PubkeyAcceptedAlgorithms=+ssh-rsa -G localhost \
+               >/dev/null 2>&1; then
+            printf '%s\n' -o PubkeyAcceptedAlgorithms=+ssh-rsa
+        elif ssh -o PubkeyAcceptedKeyTypes=+ssh-rsa -G localhost \
+               >/dev/null 2>&1; then
+            printf '%s\n' -o PubkeyAcceptedKeyTypes=+ssh-rsa
+        fi
     fi
     printf '%s\n' -p "$ssh_port"
 }
@@ -686,6 +810,8 @@ stage_verify() {
         echo "id=$(id)"
         echo "hw=$(sysctl -n hw.model) $(sysctl -n hw.ncpu)cpu $(sysctl -n hw.memsize)"
         echo "sshd=$(launchctl list | grep -c com.openssh.sshd) job(s)"
+        echo "ssh=$(ssh -V 2>&1)"
+        echo "hostkeys=$(ls /usr/local/etc/ssh_host_*_key /etc/ssh_host_*_key 2>/dev/null | xargs -n1 basename | xargs echo)"
         echo "setupdone=$([ -e /var/db/.AppleSetupDone ] && echo yes || echo no)"
         echo "firstboot-daemon=$([ -e /Library/LaunchDaemons/com.mqg.firstboot.plist ] && echo STILL-THERE || echo removed)"
         echo "firstboot-ran=$(cat /private/var/db/.mqg-firstboot/.done 2>&1)"
@@ -747,12 +873,27 @@ stage_manifest() {
         if [ -n "$ssh_key" ] && [ -f "$ssh_key" ]; then
             printf 'sshkey\t%s\n' "$(ssh-keygen -lf "$ssh_key" | awk '{print $2, $4}')"
         fi
+        printf 'openssh\t%s\n' \
+            "$([ "$openssh" -eq 1 ] && echo "${openssh_tag:-$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$MQG_REPO_ROOT/components/openssh/version" | grep -v '^$' | head -1)}" || echo none)"
         printf 'updates\t%s\n' "$updates"
         printf 'accel\t%s machine=%s cpu=%s ram=%s smp=%s disk=%sG\n' \
             "$accel" "$machine" "$cpu" "$ram" "$smp" "$disk_gb"
         printf 'qemu\t%s\n' "$("$qemu_bin" --version | head -1)"
         printf 'image\t%s %s bytes\n' \
             "$(sha256_file "$out_qcow2")" "$(stat -c %s "$out_qcow2")"
+        # EVERY PIN, ONE LINE EACH, AND A DIGEST OVER THE LOT.
+        #
+        # We ship a recipe, not an artifact, so an ingredient bump cannot
+        # obsolete anything published -- it silently invalidates the golden
+        # images already on disk instead. These lines are what makes that
+        # visible: bin/image-staleness.sh compares them against the
+        # checkout, and image/compare-images.sh's manifest diff names the
+        # ingredient that differs between two images for free. See
+        # INGREDIENTS.md.
+        printf 'ingredients\t%s\n' \
+            "$("$MQG_REPO_ROOT/bin/ingredient-fingerprint.sh")"
+        "$MQG_REPO_ROOT/bin/ingredient-fingerprint.sh" --list \
+            | sed 's/^/ingredient./' 
     } > "$manifest"
     log "wrote $manifest"
     sed 's/^/    /' "$manifest" >&2
@@ -790,6 +931,7 @@ run_stage esd stage_esd
 run_stage opencore stage_opencore
 run_stage ovmf stage_ovmf
 run_stage efi stage_efi
+run_stage openssh stage_openssh
 run_stage payload stage_payload
 run_stage media stage_media
 run_stage target stage_target
