@@ -3947,3 +3947,59 @@ writer — a cheap first move would be for it to mount read-only.
 Consistent with the Task 34 entry above, which was being written in another
 session at the same time this was hit.
 
+
+### The experiment the margin theory deserved: ten builds at 128 MiB
+
+The cheap decisive test, run on an idle host, one build at a time.
+
+**Configuration: the failing era's, exactly.** `MQG_MEDIA_MARGIN_MIB=128`,
+`--autoinstall`, which gives a 6375 MiB partition inside a 6,686,769,152-byte
+image — the same number `d-install.log` reports as `disk1` — and leaves
+117,092,352 bytes free on the finished volume against the **117,112,832**
+the P4 notes recorded. Nothing in the write path had changed since.
+
+**Verification: about twice as sensitive as the thing that found the bug.**
+The build's own check looks at sixteen packages. Each of these was checked
+again afterwards by a reader that mounts nothing, comparing **every file on
+the media** against a manifest of the Mac-produced `InstallMavericks.iso`.
+
+| run | build | mismatched files | common paths compared |
+|---|---|---|---|
+| 1 | ok, 80 s | 0 | 40,192 |
+| 2 | ok, 78 s | 0 | 40,192 |
+| 3 | ok, 80 s | 0 | 40,192 |
+| 4 | **failed, 50 s** | 0 | 40,192 |
+| 5 | ok, 77 s | 0 | 40,192 |
+| 6 | ok, 76 s | 0 | 40,192 |
+| 7 | ok, 74 s | 0 | 40,192 |
+| 8 | ok, 76 s | 0 | 40,192 |
+| 9 | ok, 86 s | 0 | 40,192 |
+| 10 | ok, 88 s | 0 | 40,192 |
+
+**401,920 file comparisons, zero mismatches.** `Essentials.pkg` came out
+`a0609f3d…` — Apple's own bytes — ten times out of ten, in a single extent
+every time.
+
+**The 128 MiB margin does not reproduce the fault.** At the observed 3-in-6
+rate, ten clean builds is a probability of about one in a thousand; even at
+a generous 1-in-4 it is about one in eighteen. Whatever corrupted that
+media in P4, the media build is not doing it, and the margin was never the
+thing holding it off. Hypothesis 4 in the register above is dead by
+experiment as well as by arithmetic.
+
+**Run 4's failure was not corruption**, and is worth its own line because it
+is exactly the kind of thing that gets mistaken for one. The media it built
+compares clean; what failed was the verification's own mount:
+
+```
+mqg: error: loop-setup failed for .../installer-linux.img:
+  Error creating loop device: Failed to associate the /dev/loop0 device
+  with the file descriptor: Device or resource busy
+```
+
+A udisks loop-setup race, one build in ten, immediately after the privops
+microVM released the same file. `lib/hfs.sh` already retries and settles
+around udisks' asynchrony elsewhere; this path does not, and a build that
+produced perfect media reported failure. Recorded rather than fixed here —
+it is a separate defect from the one this task was about, and fixing it
+inside a diagnosis is how the margin got believed in the first place.
