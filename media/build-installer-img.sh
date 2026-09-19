@@ -70,7 +70,10 @@ REFERENCE_PARTITION_BYTES=6550020096
 # get wrong. The margin costs nothing -- the image is sparse and this is a
 # QEMU disk, not a USB stick someone has to buy -- and the verification
 # added beside it is what actually catches the fault either way.
-MARGIN_MIB=512
+# Overridable so that the margin can be varied experimentally without
+# editing this file -- the 128-vs-512 comparison is how the guess above
+# gets tested rather than believed.
+MARGIN_MIB=${MQG_MEDIA_MARGIN_MIB:-512}
 PART_MIB=$(( (REFERENCE_PARTITION_BYTES + 1048575) / 1048576 + MARGIN_MIB ))
 
 VOLUME_NAME="OS X Base System"
