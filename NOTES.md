@@ -3076,3 +3076,126 @@ being explicit that it is also a weaker guarantee: `decisions/0006` claims
 directory cloned five minutes earlier that had never had anything built in
 it. That is the check that catches "this working copy accumulated
 something", and it did not fire.
+
+---
+
+## 2026-09-19 — P4 — bash 3.2 floor, and a lint to hold it
+
+### Why, and what the rule is *not*
+
+Stock OS X 10.9 ships `/bin/bash` 3.2.57 — the last GPLv2 release, frozen by
+Apple in 2007. The sibling project `mavericks-hypervisor` will back-port
+Hypervisor.framework to 10.9 so modern QEMU gets HVF acceleration there, and
+the obvious next thing anyone will want is to run *this* project's host-side
+CLI on a Mavericks host, to build and run a Mavericks guest. That option costs
+about fifteen lines today and a great deal more after a year of accumulated
+bash 4 habits.
+
+Worth stating plainly, because a future reader will otherwise either
+over-apply this or delete it: **the floor is not "we only support bash 3.2".**
+Every shebang here is `#!/usr/bin/env bash`, so a pkgsrc or Homebrew bash 5
+earlier in `PATH` satisfies every script regardless of what is in `/bin`. The
+rule binds against exactly one thing — *what Apple shipped* — and says a 10.9
+user who has not installed a newer bash can still run these scripts. It has
+nothing to say about anything but shell syntax.
+
+### What changed
+
+- **`mapfile` → `while IFS= read -r` fed by `< <(...)`**, the idiom already in
+  `bin/tier-check.sh`, including its skip of empty lines. Every generator fed
+  to one of these (`profile_expand`, `qemu_args`, `ssh_opts`, `artifact_names`,
+  `_nvram_env`, `--show-pins | cut`) was checked first: none emits a blank
+  line, so the skip is semantically inert and only prevents a stray blank from
+  becoming an empty QEMU argument.
+- **`declare -A SUB_TARBALL` → parallel arrays plus a linear `sub_tarball`
+  lookup** in `boot/build-opencore.sh`. A dozen entries looked up a dozen times
+  does not need a hash. Parallel arrays rather than a packed `name<TAB>path`
+  string because the values are filesystem paths, and packing makes the
+  delimiter one more character that must never appear in one. `show_pins()`
+  right above dedupes the same list with a `seen` string and a `case`; that is
+  the right shape when the answer is yes-or-no, but here the value is wanted
+  back.
+- **`bin/bash32-check.sh`**, wired into `bin/run-tests.sh` beside `tier-check`.
+  Mandatory, not optional: it needs nothing installed, and it fails the suite
+  rather than warning.
+
+### Three surprises
+
+**1. The survey was one short, and it was the test runner.** `bin/run-tests.sh`
+used `mapfile` to collect its own shellcheck file list. Fifteen uses, not
+fourteen. Worth the habit of re-grepping a handed-over list.
+
+**2. The real bash 3.2 break was not on the list at all.** Before bash 4.4,
+expanding an **empty** array under `set -u` — `"${arr[@]}"` — is an "unbound
+variable" error rather than nothing. Every script here runs `set -euo
+pipefail`. Three sites would have aborted on stock 10.9 bash:
+`tier-check.sh`'s `names` with no profiles (it would have died *instead of*
+reaching its own "nothing was checked" warning), `build-image.sh`'s `idopt`
+with no ssh key, `build-installer-img.sh`'s `excludes` when every file was
+readable. All three now use `${arr[@]+"${arr[@]}"}`. `boot/prereqs.sh` already
+had `${missing_pkgs[*]-}`, so somebody has met this before and the lesson did
+not travel. No textual check can tell which arrays can be empty, so
+`bash32-check.sh` documents this as a limit instead of pretending to catch it.
+
+**3. A lint for bash-4 syntax cannot avoid containing bash-4 syntax.** The
+pattern table has to spell out the words it looks for, and the test file has to
+spell out every construct it expects to be caught. Both would be the first
+thing the check reported. Solved with a `bash32-allow` inline marker plus
+skipping comment lines outright — the latter also keeps the comments explaining
+*why* a file stopped using `mapfile` from holding the check red forever. In the
+test file the marker has to sit on the `.bats` line and not inside the fixture
+text, or the check would skip the fixture and the test would pass for the wrong
+reason; that is why fixtures are built one line at a time through `_line`
+rather than with a heredoc.
+
+A fourth, smaller one: a comment whose first word is shellcheck's own name is
+parsed as a directive, so a sentence *about* shellcheck fails the file with
+SC1073.
+
+### Why not shellcheck
+
+Tried first. As of 0.9 there is no bash-version floor to express: `--shell`
+selects a dialect (`sh`, `bash`, `dash`, `ksh`), not a version, and the SC3xxx
+portability checks are all-or-nothing against `sh` — turning them on would
+reject the bash 3.2 features this project does use and rightly wants. Hence a
+grep-shaped check in the spirit of `bin/tier-check.sh`.
+
+It matches **in-process** with `[[ =~ ]]` — no grep, no pipe — for the reason
+`bin/tier-check.sh:57-64` records at length: `grep -q` exits the moment it
+matches, SIGPIPEs the still-writing producer, and under `set -o pipefail` the
+pipeline reports 141, so the `if` takes the *false* branch **because** the
+match succeeded. That made an earlier gate fail open exactly when it found a
+violation, and only for inputs long enough that the writer had not finished.
+The test "bash32-check reports a violation late in a long file" (2000 lines of
+filler, then `declare -A`) is what would catch that regression here.
+
+### Proving the gate fires
+
+A gate nobody has seen fire is a gate nobody knows works. All fifteen patterns
+were exercised against a fixture; `tests/bash32.bats` keeps fourteen of those
+checks. Then the whole thing end to end:
+
+```
+$ printf 'declare -A regression=()\n' >> vm/run.sh
+$ ./bin/run-tests.sh >/dev/null 2>&1; echo $?
+1
+$ ./bin/bash32-check.sh
+BASH4  vm/run.sh:69: bash 4.0 associative array: use parallel arrays plus a lookup, or a `case`
+mqg: error: the lines above use bash features newer than 3.2 ...
+$ git checkout vm/run.sh && ./bin/run-tests.sh >/dev/null 2>&1; echo $?
+0
+```
+
+It fails the **suite**, not just the script — which was the requirement.
+
+`./bin/run-tests.sh`: **277 tests** (263 + 14), shellcheck clean,
+`tier-check --strict` clean, `bash32-check` clean over 51 shell files, exit 0.
+The check adds about 2 s to the run; it tests each line against one combined
+alternation first and only falls through to the fifteen individual patterns on
+a line that matches, which took it from 4.3 s to 2.2 s.
+
+### Still open
+
+Nothing here was *run* under a real bash 3.2 — none was available on this host.
+The check is textual and the reasoning is from the bash CHANGES file. A genuine
+3.2 smoke test belongs on the first 10.9 host that exists.
