@@ -3548,3 +3548,41 @@ would fail loudly. udisks opens a backing file read-write to set up a loop
 device at all — `Error opening (rw) file ...: Permission denied` — so a
 read-only media file cannot be mounted by our own `content-digest.sh` or by
 the build's own verification. The guard would have cost more than it bought.
+
+### A correction to the paragraph above, before anyone builds on it
+
+The build-D timeline does not close, and saying so is worth more than the
+tidier story.
+
+`inject.sh` ends by running the privops microVM, which opens
+`installer-linux.img` **read-write under QEMU**. QEMU takes an image lock
+when it does that — this very project has the evidence, in `verify.log`,
+of QEMU refusing to start because another process held one. So if a macOS
+guest really had that same file open read-write at 22:39:2x, the microVM
+in `inject4.log` should have failed with exactly that error. It did not;
+the log shows it mounting `/dev/vda1` and chowning the volume normally.
+
+Either the guest whose log is `d-install.log` did not have that file
+attached at that moment, or something about the locking was different. The
+surviving evidence cannot say which, and there is no VM left to ask.
+
+So the honest statement is narrower than the paragraph above:
+
+- **Certain**: in that era the media image was routinely used by more than
+  one thing. `inject.sh` loop-mounted it and chowned every inode on it
+  outside any build. `mark.sh` existed to force the volume header clean so
+  that the host could mount read-write media a guest had left dirty — that
+  is, to defeat the one safeguard the kernel offers against exactly this
+  (`inject2.log` is the run where the safeguard fired: every `cp` failed
+  with "Read-only file system"). An orphaned builder was caught rsyncing
+  into an image a newer build had started. QEMU refused a write lock once,
+  a minute after build B failed. Two macOS guests booted 3 minutes apart
+  in the window around build D's failure.
+- **Not certain**: which of those was acting on which build's media, at
+  which second.
+
+The conclusion rests on the pattern and on the two independent signatures —
+corruption in a different place each time, and a read-back through the
+writing mount passing on media a later mount found corrupt. It does not
+rest on the 22:39:35 coincidence, which is suggestive and does not
+reconcile with QEMU's locking.
