@@ -99,6 +99,30 @@ entirely (`-accel nvmm`). Would test the deepest assumption: that
 Less exotic than it sounds, because the accelerator is already a parameter
 in this design — P6 runs the same image pipeline under TCG.
 
+### Mavericks itself, under `mavericks-hypervisor` — the recursive case
+
+The sibling project `mavericks-hypervisor` back-ports
+Hypervisor.framework to 10.9, so that modern QEMU gets hardware
+acceleration *on* Mavericks. When it ships, this host becomes available:
+**Mavericks hosting Mavericks.**
+
+It is the strongest host on this page, for a reason none of the others
+can match. Every other host varies one thing — the CPU, the distribution,
+the accelerator. This one varies the *era*: a 2013 operating system
+running the host-side tool, with `bash` 3.2, Apple's own `hdiutil` in
+place of our Linux HFS+ path, and `privops`' `macos-native` backend
+instead of the QEMU microVM. A tool that runs there runs anywhere.
+
+| Ledger | Claim | What this host tests |
+|---|---|---|
+| **G1** | The host-side tool needs a modern shell | Falsified by construction if it runs here. 10.9 ships `bash` 3.2; see `decisions/0007`. |
+| — | `lib/privops.sh`'s backend seam is real | The `macos-native` backend has never been exercised. Here it is the *only* option — no KVM microVM to fall back to. |
+| — | `boot/prereqs.sh` names Debian packages | Needs a pkgsrc mapping, or to stop naming packages at all — the same gap the EndeavourOS host exposes, from the opposite direction. |
+
+The dependency points one way: we emit, it runs. Nothing here depends on
+`mavericks-hypervisor` existing, and this host stays aspirational until
+it does.
+
 ## Suggested order, if this is ever run
 
 1. **MacBook Air 2015 / EndeavourOS** first. Cheapest useful signal: a
