@@ -183,3 +183,21 @@ setup() {
     run bash -c "'$BUILD' --dry-run | tr ' ' '\n' | grep 'id=target'"
     [[ "$output" != *"snapshot=on"* ]]
 }
+
+@test "a stage that needs the OpenSSH tag resolves it in its own shell" {
+    # `--stage payload` on its own used to die with "--openssh-pkg needs
+    # --openssh-tag". openssh_args runs inside `< <(...)`, a subshell, so
+    # everything resolve_openssh set there was discarded on exit; a full
+    # run only worked because stage_openssh had already resolved it in the
+    # parent. Every stage that reads openssh_tag must resolve it itself.
+    #
+    # Checked by reading the script rather than by running the stage: the
+    # stage builds a package, and a unit test should not need Apple's
+    # installer media on disk to prove a scoping bug is fixed.
+    run awk '/^stage_payload\(\)/, /^}/' "$BUILD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"resolve_openssh"* ]]
+    run awk '/^stage_media\(\)/, /^}/' "$BUILD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"resolve_openssh"* ]]
+}

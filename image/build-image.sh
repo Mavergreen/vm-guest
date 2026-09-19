@@ -523,6 +523,15 @@ openssh_args() {
 stage_payload() {
     local arg
     local -a extra=()
+    # Called here, in this shell, and not left to openssh_args below.
+    # openssh_args runs inside `< <(...)`, which is a subshell, so every
+    # variable resolve_openssh sets there -- openssh_tag included -- is
+    # discarded when it exits. In a full run that went unnoticed because
+    # stage_openssh had already resolved them in this shell; `--stage
+    # payload` on its own died with "--openssh-pkg needs --openssh-tag"
+    # about a tag that had been fetched twice and thrown away both times.
+    # Found by bin/triangulate.sh, which runs one stage per process.
+    resolve_openssh
     while IFS= read -r arg; do
         [ -n "$arg" ] || continue
         extra+=("$arg")
@@ -540,6 +549,9 @@ stage_media() {
     fi
     local arg
     local -a extra=()
+    # Same reason as stage_payload: openssh_args resolves inside a
+    # subshell, so this stage cannot rely on it having happened.
+    resolve_openssh
     while IFS= read -r arg; do
         [ -n "$arg" ] || continue
         extra+=("$arg")
