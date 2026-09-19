@@ -3637,3 +3637,313 @@ on.
 
 Which of the two it was cannot be settled from here. Both are forms of the
 same answer: something other than the build wrote to that file.
+
+## 2026-09-19 — the guest gets the family's OpenSSH, and the repo joins the family
+
+Two jobs, and the first one made the second concrete: consume
+`ModernMavericks/openssh` the way the family's conventions say to consume a
+sibling toolchain, then wire up the rest of the checklist — `INGREDIENTS.md`,
+Renovate, `build/msc.sh`, the marketplace registration, and the gates.
+
+### The defects, and why they are gone rather than worked around
+
+P4 found both and worked around both. Stock 10.9 is OpenSSH **6.2p2**:
+Ed25519 arrived in 6.5, three months after Mavericks shipped, so a modern key
+in `authorized_keys` is a line the guest's sshd cannot parse — and the only
+symptom is `Permission denied (publickey)` from a server that is otherwise
+working perfectly. And 6.2 offers only `ssh-rsa` and `ssh-dss` host keys,
+which a 2026 client refuses outright.
+
+`ModernMavericks/openssh` had already solved this: **OpenSSH 10.5p1**, built
+for 10.9, published as two product archives per release. The sibling's README
+still says 9.9p2; the tags are right and the prose is stale, which is worth
+knowing before you read it.
+
+### How it gets installed, and the elegant path that was not taken
+
+The tempting shape is to list the OpenSSH packages in
+`OSInstall.collection` beside `mqg-firstboot.pkg` and let Apple's installer
+install them during the OS install. That is **unproven**, and two things
+argue against assuming it:
+
+* Our payload is a **payload-free script package** — `PackageInfo` and
+  `Scripts`, no `Bom`, no `Payload` — which is precisely why `mkflatpkg.py`
+  can build it on Linux. The OpenSSH packages are **real product archives**:
+  `Distribution`, an embedded component `.pkg`, `Bom`, `Payload`, pre/post
+  scripts. Whether the installer handles one of those from a collection
+  mid-install is not something the collection's documented behaviour settles.
+* Their `Distribution` declares `<allowed-os-versions min="10.9.5"/>`. Asking
+  a half-installed target volume what OS version it is is a question with no
+  good answer.
+
+So the packages ride the media (`media/build-installer-img.sh --extra-pkg`,
+**not** added to the collection), the payload's `postinstall` copies them to
+`$CONF_DIR/pkgs` on the target volume at install time — the installer hands
+it the full path of the package it is running, so `dirname "$1"` is exactly
+where they are — and `firstboot.sh` runs `installer -pkg ... -target /` on
+the booted system, where a product archive is an entirely ordinary thing to
+install.
+
+Measured on the guest: **nine seconds** for both packages.
+
+```
+13:09:08 run (900s limit): installer -verbose -pkg .../OpenSSH-10.5p1-mavericks.2.pkg -target /
+         installer: The install was successful.
+13:09:11 run (300s limit): installer -verbose -pkg .../OpenSSH-System-Replace-10.5p1-mavericks.2.pkg -target /
+         installer: The install was successful.
+13:09:17 openssh: OpenSSH_10.5p1, LibreSSL 4.3.2 is now the system ssh
+```
+
+### A defect in the sibling, found before it cost an install
+
+**The System-Replace package, installed on stock 10.9, would leave the guest
+with no working sshd at all.**
+
+Its `postinstall` symlinks `/usr/libexec/sshd-keygen-wrapper` to
+`/usr/local/libexec/sshd-keygen-wrapper`. The published 10.5p1-mavericks.2
+payload contains no such file — checked by extracting the `Payload` cpio and
+listing it; there are fourteen binaries and three config files under
+`/usr/local`, and no wrapper. And 10.9's
+`/System/Library/LaunchDaemons/ssh.plist` names that exact path as its
+`Program`:
+
+```xml
+<key>Program</key>
+<string>/usr/libexec/sshd-keygen-wrapper</string>
+<key>ProgramArguments</key>
+<array><string>/usr/sbin/sshd</string><string>-i</string></array>
+```
+
+A dangling symlink there means launchd cannot exec anything when a connection
+arrives. Read off a running 10.9 guest, not inferred.
+
+So `firstboot.sh` writes that file itself, **before** installing the
+replacement, so the symlink lands on something real. Ours also does the
+second thing a 10.9 guest needs: Apple's wrapper only ever generates
+`rsa1`/`rsa`/`dsa` keys in `/etc`, and a modern sshd reads
+`/usr/local/etc/ssh_host_{rsa,ecdsa,ed25519}_key`. Without an Ed25519 host
+key the second P4 defect would be only half fixed.
+
+That is a **compensation for a sibling defect**, and it says so where it
+lives, with its exit condition: delete `write_sshd_keygen_wrapper` when
+`ModernMavericks/openssh` ships a wrapper of its own. **The sibling should be
+fixed; it is outside this directory, so it waits for the user.**
+
+Belt and braces beside it: after the replacement, `openssh_usable()` checks
+that `/usr/local/sbin/sshd` exists, that the wrapper path resolves, and that
+`sshd -t` accepts `/usr/local/etc/sshd_config`. If any fails, `firstboot.sh`
+restores the vanilla binaries from `/var/backups/vanilla-openssh`, which the
+replacement's own `preinstall` puts there. A guest whose only interface is
+SSH must not be able to lose SSH.
+
+### What a full unattended build now reports
+
+```
+hostname=mavericks
+ssh=OpenSSH_10.5p1, LibreSSL 4.3.2
+hostkeys=ssh_host_ecdsa_key ssh_host_ed25519_key ssh_host_rsa_key
+firstboot-daemon=removed
+firstboot-ran=2026-09-19T13:47:18Z
+autologin=mavsuser
+```
+
+and `image/build-image.sh` reaches it with **no** `HostKeyAlgorithms` or
+`PubkeyAcceptedAlgorithms` overrides — `SSH answered after 20s`. Two
+independent full installs (one on the media built at 08:47, one on a media
+rebuilt at 09:45) produced the same result.
+
+**And the first defect, tested directly rather than inferred.** An Ed25519
+key generated on the host, appended to the guest's `authorized_keys`,
+authenticating with no options of any kind:
+
+```
+$ ssh -i ed25519.key -p 2299 mavsuser@localhost 'echo ED25519-LOGIN-OK; ssh -V'
+ED25519-LOGIN-OK
+OpenSSH_10.5p1, LibreSSL 4.3.2
+$ ssh-keygen -lf /usr/local/etc/ssh_host_ed25519_key.pub
+256 SHA256:ZqvhSxZtHS45w0/ib91VUrS8lvB9CNfF7Qr99FNiDkk no comment (ED25519)
+```
+
+The workaround is deleted, not kept beside its fix. It survives only for `--no-openssh`, which really is an
+OpenSSH 6.2 guest; `image/compare-images.sh` keeps it too, because it
+compares two images it did not build and has no argument saying which is
+which.
+
+The build-time Ed25519 refusal is scoped rather than deleted, for the same
+reason. `tests/payload.bats` now asserts the good behaviour and keeps the old
+assertion for the stock shape.
+
+### The race the fix uncovered
+
+The first full run came back with the guest on OpenSSH 10.5p1 — and
+`hostname=Macintosh.local`, `firstboot-daemon=STILL-THERE`, no `.done`
+marker, no auto-login. A worse result than before, apparently.
+
+It was not. The guest's own log showed `firstboot.sh` finishing normally
+**one second after** the verify stage read those values.
+
+`firstboot.sh` turns Remote Login on part-way through; the hostname,
+auto-login, the `.done` marker and the removal of its own LaunchDaemon all
+come afterwards. That window has always existed. It was masked by an
+accident: Apple's `sshd-keygen-wrapper` generates three host keys on the
+**first** connection, which takes several seconds, so `firstboot` always won
+the race. Our wrapper generates host keys up front, the first connection
+became instant, and the window closed to about a second.
+
+`stage_install` now waits for the `.done` marker — bounded at 300 s and
+non-fatal, because an image whose payload never finishes is a real failure
+but one for the verify stage to report with the log in hand, not one to hang
+the build on.
+
+**A race being won by an accident is still a race**, and no amount of reading
+the code would have found this one. It is the whole argument for running the
+pipeline rather than reasoning about it.
+
+### One self-inflicted wound worth writing down
+
+The first proof run was killed at minute six because `image/build-image.sh`
+was **edited while bash was running it**. Bash reads a script lazily and
+seeks by byte offset between commands; inserting lines near the top shifts
+every offset after it, and what runs next is whatever now sits at the saved
+position. Nothing visibly broke, and that is the problem — the result would
+have been untrustworthy. Rule: while a long build is running, that script is
+read-only.
+
+### `vendor/sources.tsv` is now wired up
+
+`decisions/0007` said the family's ingredient apparatus fits us better than
+it fits most siblings and that `vendor/sources.tsv` is already the pin file,
+simply not wired up. It is now.
+
+Renovate managers for `components/openssh/version` (with a `regex:`
+versioning that keeps the `-mavericks.N`; the default coerces it away and the
+pin then never moves again), `acidanthera/OpenCorePkg`, `Lilu` and
+`VirtualSMC`. The last two need an `autoReplaceStringTemplate` because their
+version appears **twice** in one URL, and a manager that rewrote only the
+captured occurrence would leave a half-updated URL that 404s.
+
+Six ingredients are deliberately untracked, each with its reason in
+`INGREDIENTS.md`: audk's twelve submodules (bare commits with no ref for
+`git-refs` to move), ocbuild's `efibuild.sh` (a raw URL, no tags, no
+releases), Apple's `InstallESD.dmg` (one immutable build; 10.9.5 is 10.9.5
+forever), QEMU (the host's, not ours), and the two Tier 2 reference blobs
+(nothing ships them — `tier-check --strict` is what says so).
+
+`bin/verify-changed-sources.sh` exists because of something that would
+otherwise have been strictly worse than not tracking at all: **Renovate can
+move a URL in `sources.tsv` but cannot compute the `sha256` beside it.** The
+resulting PR is internally inconsistent, nothing else in the suite downloads
+anything, so it is green — and the shared preset automerges green PRs. That
+would turn "track the ingredient" into "break the ingredient automatically".
+The check re-fetches only the lines that changed.
+
+### The stale golden image, which is our problem and not the family's
+
+Every sibling ships a built artifact, so an ingredient bump triggers a
+repackage and the published thing is never stale for long. We ship a
+**recipe**: our release contains no image, so a bump obsoletes nothing
+published.
+
+It does something quieter instead. **It silently invalidates every golden
+image already on disk.** Renovate moves the OpenCore pin and a nine-gigabyte
+golden built last week is something no commit here can reproduce. Nothing
+fails, nothing goes red, the image keeps booting, and it simply stops meaning
+what its manifest says.
+
+So the manifest carries every pin — one `ingredient.<name>` line each plus an
+`ingredients` digest — which makes `image/compare-images.sh` name the
+ingredient that differs between two images for free, and
+`bin/image-staleness.sh` answer "is this image still made of what the
+repository is made of" for one manifest. A manifest with no ingredients
+reports **"cannot be determined"**, which is deliberately not the same answer
+as "fine": conflating those is exactly how a stale golden gets trusted.
+
+Chosen over a staleness warning on `run`, which is the hot path and would be
+ignored by the third boot. `repackage-on-ingredient-bump` does not apply to
+us at all — there is no artifact to repackage — and `INGREDIENTS.md` says so
+with the reason rather than omitting it.
+
+### The check that is ours alone
+
+`bin/no-apple-bytes.sh`: **a release must contain no Apple-derived bytes.**
+It passes by construction, because the tool fetches Apple's media at runtime
+on the user's machine — which is the reason to assert it, not a reason to
+skip it. Satisfied-by-construction is precisely the condition under which a
+rule quietly stops being true; a 6 GB `.dmg` committed "just for a minute" is
+one `git add -A` away and looks like nothing in a large diff.
+
+It checks names, magic numbers (`xar!`, `H+`/`HX`, `koly`, Mach-O) and size,
+over the **tracked** tree, because a release is what `git archive` produces —
+not the working directory, where an untracked `InstallESD.dmg` beside the
+repo is how this project is meant to work. `tests/release.bats` fires it at a
+planted violation of each kind, because a check nobody has seen fail is a
+check nobody trusts.
+
+### A second landmine: the guest that finished in 17 seconds and could not be reached
+
+The third run installed, and then sat at the login window for 2640 s while
+`image/build-image.sh` polled SSH and got `Connection timed out during
+banner exchange`. It looked like `firstboot.sh` had wedged inside the
+OpenSSH step.
+
+It had not. Booting the resulting image afterwards and reading its own log:
+
+```
+13:47:02  starting on 10.9.5 build 13F34
+13:47:06  openssh: requested=1 tag=10.5p1-mavericks.2
+          installer: The install was successful.     (base)
+          installer: The install was successful.     (system-replace)
+13:47:17  openssh: OpenSSH_10.5p1, LibreSSL 4.3.2 is now the system ssh
+13:47:17  remote login: Remote Login: On
+13:47:19  done
+```
+
+**Seventeen seconds, start to finish, both packages included.** The guest
+was complete and healthy; the host could not talk to it. `ifconfig en0` in
+that guest showed link-local IPv6 and no IPv4 lease, and both QEMU logs are
+full of `Slirp: Failed to send packet, ret: -1`. A DHCP/slirp hiccup, not a
+payload failure — and the box was running another agent's multi-gigabyte
+media experiment at the time, with its own QEMU microVMs and loop devices.
+
+Worth knowing because the symptom is indistinguishable from a wedged
+payload from the outside, and the diagnosis took a disk conversion and a
+second boot. `stage_install`'s failure message could usefully say "the guest
+may be up but unreachable; boot it and read /var/log/mqg-firstboot.log" —
+that log is the thing that settles it in ten seconds.
+
+### A third data point for G20, with a different symptom
+
+Between the first full run and the second, the installer media stopped
+booting. It got as far as launchd and stopped:
+
+```
+launchctl: Dubious ownership on file (skipping): /System/Library/LaunchDaemons/com.apple.installd.plist
+...  (every daemon, ~60 lines)
+launchctl: Dubious ownership on file (skipping): /System/Library/LaunchDaemons/ssh.plist
+nothing found to load
+```
+
+The media was built at 08:47, booted and installed perfectly at 08:57, has
+an mtime of **09:11:03** — during the first run's own pipeline — and at
+09:15 no longer booted. `fix_media_ownership` had run when it was built;
+the build log says so. Rebuilding the media took 77 s (every heavy
+conversion is cached) and the next run installed normally.
+
+This is **G20 again — a second writer to installer media — but with a
+symptom worth recording separately**, because it is not data corruption.
+`udisksctl` mounts HFS+ read-write with `uid=1000,gid=1000`, and the Linux
+`hfsplus` driver writes those back into any inode it updates. Nothing on
+the volume is damaged; every file simply stops being root-owned, and
+launchd on a 10.9 installer refuses to load a plist it does not trust. A
+checksum of the media's *contents* would not notice this at all: the bytes
+are identical and only the ownership changed.
+
+Supporting measurement: a deliberate **read-only** loop mount of the same
+image, done by hand afterwards, left the mtime untouched at 09:11:03. So
+`media/content-digest.sh`, which mounts the media to compute `mediacontent`
+for the manifest and reads every file on it, is a candidate for the
+writer — a cheap first move would be for it to mount read-only.
+
+Consistent with the Task 34 entry above, which was being written in another
+session at the same time this was hit.
+
