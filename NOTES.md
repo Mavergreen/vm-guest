@@ -3586,3 +3586,48 @@ corruption in a different place each time, and a read-back through the
 writing mount passing on media a later mount found corrupt. It does not
 rest on the 22:39:35 coincidence, which is suggestive and does not
 reconcile with QEMU's locking.
+
+### Measured today: the kernel already refuses the simplest version of this
+
+Worth doing rather than assuming, and it moves the conclusion. Two loop
+devices were attached to one backing file, both partitions mounted, and
+both asked to write the same 8 MiB file:
+
+```
+writer A: /dev/loop0 -> /media/schmonz/Two Writers
+writer B: /dev/loop1 -> /media/schmonz/Two Writers1
+.../Two Writers1/payload.bin: Read-only file system
+```
+
+**The second mount comes up read-only.** Mounting an HFS+ volume clears
+`kHFSVolumeUnmountedBit`; the Linux driver mounts read-only when that bit
+is clear; so the second mounter is refused write access by the same
+mechanism that refuses media a VM has booted. Two host-side builders
+cannot both write through the Linux driver.
+
+So the "two loop devices, two page caches" story is **not** available as a
+general explanation, and the claim above that it explains the verification
+passing on corrupt media is too strong. What survives is narrower and
+sharper — the ways that protection can be got round:
+
+- **`hfs_mark_clean`, and `mark.sh` beside it.** It exists to force the
+  volume header clean so the host can mount read-write a volume something
+  else left dirty. Its own docstring says "use it on a volume nothing was
+  writing to"; in that era it was used to make `inject.sh` work on media a
+  guest had booted. That is the one tool here whose whole purpose is to
+  defeat the safeguard.
+- **A QEMU guest**, which is not the Linux driver and does not consult it.
+  In that era the media was attached `format=raw,file=...` with no
+  `snapshot=on`, so OS X mounted it read-write and wrote to it — the
+  `.Spotlight-V100` store is still on the media on disk.
+
+And it makes a simpler explanation available for the thing that started
+all this. The first verification passed and a later `7z t` failed. Rather
+than "the check read the page cache", the media may well have been
+**correct when the build finished and corrupted afterwards** — by the boot,
+or by an inject-and-mark-clean cycle in between. That fits the evidence at
+least as well, and it is the reading that `snapshot=on` (2026-09-19) acts
+on.
+
+Which of the two it was cannot be settled from here. Both are forms of the
+same answer: something other than the build wrote to that file.
