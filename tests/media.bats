@@ -185,16 +185,19 @@ setup() {
     [[ "$output" == *"installer-linux.img"* ]]
 }
 
-@test "build-installer-img.sh verifies its own copy by checksum" {
-    # A finished rsync proves nothing: one build in six produced a corrupt
-    # copy of Apple's 1.3 GB Essentials.pkg with rsync reporting success,
-    # and the install found out twelve minutes later. See NOTES.md, P4
-    # Task 8.
-    # Recorded from the ESD during the copy, checked after the volume has
-    # been unmounted and the ownership pass has run, on a FRESH mount --
-    # the first version read the page cache of the mount that had just
-    # written the file, and passed on a build whose media was corrupt.
-    run grep -c 'record_source_checksums' "$REPO/media/build-installer-img.sh"
+@test "build-installer-img.sh checks the media against Apple, not against itself" {
+    # A finished rsync proves nothing: three media builds in six produced a
+    # corrupt copy of Apple's 3.2 GB Essentials.pkg with rsync reporting
+    # success, and the install found out minutes later. See NOTES.md,
+    # Task 34.
+    #
+    # Checked after the volume has been unmounted and the ownership pass
+    # has run, on a FRESH mount -- the first version read the page cache of
+    # the mount that had just written the file, and passed on a build whose
+    # media was corrupt. And checked against media/apple-packages.sha256
+    # rather than against checksums taken from the ESD during this run,
+    # which cannot catch a conversion that was already wrong.
+    run grep -c 'check_esd_packages' "$REPO/media/build-installer-img.sh"
     [ "$output" -ge 2 ]
     run grep -c 'verify_media_packages' "$REPO/media/build-installer-img.sh"
     [ "$output" -ge 2 ]
@@ -208,6 +211,46 @@ setup() {
     [ -n "$own" ]
     [ -n "$ver" ]
     [ "$ver" -gt "$own" ]
+}
+
+@test "Apple's pinned checksums cover exactly the packages an install needs" {
+    # The two lists must not drift: REQUIRED says what has to be on the
+    # media, apple-packages.sha256 says what those files must contain.
+    pinned=$(grep -v '^#' "$REPO/media/apple-packages.sha256" \
+        | awk '{ print $2 }' | sed 's|^\./||' | LC_ALL=C sort)
+    required=$("$REPO/media/verify-installer-img.sh" --required \
+        | grep '^System/Installation/Packages/' \
+        | sed 's|^System/Installation/Packages/||' | LC_ALL=C sort)
+    [ "$pinned" = "$required" ]
+    [ "$(printf '%s\n' "$pinned" | grep -c .)" -eq 16 ]
+}
+
+@test "every pinned checksum is a sha256, in sha256sum's own format" {
+    while read -r sum name; do
+        [[ "$sum" =~ ^[0-9a-f]{64}$ ]]
+        [[ "$name" == ./* ]]
+    done < <(grep -v '^#' "$REPO/media/apple-packages.sha256")
+}
+
+@test "--check-packages names the package that is wrong" {
+    # The check that the media build now runs twice. A directory holding a
+    # file with the right NAME and the wrong CONTENT is exactly the failure
+    # that a finished rsync and matching byte counts both report as
+    # success.
+    dir="$BATS_TEST_TMPDIR/pkgs"
+    mkdir -p "$dir"
+    printf 'not what Apple shipped\n' > "$dir/Essentials.pkg"
+    run "$REPO/media/verify-installer-img.sh" --check-packages "$dir"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Essentials.pkg: FAILED"* ]]
+    [[ "$output" == *"does not hold what Apple shipped"* ]]
+}
+
+@test "--check-packages needs a directory that exists" {
+    run "$REPO/media/verify-installer-img.sh" --check-packages \
+        "$BATS_TEST_TMPDIR/nope"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no such directory"* ]]
 }
 
 @test "content-digest.sh explains itself and needs an image" {

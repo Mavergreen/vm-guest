@@ -348,7 +348,7 @@ populate_target() {
         "$tgt/System/Installation/" \
         || die "could not copy BaseSystem.dmg/chunklist"
 
-    record_source_checksums "$ESD_MNT/Packages"
+    check_esd_packages "$ESD_MNT/Packages"
 
     [ "$autoinstall" -eq 0 ] || inject_autoinstall "$tgt"
 
@@ -361,16 +361,19 @@ populate_target() {
 # NEITHER DOES READING BACK WHAT YOU JUST WROTE.
 #
 # Three media builds in six put a corrupt copy of Apple's Essentials.pkg on
-# the media -- 1.3 GB, the largest file there. rsync reported success, the
-# entry and byte counts matched, and the install got several minutes in
+# the media -- 3.2 GB, half of everything there. rsync reported success,
+# the entry and byte counts matched, and the install got several minutes in
 # before the OS X Installer stopped with
 #
 #   BOMCopierFatalError ... offset=13899638, sourcePath=.../Essentials.pkg
 #
-# twice at the SAME offset, with two different messages ("cpio read error:
-# bad file format" and "FinishStreamCompressorQueue error (-1)"). The same
-# offset twice says this is not random: the file on the media is wrong in a
-# particular place.
+# twice, with two different messages. That offset was read at the time as
+# evidence of a structural fault in one particular place. It is not: 13899638
+# is where Apple's Payload member begins inside that package (heap at
+# 28+809=837, Payload at heap offset 13898801), so the installer reports it
+# for any failure anywhere in the payload's 3.2 GB. See the Task 34 entry in
+# NOTES.md. Nothing is known about WHERE such media is wrong -- only that it
+# is, and that this is how to find out before an install does.
 #
 # THE FIRST VERSION OF THIS CHECK PASSED WHILE THE MEDIA WAS CORRUPT, and
 # that is the more useful half of the finding. It compared source to
@@ -379,39 +382,43 @@ populate_target() {
 # later mount, failed. Verification that shares a cache with the thing it
 # is verifying is not verification.
 #
-# So: record what the source is while both volumes are mounted, and check
-# the destination AFTER the volume has been unmounted and the ownership
-# pass has run, on a fresh mount, where the bytes have to come off the
-# disk. That also covers the privops microVM, which the first version did
-# not.
-record_source_checksums() {
-    local src=$1
-    log "recording the checksums of $(basename "$src") from the ESD"
-    ( cd "$src" && find . -type f -print0 | LC_ALL=C sort -z \
-        | xargs -0 -r sha256sum ) > "$work/packages.sha256" \
-        || die "cannot checksum the ESD's Packages directory"
-    log "  $(grep -c . "$work/packages.sha256") files recorded"
+# So the destination is checked AFTER the volume has been unmounted and
+# the ownership pass has run, on a fresh mount, where the bytes have to
+# come off the disk. That also covers the privops microVM, which the first
+# version did not.
+#
+# AND IT IS CHECKED AGAINST A CONSTANT, NOT AGAINST THE SOURCE. Recording
+# the source's checksums during the copy still cannot catch a source that
+# was already wrong: a bad byte out of dmg2img would be copied faithfully,
+# recorded as expected, and verified as correct. media/apple-packages.sha256
+# is what Apple shipped, read from two images that share no code path, so
+# the same check now names the conversion when the conversion is at fault
+# and the copy when the copy is.
+check_apple_packages() {
+    local where=$1 what=$2
+    log "checking $what against Apple's pinned checksums"
+    # One implementation, in the script whose job is "is this what it
+    # should be", so that the same check can be run by hand on any
+    # Packages directory.
+    "$MQG_REPO_ROOT/media/verify-installer-img.sh" --check-packages "$where"
+}
+
+check_esd_packages() {
+    check_apple_packages "$1" "the ESD's Packages, as converted and read" \
+        || die "the ESD does not contain what Apple shipped." \
+               "The suspects are dmg2img and the Linux hfsplus read of" \
+               "its output, in that order -- not the media, which has not" \
+               "been written yet, and not media/apple-packages.sha256," \
+               "whose values were read from two images that share no code."
 }
 
 verify_media_packages() {
-    local mnt=$1 bad
-    log "verifying the packages on the finished media, from a fresh mount"
-    bad=$(
-        cd "$mnt/System/Installation/Packages" \
-            || die "no Packages directory on the finished media"
-        # `|| true` on the grep, not on the subshell: sha256sum exits
-        # non-zero on a mismatch, which is the case we want to REPORT, and
-        # grep exits non-zero when everything is fine.
-        sha256sum -c "$work/packages.sha256" 2>&1 | grep -v ': OK$' || true
-    )
-    if [ -n "$bad" ]; then
-        printf '%s\n' "$bad" | sed 's/^/    /' >&2
-        die "the media does not contain what the ESD does." \
-            "This is the fault that a finished rsync, and a read-back" \
-            "through the same mount, both fail to report. Re-run with" \
-            "--force. See the P4 Task 8 entry in NOTES.md."
-    fi
-    log "  $(grep -c . "$work/packages.sha256") packages match the ESD"
+    check_apple_packages "$1/System/Installation/Packages" \
+        "the finished media, from a fresh mount" \
+        || die "the media does not contain what Apple shipped." \
+               "This is the fault that a finished rsync, and a read-back" \
+               "through the same mount, both fail to report. Re-run with" \
+               "--force. See the Task 34 entry in NOTES.md."
 }
 
 # The unattended-install hooks go on while the volume is already mounted
@@ -555,7 +562,7 @@ fix_media_ownership "$out"
 
 # On a fresh mount, after the ownership pass, so the bytes come off the
 # disk rather than out of the cache that wrote them. See the comment above
-# record_source_checksums.
+# check_esd_packages.
 hfs_with_mounted_part "$out" 1 verify_media_packages
 
 log "checksumming $out"

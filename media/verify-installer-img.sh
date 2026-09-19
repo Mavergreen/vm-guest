@@ -58,14 +58,46 @@ REQUIRED=(
     "System/Installation/Packages/X11redirect.pkg"
 )
 
+# Apple's own checksums for the sixteen files in Packages. The file's
+# header says why they are pinned rather than measured from the ESD.
+APPLE_PACKAGES=$MQG_REPO_ROOT/media/apple-packages.sha256
+
+# Check one directory of Apple's packages against that constant. The media
+# build calls this twice -- on the ESD's Packages as converted and read,
+# and on the finished media from a fresh mount -- so that a bad conversion
+# and a bad copy are told apart by which call fails.
+check_apple_packages() {
+    local where=$1 bad n
+    [ -d "$where" ] || die "no such directory: $where"
+    [ -f "$APPLE_PACKAGES" ] || die "missing $APPLE_PACKAGES"
+    n=$(grep -cv '^#' "$APPLE_PACKAGES" || true)
+    bad=$(
+        cd "$where" || exit 1
+        # `|| true` on the grep, not on the subshell: sha256sum exits
+        # non-zero on a mismatch, which is the case to REPORT, and grep
+        # exits non-zero when everything is fine.
+        sha256sum -c "$APPLE_PACKAGES" 2>&1 | grep -v ': OK$' || true
+    )
+    if [ -n "$bad" ]; then
+        printf '%s\n' "$bad" | sed 's/^/    /' >&2
+        warn "$where does not hold what Apple shipped"
+        return 1
+    fi
+    log "all $n of Apple's packages match, in $where"
+}
+
 usage() {
     cat <<EOF
 usage: $(basename "$0") [--built <img>] [--reference <img>]
        $(basename "$0") --compare-trees <a> <b>
+       $(basename "$0") --check-packages <dir>
        $(basename "$0") --required
 
   --built/--reference  Override the images to compare.
   --compare-trees      Compare two directory trees instead of two images.
+  --check-packages     Check a directory holding Apple's Packages against
+                       media/apple-packages.sha256 -- what Apple shipped,
+                       as a constant. Needs no image and no reference.
   --required           Print the files an install cannot proceed without.
 EOF
 }
@@ -75,9 +107,13 @@ built=
 reference=
 tree_a=
 tree_b=
+pkg_dir=
 while [ $# -gt 0 ]; do
     case $1 in
         --required) mode=required ;;
+        --check-packages)
+            [ $# -ge 2 ] || { usage >&2; exit 2; }
+            mode=packages; pkg_dir=$2; shift ;;
         --compare-trees)
             mode=trees
             [ $# -ge 3 ] || { usage >&2; exit 2; }
@@ -93,6 +129,12 @@ done
 if [ "$mode" = required ]; then
     printf '%s\n' "${REQUIRED[@]}"
     exit 0
+fi
+
+if [ "$mode" = packages ]; then
+    require_cmd sha256sum
+    check_apple_packages "$pkg_dir"
+    exit $?
 fi
 
 require_cmd python3
