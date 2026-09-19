@@ -3520,3 +3520,31 @@ family of explanations the offset invited.
 **The free-space margin is not the cause, and its stated reason is wrong.**
 Kept at 512 MiB anyway — it costs nothing in a sparse file and the
 experiment below is the only thing that could have made it load-bearing.
+
+### Every hypothesis, and what killed it
+
+Written down including — especially including — the ones that died, because
+the margin was believed for a year of commits on no evidence at all and the
+only way that does not happen again is if the disproofs are as findable as
+the conclusion.
+
+| # | Hypothesis | Verdict | What settled it |
+|---|---|---|---|
+| 1 | The corruption recurs at a fixed offset, so something structural is at 13,899,638 | **Dead** | 13,899,638 is where Apple's `Payload` member begins in `Essentials.pkg` (28 + 809 + 13,898,801). It is a constant of the file. Confirmed twice more: the same number is reported for two failures 1.9 GB apart, and this project's own `offset=813` is where `Scripts` begins in `mqg-firstboot.pkg` |
+| 2 | An HFS+ allocation-block or extent boundary | **Dead** | Needs a fixed offset; there isn't one. Also: `Essentials.pkg` is a **single extent** and the volume's extents-overflow B-tree is empty, so the multi-extent path is never entered |
+| 3 | A 2 GiB or 4 GiB limit, or a write path that switches strategy by size | **Dead** | Same. And the two observed breaks are at about 110 MB and about 1.99 GB into the same file |
+| 4 | Free space at write time — the 128 MiB margin | **Dead as stated** | rsync writes `Essentials.pkg` seventh of sixteen: it starts at 33.4% of the volume and ends at 83.6%, with 1.05 GiB still free at 128 MiB of margin. The volume only reaches 99% a gigabyte later, and by then the file is written. Mitigation kept anyway; it costs nothing |
+| 5 | Heavy fragmentation near ENOSPC | **Dead** | Nothing on the media has more than eight extents; the largest file has one |
+| 6 | It is the largest file *because* it is the largest — a size-dependent code path | **Dead** | It is the largest file because it is half the bytes on the media, so half of anything uniformly placed lands in it, and because its payload is one bzip2 stream, so it is the only file that notices a wrong bit |
+| 7 | The privops microVM exits without flushing | **Dead** | QEMU's default `cache=writeback` is the host page cache, which is what every later host read uses; the guest `sync`s and `umount`s first; and the post-unmount verification would fail on every build if it were true |
+| 8 | Mixed O_DIRECT and buffered access to the image file | **Dead** | `losetup -l -O DIO` reports 0 for a udisks loop device |
+| 9 | `dmg2img`, or the Linux hfsplus read of its output, hands back a bad byte | **Not observed, and no longer invisible** | The media now built matches Apple's reference on all 40,192 common paths. The old check could not have seen this; `media/apple-packages.sha256` now does, and names the conversion rather than the copy |
+| 10 | NFS, btrfs, the loop device, host memory | **Not supported** | The repo is on NFS but no image is; two surviving media images are byte-perfect against the Mac reference. A host-level fault at roughly one event per build would not spare them |
+| 11 | **Concurrent access to the image file** | **The conclusion** | Three instances in the era's own logs; corruption in a different place each time; a read-back through the writing mount passing on corrupt media, which is what two loop devices over one backing file produce |
+
+One idea tried and abandoned: making the finished media file mode 444, so
+that anything which forgot `snapshot=on` or tried to mount it read-write
+would fail loudly. udisks opens a backing file read-write to set up a loop
+device at all — `Error opening (rw) file ...: Permission denied` — so a
+read-only media file cannot be mounted by our own `content-digest.sh` or by
+the build's own verification. The guard would have cost more than it bought.
