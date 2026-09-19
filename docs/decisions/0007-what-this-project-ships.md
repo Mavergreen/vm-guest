@@ -67,37 +67,65 @@ with a 10.9.5 install floor — needing no exception from the family at all.
 
 ## Decision 2 — the sibling boundary, and the rename
 
-`mavericks-hypervisor` ships **Hypervisor.framework for 10.9**, so that
-modern QEMU can use hardware acceleration *on* Mavericks. That is
-Mavericks as a **host**. This repository is Mavericks as a **guest**,
-under HVF, KVM, NVMM, or whatever comes next.
+The sibling currently checked out as `mavericks-hypervisor` ships
+**Hypervisor.framework for 10.9** — and, likely, a prepackaged QEMU
+alongside it — so that modern QEMU can use hardware acceleration *on*
+Mavericks. That is Mavericks as a **host**. This repository is Mavericks
+as a **guest**, under HVF, KVM, NVMM, or whatever comes next.
 
 They are orthogonal, and they stay separate repositories. Folding them
 together would give one repo too many shipped products, which the family's
 release, versioning and conformance machinery assumes against.
 
-The dependency between them points one way: **we emit, it runs.**
-`mavericks-hypervisor` is a host target in `docs/test-hosts.md` and a
-consumer of `emit`'s output. Nothing here depends on it.
+The dependency between them points one way at runtime: **we emit, it
+runs.** The host project is a host target in `docs/test-hosts.md` and a
+consumer of `emit`'s output. Nothing in the shipped guest stack depends on
+it. (Decision 3 adds a *build-time* dependency in one direction only —
+running our tool on 10.9 needs a QEMU there — which is a different thing
+and does not change this one.)
 
-**Rename: `mavericks-qemu-guest` → `mavericks-guest`.**
+### The names
 
-Two reasons. `qemu-guest` names one backend, and P7's whole point is that
-the stack ports to Proxmox, libvirt, UTM, VirtualBox, Vagrant and
-containerised QEMU — so the name will be wrong precisely when the work
-succeeds. And it names the wrong side of the relationship: the pair reads
-`hypervisor` / `guest`, which makes the relationship legible without
-explanation.
+| | Local worktree | Published |
+|---|---|---|
+| Host side | `mavericks-vm-host` | `ModernMavericks/vm-host` |
+| Guest side | `mavericks-vm-guest` | `ModernMavericks/vm-guest` |
 
-Renaming is cheapest now, before a release exists or a package name has
-anyone depending on it.
+So: **`mavericks-qemu-guest` → `mavericks-vm-guest`**, publishing as
+`ModernMavericks/vm-guest`.
+
+The family's convention, confirmed against `openssh`, `golang` and
+`shipyard`, is that a local `mavericks-X` publishes as
+`ModernMavericks/X` — the organization name already carries "Mavericks",
+so the repository name does not repeat it. That rules out the obvious
+short name: `mavericks-guest` would publish as `ModernMavericks/guest`,
+which says nothing. `vm-guest` survives the trip.
+
+`qemu-guest` fails for two further reasons. It names one backend, when
+P7's whole point is that the stack ports to Proxmox, libvirt, UTM,
+VirtualBox, Vagrant and containerised QEMU — so the name would become
+wrong precisely when the work succeeded. And it names the wrong side of
+the relationship. `vm-host` / `vm-guest` reads as a pair without
+explanation, and `vm-host` is the broader word, with room for the
+prepackaged QEMU that `hypervisor` would have excluded.
+
+**Neither repository has a git remote yet.** There is no published name,
+no release and no package for anyone to depend on, so the rename costs
+nothing today and will not be free for long.
 
 ## Decision 3 — the 10.9 target, which reverses an earlier assumption
 
-Once `mavericks-hypervisor` ships, **someone will want to run the
-host-side tool on Mavericks** to build and run a Mavericks guest. So
-Product A has a 10.9 target after all, and is a proper family citizen with
-a real `.pkg` rather than the deviation it first appeared to be.
+Once `vm-host` ships, **someone will want to run the host-side tool on
+Mavericks** to build and run a Mavericks guest. So Product A has a 10.9
+target after all, and is a proper family citizen with a real `.pkg`
+rather than the deviation it first appeared to be.
+
+This names a dependency that was previously vague. Running our tool on
+10.9 needs **a QEMU on 10.9** — not merely HVF — so it depends on
+`vm-host` shipping the prepackaged QEMU, not just the framework. That is
+a build-time dependency in one direction, and it is worth stating because
+"once `vm-host` ships" is otherwise easy to read as a milestone that HVF
+alone would satisfy.
 
 This also yields the strongest integration test available — Mavericks
 hosting Mavericks — and the strongest triangulation host, since a tool
@@ -148,7 +176,7 @@ fails the gate):
 ## Consequences
 
 - **The transitional piece, with its exit condition.** Product B stays in
-  this repository for now. It **moves to `mavericks-guest-additions` when a
+  this repository for now. It **moves to `mavericks-vm-guest-additions` (publishing as `ModernMavericks/vm-guest-additions`) when a
   second guest-side component ships** — the tablet kext or the runner
   agent, whichever lands first. Stated because the family's own rule is
   that a transitional decision without an exit task is a permanent one.

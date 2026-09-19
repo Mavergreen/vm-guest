@@ -99,12 +99,17 @@ entirely (`-accel nvmm`). Would test the deepest assumption: that
 Less exotic than it sounds, because the accelerator is already a parameter
 in this design — P6 runs the same image pipeline under TCG.
 
-### Mavericks itself, under `mavericks-hypervisor` — the recursive case
+### Mavericks itself, under `vm-host` — the recursive case
 
-The sibling project `mavericks-hypervisor` back-ports
-Hypervisor.framework to 10.9, so that modern QEMU gets hardware
-acceleration *on* Mavericks. When it ships, this host becomes available:
-**Mavericks hosting Mavericks.**
+The sibling project `mavericks-vm-host` (publishing as
+`ModernMavericks/vm-host`) back-ports Hypervisor.framework to 10.9, and
+is expected to ship a prepackaged QEMU alongside it, so that modern QEMU
+gets hardware acceleration *on* Mavericks. When it ships, this host
+becomes available: **Mavericks hosting Mavericks.**
+
+Both halves are needed for this host, not just HVF — running the
+host-side tool here requires a QEMU on 10.9 to run it with. See
+`decisions/0007`.
 
 It is the strongest host on this page, for a reason none of the others
 can match. Every other host varies one thing — the CPU, the distribution,
@@ -120,8 +125,7 @@ instead of the QEMU microVM. A tool that runs there runs anywhere.
 | — | `boot/prereqs.sh` names Debian packages | Needs a pkgsrc mapping, or to stop naming packages at all — the same gap the EndeavourOS host exposes, from the opposite direction. |
 
 The dependency points one way: we emit, it runs. Nothing here depends on
-`mavericks-hypervisor` existing, and this host stays aspirational until
-it does.
+`vm-host` existing, and this host stays aspirational until it does.
 
 ## Suggested order, if this is ever run
 
