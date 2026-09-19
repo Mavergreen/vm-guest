@@ -256,6 +256,46 @@ for extra in ${extra_pkgs[@]+"${extra_pkgs[@]}"}; do
         || die "$extra is not a flat package (no xar magic)"
 done
 
+# ONE BUILDER PER IMAGE FILE.
+#
+# The media corruption in P4 has exactly one mechanism that was ever caught
+# in the act: an orphaned media/build-installer-img.sh, left running when
+# image/build-image.sh was killed (its cleanup trap kills QEMU and nothing
+# else), still rsyncing into the image a newer build had started writing.
+#
+# Two builders is not "the file gets whichever bytes arrive last". Each one
+# attaches its OWN loop device to the same backing file, so each has its own
+# block-device page cache over the same bytes. Every builder then reads back
+# exactly what it wrote -- its own cache -- while the file on disk ends up a
+# mix of both. That is also why a verification done through the writing
+# mount passed on media that was corrupt.
+#
+# So: refuse, loudly, rather than produce media nobody can trust. The lock
+# is a directory and a pid rather than flock(1), which OS X does not have
+# and this project's host-side scripts are meant to run there (see the bash
+# 3.2 entry in NOTES.md). A lock whose holder is gone is stale, and is taken
+# over rather than left to block the next build forever.
+media_lock=$out.lock
+acquire_media_lock() {
+    local holder
+    if ! mkdir "$media_lock" 2>/dev/null; then
+        holder=$(cat "$media_lock/pid" 2>/dev/null || true)
+        if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+            die "pid $holder is already building $out." \
+                "Two builders sharing one image file corrupt it, and each" \
+                "of them verifies its own page cache and sees nothing" \
+                "wrong. Wait for it, or kill it and remove $media_lock."
+        fi
+        warn "taking over a stale lock left by pid ${holder:-unknown}"
+        rm -rf "$media_lock" || die "cannot remove the stale lock $media_lock"
+        mkdir "$media_lock" 2>/dev/null \
+            || die "cannot create the lock directory $media_lock"
+    fi
+    printf '%s\n' "$$" > "$media_lock/pid"
+    trap 'rm -rf "$media_lock"' EXIT INT TERM
+}
+acquire_media_lock
+
 if [ -e "$out" ]; then
     [ "$force" -eq 1 ] || die "$out exists; pass --force to replace it"
     log "--force: removing the existing $out"

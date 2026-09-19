@@ -253,6 +253,57 @@ setup() {
     [[ "$output" == *"no such directory"* ]]
 }
 
+@test "build-installer-img.sh refuses to start beside another builder" {
+    # The one corruption mechanism this project ever caught in the act: an
+    # orphaned builder still rsyncing into the image a newer build had
+    # started writing. Two loop devices over one backing file means two
+    # page caches, each self-consistent, and a file on disk that is a mix.
+    dir="$BATS_TEST_TMPDIR/images"
+    mkdir -p "$dir/media"
+    printf 'pretend installer\n' > "$dir/media/InstallESD.dmg"
+    # A lock held by a process that is genuinely alive.
+    sleep 30 &
+    holder=$!
+    mkdir "$dir/media/installer-linux.img.lock"
+    printf '%s\n' "$holder" > "$dir/media/installer-linux.img.lock/pid"
+    run env MQG_IMAGE_DIR="$dir" "$REPO/media/build-installer-img.sh" --force
+    kill "$holder" 2>/dev/null || true
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"is already building"* ]]
+    # And it must not have touched anything on its way out.
+    [ -d "$dir/media/installer-linux.img.lock" ]
+    run cat "$dir/media/InstallESD.dmg"
+    [ "$output" = "pretend installer" ]
+}
+
+@test "build-installer-img.sh takes over a lock whose holder is gone" {
+    # A lock left by a build that died must not block every build after it.
+    dir="$BATS_TEST_TMPDIR/images"
+    mkdir -p "$dir/media"
+    printf 'pretend installer\n' > "$dir/media/InstallESD.dmg"
+    mkdir "$dir/media/installer-linux.img.lock"
+    # A pid that cannot be running: sh -c 'exit' and reuse its number.
+    sleep 0 &
+    dead=$!
+    wait "$dead" 2>/dev/null || true
+    printf '%s\n' "$dead" > "$dir/media/installer-linux.img.lock/pid"
+    run env MQG_IMAGE_DIR="$dir" "$REPO/media/build-installer-img.sh" --force
+    [[ "$output" == *"stale lock"* ]]
+    # It goes on to fail on the pretend ESD, which is the point: it got past
+    # the lock.
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"is already building"* ]]
+}
+
+@test "build-installer-img.sh removes its lock when it exits" {
+    dir="$BATS_TEST_TMPDIR/images"
+    mkdir -p "$dir/media"
+    printf 'pretend installer\n' > "$dir/media/InstallESD.dmg"
+    run env MQG_IMAGE_DIR="$dir" "$REPO/media/build-installer-img.sh" --force
+    [ "$status" -ne 0 ]
+    [ ! -e "$dir/media/installer-linux.img.lock" ]
+}
+
 @test "content-digest.sh explains itself and needs an image" {
     run "$REPO/media/content-digest.sh" --help
     [ "$status" -eq 0 ]
