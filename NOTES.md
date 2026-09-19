@@ -3201,3 +3201,93 @@ a line that matches, which took it from 4.3 s to 2.2 s.
 Nothing here was *run* under a real bash 3.2 — none was available on this host.
 The check is textual and the reasoning is from the bash CHANGES file. A genuine
 3.2 smoke test belongs on the first 10.9 host that exists.
+
+## 2026-09-19 — Task 34 — the media corruption: the offset was never a clue
+
+Three media builds in six put a corrupt `Essentials.pkg` on the media, and
+the whole theory of the cause rested on one observation:
+
+```
+BOMCopierFatalError ... offset=13899638, sourcePath=.../Essentials.pkg
+```
+
+**twice at the same offset.** Bit rot does not repeat an offset, so a
+repeating offset means a structure — a boundary, an extent edge, a counter
+that wraps. That was the reasoning, and it is wrong, because of what the
+number is.
+
+### 13,899,638 is where Apple's `Payload` member starts
+
+A flat package is a xar archive: a 28-byte header, a zlib-compressed table
+of contents, then a heap holding the members. For `Essentials.pkg`:
+
+| | |
+|---|---|
+| header size | 28 |
+| compressed TOC | 809 |
+| heap starts at | 28 + 809 = **837** |
+| `Payload` heap offset (from the TOC) | 13,898,801 |
+| `Payload` at byte | 837 + 13,898,801 = **13,899,638** |
+
+The installer's `offset=` is the offset of the **member it was reading**,
+not the position at which reading failed. It is a constant of that package
+file. It repeats because `Essentials.pkg` repeats — any failure to read
+that payload, from any cause, at any position in its 3.2 GB, reports
+exactly 13899638.
+
+**The same finding, again, in this project's own history.** The
+`mqg-firstboot.pkg` failure recorded in the P4 Task 6 entry above reads
+`offset=813`, and that entry reads it as "813 bytes into the cpio". Take
+the built package apart the same way: heap at 495, `Scripts` at heap
+offset 319, so `Scripts` begins at byte **814** — one byte from the
+reported 813, which is what a one-byte difference in the compressed TOC
+does when the cpio mode fields change. The number was the member offset
+that time too. The fix made then was still the right one, for reasons that
+had nothing to do with the offset.
+
+So: **there is no evidence that the corruption ever recurred at a
+particular place.** There was never a reproducing offset to explain. Every
+hypothesis that started from "what is at that offset" — an HFS+ allocation
+boundary, an extent edge, a 2 GiB limit, a write path that changes
+strategy at a size — was answering a question the evidence never asked.
+
+### Why it is always the largest file, and that is not a clue either
+
+Two reasons, and neither is about size *causing* corruption:
+
+- **It is half the media.** `Essentials.pkg` is 3,218,081,872 bytes of
+  about 6.4 GB of content. Corruption landing uniformly anywhere in the
+  content lands in that one file about half the time.
+- **It is the only file that screams.** Its `Payload` is a single bzip2
+  stream (`BZh91AY&SY`, 3,204,174,882 bytes, stored raw in the xar). One
+  wrong bit anywhere in it fails the whole decompression, and the
+  installer stops. A wrong byte in almost anything else on this media —
+  a string in a framework, a pixel in an icon — is never noticed by
+  anybody.
+
+`Essentials.pkg` is simultaneously the biggest target and the loudest
+alarm. That is enough to explain "always the largest file" without any
+size-dependent code path existing at all.
+
+### How this was established, and what else it settled
+
+`media/verify-installer-img.sh` reads images with `7z`. For this, the
+media was read with a purpose-built HFS+ reader (about 200 lines of
+Python, `pread` straight into the image file) that shares no cache, no
+mount and no code with the Linux `hfsplus` driver — the third independent
+reader of this media, after the kernel's and 7z's.
+
+With it, two things that were previously assumed are now measured:
+
+- **Apple's `Essentials.pkg` is
+  `a0609f3d43e7cbe293af242b02dc21d5f7182642b8e21d1ef867f06b519308e7`**,
+  identical in the Mac-produced `InstallMavericks.iso` and in the media
+  this project builds. That is ground truth, from a copy that never went
+  through `dmg2img`, a Linux mount or an rsync.
+- **The current media matches the Mac reference exactly**: 40,192 paths
+  present in both images, zero SHA-256 mismatches.
+- On a 512 MiB-margin build, `Essentials.pkg` occupies **one extent**
+  (785,665 blocks at block 577,728). The extents overflow B-tree is
+  empty — no file on this media has more than eight extents. So the
+  "heavy fragmentation" half of the margin guess is not happening either,
+  at least at this margin.
