@@ -3040,3 +3040,39 @@ variable store, which `boot/make-nvram.sh` already copies per VM. The
 pattern is worth stating plainly: **anything handed to QEMU without
 `snapshot=on` or `readonly=on` is writable, and a guest will write to more
 of it than you expect.**
+
+### The fresh-clone image against a local one, by the stated method
+
+```
+$ ./image/compare-images.sh mavericks-c mavericks-d
+```
+
+`mavericks-c` built in `~/mqg-fresh-clone` with `MQG_IMAGE_DIR=~/mqg-fresh-img`;
+`mavericks-d` built in this working copy. Both at commit `61884ef`, clean.
+
+| Check | Result |
+|---|---|
+| 2. boot and SSH | **SAME** — the fresh-clone image answered SSH **40 s** after the VM started, with no installer media attached, using the key it was built for |
+| 3. identity | **SAME** — every line but the clock reading of when the payload ran |
+| 4. installed file sets | **SAME** — 321,104 files each, **0** paths only in one, **0** differing sizes |
+| 1. inputs | **DIFFER**, in `opencore` and `ovmf` only |
+
+`mediacontent` matches exactly, which is the useful half of check 1: the two
+builds' installer media contain the same thing. What differs is the boot
+stack, because EDK II and `mformat` are not byte-reproducible — recorded
+above, and not repaired here because making the firmware deterministic means
+re-verifying that a deterministic firmware still boots, which is a P3
+question rather than a P4 one.
+
+So the two images were built with *different builds of the same source*, and
+are nonetheless the same image by every behavioural test. That is a stronger
+result than the one the method was designed to produce, and it is worth
+being explicit that it is also a weaker guarantee: `decisions/0006` claims
+"same inputs, same behaviour", and here the inputs were not quite the same.
+
+### `./bin/run-tests.sh` from a true fresh clone
+
+263 tests, shellcheck clean, `tier-check --strict` clean, exit 0, in a
+directory cloned five minutes earlier that had never had anything built in
+it. That is the check that catches "this working copy accumulated
+something", and it did not fire.
