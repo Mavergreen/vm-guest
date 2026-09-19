@@ -64,4 +64,19 @@ if ! "$repo_root/bin/tier-check.sh" --strict; then
     status=1
 fi
 
+echo
+echo "== bash32-check =="
+# No shell file here may use a bash feature newer than 3.2, which is what
+# stock OS X 10.9 ships in /bin. See the comment at the top of that script
+# for why the floor exists and what it does *not* mean.
+#
+# Like tier-check and unlike shellcheck, this is mandatory: it needs
+# nothing installed, and a rule enforced only where a tool happens to be
+# present is a rule that gets broken on the host that lacks it. It fails
+# the suite rather than warning -- a warning in a green run is a warning
+# nobody reads.
+if ! "$repo_root/bin/bash32-check.sh"; then
+    status=1
+fi
+
 exit "$status"
