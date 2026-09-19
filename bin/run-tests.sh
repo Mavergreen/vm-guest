@@ -28,7 +28,13 @@ if command -v shellcheck >/dev/null 2>&1; then
     # code. The Tier 2 quarantine no longer lives under the repo at all
     # (see docs/decisions/0003-vm-images-on-local-btrfs.md), so there is
     # nothing left to prune for it.
-    mapfile -t sh_files < <(
+    # `while read` rather than `mapfile`, which is bash 4 -- see
+    # bin/bash32-check.sh.
+    sh_files=()
+    while IFS= read -r sh_file; do
+        [ -n "$sh_file" ] || continue
+        sh_files+=("$sh_file")
+    done < <(
         find . \( -path ./.git -o -path ./work \
                   -o -path ./golden \) -prune -o -name '*.sh' -print
     )

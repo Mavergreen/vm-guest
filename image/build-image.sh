@@ -307,7 +307,13 @@ EOF
 fi
 
 if [ "$dry_run" -eq 1 ]; then
-    mapfile -t qargs < <(qemu_args with-media)
+    # `while read` rather than `mapfile`, which is bash 4 -- see
+    # bin/bash32-check.sh.
+    qargs=()
+    while IFS= read -r qarg; do
+        [ -n "$qarg" ] || continue
+        qargs+=("$qarg")
+    done < <(qemu_args with-media)
     printf '%q ' "$qemu_bin" "${qargs[@]}"
     printf '\n'
     exit 0
@@ -499,7 +505,13 @@ boot_vm() {
     rm -f "$monitor"
 
     log "booting: $qemu_bin, accel $accel, $ram MB, $smp vCPU"
-    mapfile -t qargs < <(qemu_args "$with_media")
+    # `while read` rather than `mapfile`, which is bash 4 -- see
+    # bin/bash32-check.sh.
+    qargs=()
+    while IFS= read -r qarg; do
+        [ -n "$qarg" ] || continue
+        qargs+=("$qarg")
+    done < <(qemu_args "$with_media")
     run_log "build-image($name): $(printf '%q ' "$qemu_bin" "${qargs[@]}")"
     "$qemu_bin" "${qargs[@]}" > "$qemu_log" 2>&1 &
     vm_pid=$!
@@ -634,10 +646,15 @@ ssh_opts() {
 }
 
 ssh_guest() {
-    local key=${ssh_key%.pub}
+    local key=${ssh_key%.pub} opt
     local -a idopt=() opts=()
     [ -f "$key" ] && idopt=(-i "$key" -o IdentitiesOnly=yes)
-    mapfile -t opts < <(ssh_opts)
+    # `while read` rather than `mapfile`, which is bash 4 -- see
+    # bin/bash32-check.sh.
+    while IFS= read -r opt; do
+        [ -n "$opt" ] || continue
+        opts+=("$opt")
+    done < <(ssh_opts)
     # The command is sent to the guest as written: it expands there, not
     # here, which is what we want -- these are commands about the guest.
     # shellcheck disable=SC2029

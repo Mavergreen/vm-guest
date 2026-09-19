@@ -31,9 +31,13 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/vendor.sh
 . "$MQG_REPO_ROOT/lib/vendor.sh"
 
-mapfile -t EDK2_SOURCES < <(
-    "$MQG_REPO_ROOT/boot/build-opencore.sh" --show-pins | cut -f1
-)
+# `while read` rather than `mapfile`, which is bash 4 -- see
+# bin/bash32-check.sh.
+EDK2_SOURCES=()
+while IFS= read -r edk2_source; do
+    [ -n "$edk2_source" ] || continue
+    EDK2_SOURCES+=("$edk2_source")
+done < <("$MQG_REPO_ROOT/boot/build-opencore.sh" --show-pins | cut -f1)
 [ "${#EDK2_SOURCES[@]}" -gt 0 ] \
     || die "boot/build-opencore.sh --show-pins named no sources"
 

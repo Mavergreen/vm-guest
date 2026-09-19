@@ -503,6 +503,22 @@ _nvram_env() {
         "WORK_DIR=$BATS_TEST_TMPDIR/work"
 }
 
+# The same settings as an array, in `e`, ready for `env "${e[@]}"`.
+#
+# `while read` rather than `mapfile`, which is bash 4 -- see
+# bin/bash32-check.sh. A function cannot return an array, so this sets `e`
+# in the caller's scope rather than printing it; every caller wanted it
+# under that name anyway. `< <(...)` rather than a pipe, so the loop runs
+# in the caller's shell and the assignment survives.
+_nvram_env_array() {
+    local line
+    e=()
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        e+=("$line")
+    done < <(_nvram_env)
+}
+
 # A firmware directory holding a plausible VARS template and its SHA256SUMS.
 _fake_firmware() {
     mkdir -p "$BATS_TEST_TMPDIR/build/firmware"
@@ -514,7 +530,7 @@ _fake_firmware() {
 
 @test "make-nvram.sh copies the template to a per-VM path" {
     _fake_firmware
-    mapfile -t e < <(_nvram_env)
+    _nvram_env_array
     run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
     [ "$status" -eq 0 ]
     [ -f "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd" ]
@@ -527,7 +543,7 @@ _fake_firmware() {
 
 @test "make-nvram.sh refuses to clobber an existing NVRAM file" {
     _fake_firmware
-    mapfile -t e < <(_nvram_env)
+    _nvram_env_array
     mkdir -p "$BATS_TEST_TMPDIR/work"
     printf 'boot order lives here\n' > "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd"
     run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
@@ -539,7 +555,7 @@ _fake_firmware() {
 
 @test "make-nvram.sh --force resets an existing NVRAM file" {
     _fake_firmware
-    mapfile -t e < <(_nvram_env)
+    _nvram_env_array
     mkdir -p "$BATS_TEST_TMPDIR/work"
     printf 'boot order lives here\n' > "$BATS_TEST_TMPDIR/work/p3-full-VARS.fd"
     run env "${e[@]}" "$REPO/boot/make-nvram.sh" --force p3-full
@@ -550,7 +566,7 @@ _fake_firmware() {
 
 @test "make-nvram.sh never writes into the build output" {
     _fake_firmware
-    mapfile -t e < <(_nvram_env)
+    _nvram_env_array
     run env "${e[@]}" WORK_DIR="$BATS_TEST_TMPDIR/build/firmware" \
         "$REPO/boot/make-nvram.sh" p3-full
     [ "$status" -ne 0 ]
@@ -559,7 +575,7 @@ _fake_firmware() {
 
 @test "make-nvram.sh rejects a name that is a path" {
     _fake_firmware
-    mapfile -t e < <(_nvram_env)
+    _nvram_env_array
     run env "${e[@]}" "$REPO/boot/make-nvram.sh" ../../escape
     [ "$status" -ne 0 ]
     [[ "$output" == *"not a usable VM name"* ]]
@@ -567,7 +583,7 @@ _fake_firmware() {
 
 @test "make-nvram.sh refuses a template that does not match SHA256SUMS" {
     _fake_firmware
-    mapfile -t e < <(_nvram_env)
+    _nvram_env_array
     printf 'somebody booted from the template\n' \
         > "$BATS_TEST_TMPDIR/build/firmware/OVMF_VARS.fd"
     run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
@@ -576,7 +592,7 @@ _fake_firmware() {
 }
 
 @test "make-nvram.sh says which script to run when there is no template" {
-    mapfile -t e < <(_nvram_env)
+    _nvram_env_array
     run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
     [ "$status" -ne 0 ]
     [[ "$output" == *"build-ovmf.sh"* ]]

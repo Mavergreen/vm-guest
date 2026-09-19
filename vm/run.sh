@@ -33,11 +33,24 @@ shift
 # profile_expand's own `die` only terminates the process-substitution
 # subshell below (its message still reaches our stderr, since the subshell
 # inherits it unredirected) -- it does NOT stop this script under `set -e`.
-# mapfile simply sees whatever partial (possibly empty) output the subshell
-# produced before dying. That is why an unknown or all-comment profile is
-# caught explicitly by the empty-array check just below, rather than by
-# relying on profile_expand's exit status.
-mapfile -t args < <(profile_expand "$profile")
+# The loop simply reads whatever partial (possibly empty) output the
+# subshell produced before dying. That is why an unknown or all-comment
+# profile is caught explicitly by the empty-array check just below, rather
+# than by relying on profile_expand's exit status. Reading line by line
+# instead of with `mapfile` does not change that: a die mid-stream still
+# yields a short array, and the check below is still what catches it.
+#
+# `while read` rather than `mapfile`, which is bash 4 -- see
+# bin/bash32-check.sh. `< <(...)` rather than a pipe, so the loop runs in
+# this shell and `args` survives it. profile_expand never emits a blank
+# line, so skipping them changes nothing here; it is the house idiom (see
+# bin/tier-check.sh) and keeps a stray blank from becoming an empty QEMU
+# argument.
+args=()
+while IFS= read -r arg; do
+    [ -n "$arg" ] || continue
+    args+=("$arg")
+done < <(profile_expand "$profile")
 if [ "${#args[@]}" -eq 0 ]; then
     die "profile $profile expanded to nothing"
 fi

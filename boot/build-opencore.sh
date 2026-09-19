@@ -210,12 +210,41 @@ unpack_submodule() {
 # corrupt tarball fails while the tree on disk is still whatever it was.
 efibuild=$(pinned_file ocbuild-efibuild "$OCBUILD_COMMIT")
 audk_tar=$(pinned_file audk-src "$AUDK_COMMIT")
-declare -A SUB_TARBALL=()
+# Which tarball each submodule name resolved to, as parallel arrays with a
+# linear lookup. bash 3.2 has no associative arrays (see bin/bash32-check.sh
+# for why that matters), and the access pattern does not need one: a dozen
+# entries, looked up a dozen times, once per build.
+#
+# Parallel arrays rather than a packed "name<TAB>path" string because the
+# values are filesystem paths, and a packed string makes the delimiter one
+# more character that must never appear in one. show_pins() above dedupes
+# this same list with a `seen` string and a `case`; that is the right shape
+# when the answer is yes-or-no, but here we need the value back.
+SUB_TARBALL_NAMES=()
+SUB_TARBALL_FILES=()
+
+# sub_tarball <name> -- print the tarball resolved for <name>; fail if none.
+sub_tarball() {
+    local want=$1 i=0
+    while [ "$i" -lt "${#SUB_TARBALL_NAMES[@]}" ]; do
+        if [ "${SUB_TARBALL_NAMES[$i]}" = "$want" ]; then
+            printf '%s\n' "${SUB_TARBALL_FILES[$i]}"
+            return 0
+        fi
+        i=$(( i + 1 ))
+    done
+    return 1
+}
+
 for entry in "${AUDK_SUBMODULES[@]}"; do
     sub_name=${entry%%:*}
-    if [ -z "${SUB_TARBALL[$sub_name]:-}" ]; then
+    if ! sub_tarball "$sub_name" >/dev/null; then
+        # A plain assignment, not an append straight from $( ): pinned_file's
+        # `die` kills only the command-substitution subshell, and under
+        # `set -e` it is the assignment that propagates the failure here.
         sub_file=$(pinned_file "$sub_name" "$(sub_commit "$entry")")
-        SUB_TARBALL[$sub_name]=$sub_file
+        SUB_TARBALL_NAMES+=("$sub_name")
+        SUB_TARBALL_FILES+=("$sub_file")
     fi
 done
 
@@ -273,7 +302,9 @@ if [ ! -f "$PREPARED" ] || [ "$(cat "$PREPARED")" != "$AUDK_COMMIT" ]; then
         sub_sha=$(sub_commit "$entry")
         sub_dest=$(sub_path "$entry")
         log "  + $sub_dest @ $sub_sha"
-        unpack_submodule "${SUB_TARBALL[$sub_name]}" "$UDK/$sub_dest"
+        sub_tar=$(sub_tarball "$sub_name") \
+            || die "no tarball resolved for submodule $sub_name"
+        unpack_submodule "$sub_tar" "$UDK/$sub_dest"
     done
 
     # The same five patches, in the same order, that efibuild.sh applies.
@@ -335,7 +366,13 @@ else
     warn "ocvalidate not built at $ocvalidate -- Task 4 needs it"
 fi
 
-mapfile -t ship_names < <(artifact_names)
+# `while read` rather than `mapfile`, which is bash 4 -- see
+# bin/bash32-check.sh.
+ship_names=()
+while IFS= read -r ship_name; do
+    [ -n "$ship_name" ] || continue
+    ship_names+=("$ship_name")
+done < <(artifact_names)
 ( cd "$OUT" && sha256sum "${ship_names[@]}" > SHA256SUMS )
 log "built ${#ship_names[@]} artifacts into $OUT"
 cat "$OUT/SHA256SUMS"
