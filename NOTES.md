@@ -3518,8 +3518,14 @@ one of the three had some other cause; what can be ruled out is the whole
 family of explanations the offset invited.
 
 **The free-space margin is not the cause, and its stated reason is wrong.**
-Kept at 512 MiB anyway — it costs nothing in a sparse file and the
-experiment below is the only thing that could have made it load-bearing.
+Kept at 512 MiB anyway — it costs nothing in a sparse file and nothing in
+the evidence makes it load-bearing.
+
+**Two sections below correct this one**, and they are not optional reading:
+the build-D timeline does not reconcile with QEMU's own image locking, and
+the "two loop devices, two page caches" explanation turns out to be
+something the kernel already prevents. The conclusion survives both; the
+reasoning changes.
 
 ### Every hypothesis, and what killed it
 
@@ -3549,7 +3555,7 @@ device at all — `Error opening (rw) file ...: Permission denied` — so a
 read-only media file cannot be mounted by our own `content-digest.sh` or by
 the build's own verification. The guard would have cost more than it bought.
 
-### A correction to the paragraph above, before anyone builds on it
+### A correction to the build-D timeline, before anyone builds on it
 
 The build-D timeline does not close, and saying so is worth more than the
 tidier story.
@@ -3587,7 +3593,7 @@ writing mount passing on media a later mount found corrupt. It does not
 rest on the 22:39:35 coincidence, which is suggestive and does not
 reconcile with QEMU's locking.
 
-### Measured today: the kernel already refuses the simplest version of this
+### Measured today: the kernel already refuses two host-side writers
 
 Worth doing rather than assuming, and it moves the conclusion. Two loop
 devices were attached to one backing file, both partitions mounted, and
