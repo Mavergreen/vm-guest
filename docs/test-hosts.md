@@ -145,6 +145,20 @@ Not "it worked" or "it didn't", but **an updated ledger**. Every entry it
 touches should end up either confirmed host-specific, demoted to portable,
 or corrected. An entry nobody has tried to falsify is not knowledge.
 
+**`bin/triangulate.sh` is the thing to run**, and it produces exactly that:
+a report whose last section is markdown rows for `docs/host-profile.md`
+section 4, plus `--json` for diffing hosts against each other. It installs
+nothing, needs no root, writes only under `$MQG_IMAGE_DIR`, and removes
+what it created — the hosts on this page belong to the user, and one of
+them is a NAS that is presumably serving something.
+
+    ./bin/triangulate.sh                     # ~2 min, touches nothing
+    ./bin/triangulate.sh --build             # ~10 min, no install
+    ./bin/triangulate.sh --full --json-out h.json
+
+The order above still stands: run `--probe` on everything, and spend
+`--full` on the two hosts that look promising.
+
 ## Other hypervisors as targets
 
 Raised by the user: "Besides qemu and VBox, how else do people like to run

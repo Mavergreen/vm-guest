@@ -31,6 +31,7 @@ of working through a list rather than rediscovering what was baked in.
 | OVMF | **4M split only**: `OVMF_CODE_4M.fd` / `OVMF_VARS_4M.fd` in `/usr/share/OVMF/`, plus `.ms`, `.secboot`, `.snakeoil` variants. No 2M or combined image. |
 | IOMMU | enabled, 14 groups |
 | `kvm.ignore_msrs` | `Y` since 2026-09-17, non-persistent — see §3 |
+| SSH key | **There is no `~/.ssh/id_*.pub` on this host**, so `image/build-image.sh --generate-ssh-key` made its own: `$MQG_IMAGE_DIR/keys/mqg_rsa`, RSA-4096 because 10.9's OpenSSH 6.2 predates Ed25519. Every guest built here authorizes that key and nothing else, so reaching into a built guest by hand means `ssh -i $MQG_IMAGE_DIR/keys/mqg_rsa`. Not obvious, and not in the usual place anyone would look. |
 
 Two consequences worth stating plainly:
 
@@ -69,6 +70,14 @@ survives reboot, and how to revert.
 Other hosts are available to test these against — see `docs/test-hosts.md`,
 which says which machine can settle which entry. **Each row below is a
 hypothesis, not a fact, until a second host has tried to falsify it.**
+
+**`bin/triangulate.sh` is how a second host tries.** It installs nothing,
+needs no root and cleans up after itself, so it is safe to run on a machine
+that is doing a real job; `--probe` is the default and touches nothing. Its
+report ends in markdown rows shaped like the table below — one per entry
+the host could speak to, each CONFIRM, REFUTE or CANNOT-SAY — so a
+triangulation run produces an edit to this section rather than a story
+about a run. `--json` on several hosts can be diffed.
 
 Every assumption specific to this host. Populate as phases proceed.
 
