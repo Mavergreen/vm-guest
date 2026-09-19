@@ -3447,3 +3447,76 @@ consistent with something like one corrupting event per build, half of
 them invisible. Which is why the experiment below checks **every file on
 the media** against Apple's reference, not just the sixteen packages: it
 is about twice as sensitive as the thing that found the bug.
+
+### What was happening to the image file while those builds ran
+
+The failing era's scratch directory survived too, and its timestamps are
+what the corrupt-media question actually needed.
+
+**`inject.sh`.** A hand tool, written to iterate on the first-boot package
+without a twenty-minute media rebuild. It does this to
+`media/installer-linux.img`:
+
+```
+hfs_with_mounted_part "$IMG" 1 doit    # loop-mount, cp three files, unmount
+sync
+privops_run "$IMG" .../fix-ownership.sh   # a microVM that chowns EVERY inode
+```
+
+`inject4.log` — its own live output — finished at **22:39:35** on
+2026-09-17. Build D's guest had booted from that same image file at
+22:37:43 and its installer began extracting `Essentials.pkg` from it at
+**22:39:33**, two seconds earlier. So while a macOS guest was reading the
+media, the host had loop-mounted the same file, written into it, and then
+run a second QEMU that mounted it again and rewrote every catalog record
+on it.
+
+**`verify.log`**, 21:34:07 — one minute after build B's installer failed:
+
+```
+qemu-system-x86_64: terminating on signal 15 from pid 693842 (/bin/bash)
+to get "write" lock
+Is another process using the image [.../work/opencore-p3.img]?
+```
+
+QEMU's own image locking, refusing to start because another process had
+the image open. Two VM runs overlapping, caught by the one component in
+this chain that checks.
+
+And the third instance is already written down above: an orphaned
+`media/build-installer-img.sh`, left running when `image/build-image.sh`
+was killed, still rsyncing into the image a newer build had started
+writing.
+
+### The conclusion, and how confident it is
+
+**The media was corrupted by concurrent access to the image file, not by
+the code that builds it.** The evidence:
+
+1. Three separate instances of concurrent use of that file are recorded in
+   the era's own logs — an orphaned builder, a hand tool mounting and
+   chowning the image under a running guest, and QEMU refusing a second
+   VM's write lock. None of them was rare; that was the working style.
+2. The corruption lands in a different place every time — 110 MB into
+   `Essentials.pkg` in one build, 1.99 GB in the next. Interleaved writers
+   do that. A code path does not.
+3. A verification that read back through the writing mount passed on media
+   that a later mount found corrupt. Two loop devices over one backing file
+   give each writer its own block-device page cache: each reads back
+   exactly what it wrote, and the file on disk is a mix. That symptom is
+   almost diagnostic on its own.
+4. Nothing in the write path changed when the failures stopped. What
+   changed was the working style: the pipeline became one command run end
+   to end, the media got `snapshot=on` so the guest cannot write to it, and
+   nobody hand-injects into mounted media any more.
+
+**Confidence: high for the mechanism, not certain for every one of the
+three builds.** Build D is documented almost to the second. Build B has
+overlapping VM runs a minute away but nothing that names the media file.
+The third failure is the admitted orphan. What cannot be ruled out is that
+one of the three had some other cause; what can be ruled out is the whole
+family of explanations the offset invited.
+
+**The free-space margin is not the cause, and its stated reason is wrong.**
+Kept at 512 MiB anyway — it costs nothing in a sparse file and the
+experiment below is the only thing that could have made it load-bearing.
