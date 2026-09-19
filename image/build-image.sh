@@ -815,6 +815,12 @@ stage_verify() {
         boot_vm without-media 600
     fi
     # Single-quoted: this expands in the GUEST, which is the point.
+    #
+    # diskbus is here for ledger entry G16, which claims `-device ide-hd`
+    # on q35 presents as SATA/AHCI rather than legacy IDE. That was read off
+    # Disk Utility by hand once; asking the guest every build makes it a
+    # measurement, and gives bin/triangulate.sh something to report from
+    # another host.
     # shellcheck disable=SC2016
     out=$(ssh_guest '
         sw_vers
@@ -828,6 +834,7 @@ stage_verify() {
         echo "firstboot-daemon=$([ -e /Library/LaunchDaemons/com.mqg.firstboot.plist ] && echo STILL-THERE || echo removed)"
         echo "firstboot-ran=$(cat /private/var/db/.mqg-firstboot/.done 2>&1)"
         echo "autologin=$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>&1)"
+        echo "diskbus=$(diskutil info disk0 2>/dev/null | grep -i Protocol | sed -e "s/.*: *//")"
     ') || die "SSH connected but the guest would not answer"
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     printf '%s\n' "$out" > "$work_dir/verify.txt"

@@ -201,3 +201,13 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"resolve_openssh"* ]]
 }
+
+@test "the verify stage asks the guest what bus its disk is on" {
+    # Ledger entry G16 says -device ide-hd on q35 presents as SATA/AHCI in
+    # the guest. That was read off Disk Utility by hand, once. Asking every
+    # build makes it a measurement, and gives bin/triangulate.sh something
+    # to report from a host where the answer might differ.
+    run awk '/^stage_verify\(\)/, /^}/' "$BUILD"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"diskbus="* ]]
+}

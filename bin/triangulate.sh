@@ -629,8 +629,9 @@ if [ "$level" = full ] && [ "$build_ok" = yes ]; then
         run_stage "$s" || install_ok=no
         [ "$install_ok" = yes ] || break
     done
-    # The verify stage asks the guest what it is; its answer is in the log.
-    guest_bus=$(sed -n 's/.*Connection Bus: *//p' "$scratch/pipeline.log" | first_line || true)
+    # The verify stage asks the guest what it is, diskbus included (for
+    # G16); its answer is in the log.
+    guest_bus=$(sed -n 's/^ *diskbus=//p' "$scratch/pipeline.log" | first_line || true)
 fi
 
 # --- facts ------------------------------------------------------------------
