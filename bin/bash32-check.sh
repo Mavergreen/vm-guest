@@ -4,13 +4,14 @@
 # WHY 3.2, WHICH IS FROM 2006
 #
 # Stock OS X 10.9 Mavericks ships /bin/bash 3.2.57 -- the last GPLv2
-# release, frozen by Apple in 2007 and never updated. A sibling project,
-# mavericks-hypervisor, is back-porting Hypervisor.framework to 10.9 so
-# modern QEMU gets HVF acceleration there. When that lands, the obvious
-# next thing someone will want is to run THIS project's host-side CLI on a
-# Mavericks host, to build and run a Mavericks guest. Keeping that option
-# open costs about fifteen lines today. Reopening it after a year of
-# accumulated bash 4 habits costs a great deal more.
+# release, frozen by Apple in 2007 and never updated. The sibling project
+# mavericks-vm-host is back-porting Hypervisor.framework to 10.9, with a
+# prepackaged QEMU alongside it, so modern QEMU gets hardware acceleration
+# there. When that lands, the obvious next thing someone will want is to
+# run THIS project's host-side CLI on a Mavericks host, to build and run a
+# Mavericks guest -- see docs/test-hosts.md and decisions/0007. Keeping
+# that option open costs about fifteen lines today. Reopening it after a
+# year of accumulated bash 4 habits costs a great deal more.
 #
 # WHAT THE RULE IS NOT
 #

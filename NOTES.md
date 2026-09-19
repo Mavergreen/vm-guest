@@ -3084,10 +3084,12 @@ something", and it did not fire.
 ### Why, and what the rule is *not*
 
 Stock OS X 10.9 ships `/bin/bash` 3.2.57 — the last GPLv2 release, frozen by
-Apple in 2007. The sibling project `mavericks-hypervisor` will back-port
-Hypervisor.framework to 10.9 so modern QEMU gets HVF acceleration there, and
-the obvious next thing anyone will want is to run *this* project's host-side
-CLI on a Mavericks host, to build and run a Mavericks guest. That option costs
+Apple in 2007. The sibling project `mavericks-vm-host` will back-port
+Hypervisor.framework to 10.9 and ship a prepackaged QEMU alongside it, so
+modern QEMU gets hardware acceleration there (both halves matter — see
+`docs/test-hosts.md`), and the obvious next thing anyone will want is to run
+*this* project's host-side CLI on a Mavericks host, to build and run a
+Mavericks guest. That option costs
 about fifteen lines today and a great deal more after a year of accumulated
 bash 4 habits.
 
