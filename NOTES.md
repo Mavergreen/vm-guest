@@ -3291,3 +3291,99 @@ With it, two things that were previously assumed are now measured:
   empty — no file on this media has more than eight extents. So the
   "heavy fragmentation" half of the margin guess is not happening either,
   at least at this margin.
+
+### What changed between the failing era and now, and what did not
+
+The corrupt builds are 2026-09-17 and 2026-09-18. Diff the write path
+across that boundary — `git diff 93e6371..HEAD -- lib/ media/` — and
+`lib/hfs.sh`, `lib/privops.sh`, `lib/privops-qemu-linux.sh` and
+`media/privops/fix-ownership.sh` are **unchanged**. Every byte of the
+mechanism that builds and writes this volume is the same code that was
+running when three builds in six came out corrupt. The only behavioural
+change in `media/build-installer-img.sh` is the margin; everything else
+added is verification, usage text and `--extra-pkg`.
+
+So if the corruption happens at build time, building at 128 MiB puts the
+machine back in exactly the failing configuration.
+
+**But the margin's stated reason is false, and that can be shown without
+building anything.** The comment says the largest file is "written into a
+volume that 128 MiB of margin leaves 99% full". Read the allocation order
+off a built volume — first `startBlock` per file, which is the order HFS+
+handed out space — and `Essentials.pkg` is nowhere near the end:
+
+| file | startBlock | position in the volume |
+|---|---|---|
+| AdditionalEssentials.pkg | 29,759 | 1.7% |
+| AdditionalSpeechVoices.pkg | 327,173 | 18.9% |
+| BSD.pkg | 433,444 | 25.1% |
+| BaseSystemBinaries.pkg | 507,874 | 29.4% |
+| **Essentials.pkg** | **577,728** | **33.4%** |
+| MediaFiles.pkg | 1,364,004 | 78.8% |
+| OxfordDictionaries.pkg | 1,448,530 | 83.7% |
+| BaseSystem.dmg | 1,482,963 | 85.7% |
+
+rsync copies `Packages/` in sorted order, so `Essentials.pkg` is the
+seventh of sixteen and its last byte lands at 83.6% of a 128 MiB-margin
+volume — **1.05 GiB still free**. The volume only reaches 99% about a
+gigabyte of copying later, writing `MediaFiles.pkg`, `OxfordDictionaries`
+and `BaseSystem.dmg`. At no margin is the largest file written into a
+nearly-full volume. Free space at the moment of writing cannot be the
+mechanism; only something that damages already-written blocks *later*
+could be, and that is a different claim from the one recorded.
+
+### Two host-side hypotheses disposed of by inspection
+
+- **Mixed O_DIRECT and buffered I/O on the image file.** A loop device
+  doing direct I/O on a backing file that something else reads buffered is
+  a classic way to see stale bytes. Not here: `losetup -l -O DIO` on a
+  udisks-created loop device reports **0**. Everything goes through the
+  page cache, coherently.
+- **The privops microVM not flushing before it exits.** QEMU's default for
+  `-drive file=...` is `cache=writeback`, which is the *host* page cache —
+  the same cache every later host read of that file uses. Data the guest
+  wrote and QEMU acknowledged is visible to the host whether or not
+  anything was fsynced; losing it needs a host crash, not a guest exit.
+  And the guest does `sync` then `umount` before `poweroff -f`. On top of
+  that, the post-unmount verification added in 82fb02d reads the media
+  *after* the microVM has exited, so a microVM that lost writes would fail
+  that check on every build. It does not.
+
+### The guest could write to the media, and did
+
+This is the one thing about the failing era that was materially different,
+and it was not noticed at the time.
+
+`snapshot=on` on the installer drive — which is what stops the guest
+writing to the media file — was added on **2026-09-19** (commit 61884ef),
+and for an unrelated reason: two builds from one ESD were recording
+different `mediacontent` digests because the guest left a
+`.Spotlight-V100` store behind. Every boot before that mounted the
+installer media **read-write**.
+
+It is still on disk. `installer-linux.img.pre-openssh`, built 2026-09-18,
+carries 40 files the Mac reference does not have and the build never
+wrote:
+
+```
+.Spotlight-V100/Store-V2/07A0A78F-.../store.db          102,400 bytes
+.Spotlight-V100/Store-V2/07A0A78F-.../live.0.index*
+.fseventsd/fseventsd-uuid
+...                                     40 files, 246,075 bytes total
+```
+
+and its volume header attributes are `0x80000000` — `kHFSVolumeUnmountedBit`
+clear, i.e. **the volume was never cleanly unmounted**, because the way a
+build ends a VM is to kill QEMU.
+
+So in the failing era every media image was, after it was built and
+verified: mounted read-write by OS X, written to by `mds`, and then had
+its power cut with the volume dirty and no journal. That is a mechanism
+for corrupting a file on that volume, and it is one that operates *after*
+the build's verification has passed — which is also the simplest
+explanation for the thing that looked most damning at the time, a
+verification that passed on media that was later found corrupt.
+
+What it does not explain by itself is why the failures stopped on
+2026-09-18, when the margin was raised and the guest kept its write access
+for another day. Hence the experiments below.
