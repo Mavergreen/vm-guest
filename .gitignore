@@ -15,3 +15,8 @@ run.log
 # Python bytecode from image/payload/mkflatpkg.py being imported by tests.
 __pycache__/
 *.pyc
+
+# bin/triangulate.sh times file creation in the repository to measure G12,
+# in a directory it removes. If a run is interrupted, the directory is what
+# is left; it is never something to commit.
+.mqg-triangulate.*
