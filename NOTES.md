@@ -4007,3 +4007,151 @@ around udisks' asynchrony elsewhere; this path does not, and a build that
 produced perfect media reported failure. Recorded rather than fixed here —
 it is a separate defect from the one this task was about, and fixing it
 inside a diagnosis is how the margin got believed in the first place.
+
+---
+
+## 2026-09-19 — the triangulation harness, and what Q1 now knows
+
+Two jobs: build the thing the other hosts will run, and write down what a
+live guest just told us about Apple's update servers.
+
+### `bin/triangulate.sh`
+
+The other hosts in `docs/test-hosts.md` belong to the user. They run this;
+we read the report. Everything about the design follows from that — it
+installs nothing, never asks for root, writes only under `$MQG_IMAGE_DIR`
+plus a scratch directory it removes, and says what it removed and what it
+left. `--probe` is the default because the safe thing should be what
+happens when someone types the command with no arguments.
+
+Three levels, cumulative: `--probe` (~2 min, touches nothing), `--build`
+(~10 min, the boot stack and the media, no install), `--full` (~30 min,
+an unattended install and an SSH check).
+
+**The output is the deliverable, not the exit status.** The last section is
+markdown rows for `docs/host-profile.md` section 4: one per ledger entry
+this host can speak to, each CONFIRM, REFUTE or CANNOT-SAY, with what was
+observed. `--json` emits the same thing for diffing hosts.
+
+Measured here: a probe takes **4.5 seconds**, not two minutes, and its
+output reproduces `docs/host-profile.md` section 1 fact for fact — which is
+a check on both, since that section was written by hand in P0.
+
+### Three things worth knowing about how it works
+
+**The `-cpu` test is decisive rather than a warning in a log.** QEMU only
+warns when a `+flag` cannot be provided; with `enforce` it refuses to
+start. So the probe runs `-cpu Penryn,+ssse3,+sse4.1,+sse4.2,enforce`
+against a paused VM with no disks, no network and no display and quits it
+from the monitor — about a tenth of a second, nothing written anywhere.
+On a Woodcrest Mac Pro 1,1 this should print `Host doesn't support
+requested features` and say REFUTE against G3. The accelerator is part of
+the observation, because **TCG implements SSE4.1 itself**: run under TCG,
+a 2006 Xeon would pass this test and teach us nothing.
+
+**"Reused" is not "ok".** `image/build-image.sh` is resumable on purpose
+and "already there" is a success for it. For a triangulation run it is the
+opposite: a host that reused media somebody else built has not shown it can
+build media. The stage table says `reused`, and G20 and G5 say CANNOT-SAY
+rather than claiming evidence the run does not have. This was a bug first:
+the first `--build` run cheerfully reported G20 CONFIRM about media it had
+not touched.
+
+**CANNOT-SAY is a result.** G19 is permanently CANNOT-SAY from this script,
+and says why: settling it means running two installs at once, which is the
+thing the entry warns about.
+
+### What is unexercised, and will stay that way until there is a second host
+
+Only one host was available, so:
+
+- **Every non-Linux path is unexercised.** The macOS branches (`sysctl`,
+  `sw_vers`, `cp -c` for APFS clones, `kern.hv_support` for HVF), the
+  NetBSD branches (`cpuctl identify`, `/dev/nvmm`), and the `mount(8)`
+  parsing for both BSD-shaped and Linux-shaped output. They were written
+  from the documented behaviour of those tools, not from a run.
+- **Every REFUTE path is unexercised on real hardware.** This host confirms
+  thirteen entries and cannot say about six, which is exactly what a
+  primary host should do — and means no REFUTE row has ever been printed
+  by a real probe. They are covered by unit tests in
+  `tests/triangulate.bats` instead: `lib/triangulate.sh` is pure so the Mac
+  Pro's predicted SSE4.1 failure can be tested today, on a Coffee Lake,
+  without the hardware.
+- **`--full` is unexercised.** A disposable guest was up on port 2223 while
+  this was written, and G19 says one install per host. The stages it drives
+  (`install`, `verify`, `manifest`) are the same ones P4 runs daily; what
+  has never run is this script's orchestration of them, its guest-bus
+  question for G16, and its cleanup of a finished image.
+- `--build` **was** exercised, against a disposable `MQG_IMAGE_DIR` seeded
+  with reflink copies so the real one was never written to. Every stage
+  reported `reused` except `target`, which is the honest answer and the
+  reason that distinction now exists.
+
+### Two findings, recorded rather than smoothed over
+
+**`image/build-image.sh --stage payload` was broken, and nothing had ever
+run it.** `openssh_args` resolves the OpenSSH tag inside `< <(...)`, a
+subshell, so the tag was fetched and discarded and the parent kept its
+empty string. A full run never noticed because `stage_openssh` had already
+resolved it minutes earlier in the parent shell. Fixed, with a test that
+reads the script rather than needing Apple's media on disk.
+
+**`image/build-image.sh --accel` accepts only `kvm|tcg`.** A macOS host
+with HVF or a NetBSD host with NVMM cannot drive the pipeline as its own
+accelerator today. `--build`/`--full` fall back to TCG and the report says
+so, in the section listing every place the script had to know what kind of
+host it was on. That section is not an apology; it is the portability work
+this project still owes, and it is three lines long on day one.
+
+While reading the pipeline for this, a third: **`stat -c %s` is GNU-only**
+and `image/build-image.sh` uses it in four places. It will fail on macOS
+and on the BSDs, where the spelling is `stat -f %z`. Not fixed here — it is
+not in the triangulation path, and fixing it inside another task is how
+diagnoses get believed without evidence.
+
+### Q1: measured against Apple's servers, 2026
+
+A live 10.9.5 guest (build 13F34) offers five updates, so **the servers
+still serve 10.9** and Q1's first unknown is settled. See
+`docs/open-questions.md` for the table and the detail; three things belong
+here.
+
+**The briefs are wrong about the last security update.** They say
+2016-001. It is **2016-004**, 362,293 KiB, flagged for restart.
+
+**That is the third undated inherited claim to come out wrong**, after the
+`usb-tablet` kext and "DNS needs configuring in the guest". The pattern is
+not about these three facts but about a class of source — undated
+third-party write-ups, each correct when written, each carried forward
+without a date, every one wrong in the same direction: describing a world
+that was fixed years ago.
+
+**The standalone packages exist**, which is what Q1's third unknown asked.
+Apple's CDN serves them directly, over plain HTTP, with no account and no
+`softwareupdate`:
+
+```
+$ curl -sSI http://swcdn.apple.com/content/downloads/63/01/\
+041-88446-A_AI0EXM8N26/wlglj8xbhacww0zt8rtv5n1o9dkpl72ozq/\
+SecUpd2016-004Mavericks.pkg
+HTTP/1.1 200 OK
+Content-Length: 370988463
+Last-Modified: Tue, 01 Oct 2019 19:01:03 GMT
+```
+
+Fetched in full and hashed here:
+`fd71517772928b35e773276b300ef30e0d264ed9d030bf3862625cab5513d1b5`. That is
+already the form `vendor/sources.tsv` takes. Safari 9.1.3 (63,197,064
+bytes) and iTunes 12.6.2 (five packages, 284,285,780 bytes) are there too,
+and **every size matches the KiB figure the guest printed, exactly** —
+which is how we know these are the same artifacts and not lookalikes.
+
+A surprise worth keeping: **two of the five items are in no catalog we can
+find.** `iBooksDelta-1.0.1` and `RemoteDesktopClient-3.8.4` do not appear
+in `index-10.9.merged-1.sucatalog` — not in its package URLs, and not in
+any of its 333 distribution files, all of which were fetched and searched.
+The guest is being offered two things from a source that catalog does not
+explain. The guest knows what it talked to; ask it before guessing.
+
+**Q1 is not decided here.** Whether the image carries updates is the user's
+call, and P5's baseline depends on it.
