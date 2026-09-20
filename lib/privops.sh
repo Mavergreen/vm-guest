@@ -25,8 +25,19 @@
 # THE SEAM
 #
 # MQG_PRIVOPS_BACKEND selects the technique. Each backend must provide
-# privops_run_<backend> <image> <script>, running <script> as root with
-# <image> attached, and leaving the image cleanly unmounted.
+# two functions:
+#
+#   privops_run_<backend> <image> <script>   run <script> as root with
+#       <image> attached, leaving the image cleanly unmounted.
+#   privops_<backend>_missing                print one line per unmet
+#       requirement on this host, and nothing at all when there is none.
+#
+# The second exists because "not available" is not a useful thing to tell
+# somebody: on 2026-09-20 an EndeavourOS host finished a six-gigabyte media
+# build and then stopped on a four-way && that reported one bit, and each
+# guess at which of the four had failed cost a round trip to a machine
+# nobody here can log in to. Requirements are now reported by name -- all
+# of them, not just the first.
 #
 #   qemu-linux  (default)  A busybox initramfs booted under QEMU with the
 #                          host's own kernel. Needs: a readable kernel,
@@ -54,36 +65,64 @@
 
 MQG_PRIVOPS_BACKEND=${MQG_PRIVOPS_BACKEND:-qemu-linux}
 
+# privops_backend_missing <backend> -- what this host lacks, one
+# requirement per line. Empty output means the backend can run here.
+#
+# THE REPORTING PATH IS SEPARATE FROM THE PREDICATE ON PURPOSE. A predicate
+# that printed would print from every caller that only wanted to ask --
+# privops_describe, a test, a future `--check` -- and a predicate with side
+# effects is its own bug. So the knowledge lives here, callers decide
+# whether to show it, and privops_backend_available stays silent.
+privops_backend_missing() {
+    local fn
+    # Backend names are hyphenated for readability; function names cannot
+    # be. Same translation as the dispatch below.
+    fn="privops_${1//-/_}_missing"
+    if declare -f "$fn" >/dev/null 2>&1; then
+        "$fn"
+    else
+        printf "a backend named '%s' (no such backend is loaded)\n" "$1"
+    fi
+}
+
 # privops_backend_available <backend> -- true if this host can run it.
+# Silent: it answers, it does not report. Use privops_backend_missing for
+# the reason.
 privops_backend_available() {
-    case $1 in
-        qemu-linux)
-            command -v qemu-system-x86_64 >/dev/null 2>&1 &&
-            command -v busybox >/dev/null 2>&1 &&
-            command -v cpio >/dev/null 2>&1 &&
-            [ -r "/boot/vmlinuz-$(uname -r)" ]
-            ;;
-        *) return 1 ;;
-    esac
+    [ -z "$(privops_backend_missing "$1")" ]
 }
 
 privops_describe() {
+    local missing
     printf 'backend: %s\n' "$MQG_PRIVOPS_BACKEND"
-    if privops_backend_available "$MQG_PRIVOPS_BACKEND"; then
+    missing=$(privops_backend_missing "$MQG_PRIVOPS_BACKEND")
+    if [ -z "$missing" ]; then
         printf 'available: yes\n'
     else
         printf 'available: no\n'
+        printf '%s\n' "$missing" | sed 's/^/missing: /'
     fi
 }
 
 # privops_run <image> <script-file>
 # Runs <script-file> as root with <image> attached, via the selected backend.
 privops_run() {
-    local img=$1 script=$2
+    local img=$1 script=$2 missing m n
     [ -f "$img" ] || die "no such image: $img"
     [ -f "$script" ] || die "no such script: $script"
-    privops_backend_available "$MQG_PRIVOPS_BACKEND" \
-        || die "privops backend '$MQG_PRIVOPS_BACKEND' is not available on this host"
+    # Report every unmet requirement before dying, so that one run of the
+    # build tells the whole story. A message naming one of four missing
+    # things costs a round trip per guess.
+    missing=$(privops_backend_missing "$MQG_PRIVOPS_BACKEND")
+    if [ -n "$missing" ]; then
+        printf '%s\n' "$missing" | while IFS= read -r m; do
+            warn "  missing: $m"
+        done
+        n=$(printf '%s\n' "$missing" | wc -l | tr -d ' ')
+        die "privops backend '$MQG_PRIVOPS_BACKEND' is not available on" \
+            "this host: $n requirement(s) above are unmet. Nothing here" \
+            "installs anything -- see boot/prereqs.sh and docs/host-profile.md"
+    fi
     # Backend names are hyphenated for readability; shell function names
     # cannot be, so translate on dispatch.
     "privops_run_${MQG_PRIVOPS_BACKEND//-/_}" "$img" "$script"
