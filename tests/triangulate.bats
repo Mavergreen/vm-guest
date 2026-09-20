@@ -169,6 +169,53 @@ setup() {
     [[ "$output" == *"reused"* ]]
 }
 
+# --- a stage is judged by what IT did, not by what the run did -------------
+#
+# The regression these guard: on squirrel-zapper 2026-09-20 the opencore
+# stage failed to compile under a C23-default GCC, the media stage never
+# ran, and the report said "G20 REFUTE -- media build or its post-unmount
+# verification failed on this host". It had not. A reader would have gone
+# looking for a filesystem bug that was not there.
+
+# A report of the shape run_stage builds: "<stage>\t<result>\t<seconds>".
+tri_report() {
+    printf 'esd\tok\t248s\nopencore\tFAILED\t111s\n'
+}
+
+@test "tri_stage_result reports a stage that never ran as not-run" {
+    [ "$(tri_stage_result media "$(tri_report)")" = not-run ]
+    [ "$(tri_stage_result esd "$(tri_report)")" = ok ]
+    [ "$(tri_stage_result opencore "$(tri_report)")" = FAILED ]
+}
+
+@test "tri_stage_result calls an empty report not-run rather than empty" {
+    [ "$(tri_stage_result media "")" = not-run ]
+}
+
+@test "tri_failed_stage names the stage that failed, and nothing when none did" {
+    [ "$(tri_failed_stage "$(tri_report)")" = opencore ]
+    [ -z "$(tri_failed_stage "$(printf 'esd\tok\t1s\n')")" ]
+}
+
+@test "G20 does not blame media for a failure in an earlier stage" {
+    run g20_verdict not-run opencore
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *opencore* ]]
+    [[ "$output" != *REFUTE* ]]
+}
+
+@test "G20 still refutes when the media stage itself failed" {
+    run g20_verdict no media
+    [[ "$output" == REFUTE* ]]
+}
+
+@test "G5 blames the stage that stopped the build, not the missing checksums" {
+    run g5_verdict "" "" unknown opencore
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *opencore* ]]
+    [[ "$output" == *0004* ]]
+}
+
 @test "G19 is permanently cannot-say, and says why" {
     run g19_verdict
     [[ "$output" == CANNOT-SAY* ]]
@@ -204,7 +251,8 @@ setup() {
                 "$(g17_verdict Y)" \
                 "$(g18_verdict yes)" \
                 "$(g19_verdict)" \
-                "$(g20_verdict unknown)"; do
+                "$(g20_verdict unknown)" \
+                "$(g20_verdict not-run opencore)"; do
         run tri_is_verdict "${line%%	*}"
         [ "$status" -eq 0 ]
     done

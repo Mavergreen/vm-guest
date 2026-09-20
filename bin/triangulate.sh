@@ -518,6 +518,8 @@ bash_version=${BASH_VERSION:-unknown}
 
 build_ok=unknown
 media_built=unknown
+failed_stage=
+
 boot_fresh=unknown
 install_ok=unknown
 guest_bus=""
@@ -605,13 +607,19 @@ if [ "$level" != probe ]; then
         run_stage "$s" || build_ok=no
         [ "$build_ok" = yes ] || break
     done
-    if stage_was_preexisting media; then
-        media_built=reused
-    elif [ "$build_ok" = yes ]; then
-        media_built=yes
-    else
-        media_built=no
-    fi
+    # WHAT EACH STAGE DID, ASKED OF THE STAGE.
+    #
+    # Not inferred from build_ok: the loop above stops at the first
+    # failure, so build_ok=no means "something failed", not "this failed".
+    # Inferring media's fate from it blamed the media path for a compiler
+    # error in the opencore stage once already -- see tri_stage_result.
+    failed_stage=$(tri_failed_stage "$stage_report")
+    case $(tri_stage_result media "$stage_report") in
+        reused) media_built=reused ;;
+        ok)     media_built=yes ;;
+        FAILED) media_built=no ;;
+        *)      media_built=not-run ;;
+    esac
     if stage_was_preexisting ovmf && stage_was_preexisting efi; then
         boot_fresh=no
     else
@@ -632,6 +640,7 @@ if [ "$level" = full ] && [ "$build_ok" = yes ]; then
     # The verify stage asks the guest what it is, diskbus included (for
     # G16); its answer is in the log.
     guest_bus=$(sed -n 's/^ *diskbus=//p' "$scratch/pipeline.log" | first_line || true)
+    failed_stage=$(tri_failed_stage "$stage_report")
 fi
 
 # --- facts ------------------------------------------------------------------
@@ -684,6 +693,8 @@ tri_fact tools_missing "${tools_missing# }"
 tri_fact package_manager "$pkg_manager"
 tri_fact level "$level"
 tri_fact build_ok "$build_ok"
+tri_fact failed_stage "${failed_stage:-none}"
+tri_fact media_built "$media_built"
 tri_fact install_ok "$install_ok"
 tri_fact ovmf_sha256 "$ovmf_sha"
 tri_fact opencore_sha256 "$opencore_sha"
@@ -703,7 +714,7 @@ add G1  g1_verdict  "$sys_vendor"
 add G2  g2_verdict  "$vendor" "$virt"
 add G3  g3_verdict  "$brand" "$have_sse41" "$qemu_cpu"
 add G4  g4_verdict  "$cores" "$threads"
-add G5  g5_verdict  "$ovmf_sha" "$opencore_sha" "$boot_fresh"
+add G5  g5_verdict  "$ovmf_sha" "$opencore_sha" "$boot_fresh" "$failed_stage"
 add G6  g6_verdict  "$qemu_version"
 add G7  g7_verdict  "$kernel"
 add G8  g8_verdict  "$ram" "$free_mib"
@@ -717,7 +728,7 @@ add G16 g16_verdict "$guest_bus"
 add G17 g17_verdict "$nested"
 add G18 g18_verdict "$have_ept"
 add G19 g19_verdict
-add G20 g20_verdict "$media_built"
+add G20 g20_verdict "$media_built" "$failed_stage"
 
 # --- report -----------------------------------------------------------------
 
@@ -874,6 +885,8 @@ fi
 # that cannot do something is not. The report is the deliverable either
 # way, so it is printed before this decides anything.
 if [ "$build_ok" = no ] || [ "$install_ok" = no ]; then
-    die "$level did not complete on this host -- see the stage table above"
+    die "$level stopped at the '${failed_stage:-unknown}' stage on this host" \
+        "-- see the stage table above. Every stage after it never ran, and" \
+        "the ledger rows say CANNOT-SAY rather than blaming them"
 fi
 exit 0

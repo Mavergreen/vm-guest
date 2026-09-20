@@ -71,6 +71,37 @@ tri_is_verdict() {
     return 1
 }
 
+# tri_stage_result <stage> <stage report>
+#
+# What the pipeline recorded for one stage: "ok", "reused", "FAILED", or
+# "not-run" when the report has no row for it at all.
+#
+# WHY THIS EXISTS. The stages run in order and the loop stops at the first
+# failure, so a report can be silent about a stage for two entirely
+# different reasons: the level never asked for it, or an earlier stage
+# failed and it never got its turn. Both look like "no evidence", and the
+# ledger judges below used to infer a stage's fate from the run's overall
+# build_ok instead -- which made every failure, anywhere in the pipeline,
+# read as a failure of whichever stage a judge happened to care about.
+# That is how a C23 compiler error in the `opencore` stage got reported as
+# `G20 REFUTE -- media build or its post-unmount verification failed`,
+# sending a reader after a filesystem bug that was not there.
+#
+# A misattributed verdict is worse than no verdict, so a judge now asks
+# this what its own stage actually did, and says CANNOT-SAY for a stage
+# that never ran.
+tri_stage_result() {
+    printf '%s' "$2" | awk -F'\t' -v s="$1" '
+        $1 == s { r = $2 }
+        END { print (r == "" ? "not-run" : r) }'
+}
+
+# tri_failed_stage <stage report> -- the first stage the report marks
+# FAILED, or empty. The stage that failed is the stage to blame.
+tri_failed_stage() {
+    printf '%s' "$1" | awk -F'\t' '$2 == "FAILED" { print $1; exit }'
+}
+
 # --- small pure judges -----------------------------------------------------
 
 # cpu_has_flag <flag list> <flag> -- spelling-insensitive.
@@ -378,12 +409,24 @@ g19_verdict() {
 
 # G20 -- "a second writer to installer media corrupts it, and only a
 # post-unmount checksum notices."
+#
+# `built` is what the media stage itself did, not what the run did: see
+# tri_stage_result. REFUTE is reserved for a media stage that ran and
+# failed, because that is the only outcome that is evidence about media.
+# A pipeline that stopped earlier says so and names the stage that stopped
+# it, so the reader goes to the right place.
 g20_verdict() {
-    local built=$1
+    local built=$1 failed=${2:-}
     case $built in
         yes)    judge CONFIRM "media built here and verified against media/apple-packages.sha256 from a fresh mount: the verification the entry asks for ran, and passed" ;;
         no)     judge REFUTE "media build or its post-unmount verification failed on this host -- the interesting case. Keep the log" ;;
         reused) judge CANNOT-SAY "media was already on this host and was reused, not rebuilt: this run is no evidence either way" ;;
+        not-run)
+            if [ -n "$failed" ]; then
+                judge CANNOT-SAY "the media stage never ran: the pipeline stopped at the '$failed' stage, and that is where the failure belongs. Nothing here is evidence about media"
+            else
+                judge CANNOT-SAY "the media stage never ran at this level"
+            fi ;;
         *)      judge CANNOT-SAY "no media was built at this level" ;;
     esac
 }
@@ -394,8 +437,10 @@ g20_verdict() {
 # one G5 asked for -- and the only way to run it is to compare checksums
 # with another host.
 g5_verdict() {
-    local ovmf=$1 opencore=$2 fresh=$3
-    if [ -z "$ovmf" ] && [ -z "$opencore" ]; then
+    local ovmf=$1 opencore=$2 fresh=$3 failed=${4:-}
+    if [ -z "$ovmf" ] && [ -z "$opencore" ] && [ -n "$failed" ]; then
+        judge CANNOT-SAY "no firmware or OpenCore checksums: the pipeline stopped at the '$failed' stage before they existed. Fix that stage first -- and if it is a build stage, note that this project pins its sources but not its compiler (decisions/0004)"
+    elif [ -z "$ovmf" ] && [ -z "$opencore" ]; then
         judge CANNOT-SAY "nothing built at this level; run --build to get checksums worth diffing"
     elif [ "$fresh" = no ]; then
         judge CANNOT-SAY "these artifacts were already on this host, not built by this run: OVMF_CODE.fd $ovmf, OpenCore EFI image $opencore. Re-run against an empty MQG_IMAGE_DIR for checksums this host's toolchain actually produced"
