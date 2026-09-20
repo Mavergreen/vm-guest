@@ -148,6 +148,17 @@ salvage_logs() {
 $(find "$p" -type f -name '*.log' -size -8M 2>/dev/null)
 EOF
     done < "$created_list"
+    # $scratch/pipeline.log holds every stage's stdout AND stderr (see the
+    # redirect on the build-image.sh call), and $scratch is deleted
+    # unconditionally at the end of cleanup. So the single file holding the
+    # actual failure was the one file guaranteed not to survive it. The
+    # report's 25-line tail is a window onto this log; when the error falls
+    # past the edge of that window, as a microVM failure did on
+    # squirrel-zapper on 2026-09-20, there was nothing left to read.
+    if [ -f "$scratch/pipeline.log" ]; then
+        mkdir -p "$dest" 2>/dev/null || true
+        cp "$scratch/pipeline.log" "$dest/" 2>/dev/null && n=$((n + 1))
+    fi
     # The report is the deliverable, and until 2026-09-20 it went only to
     # stdout -- so a failed run on someone else's machine left build logs
     # saying every stage succeeded, and the stage table naming the one that

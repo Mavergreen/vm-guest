@@ -432,3 +432,12 @@ tri_report() {
     sed -n '/^salvage_logs() {/,/^}/p' "$REPO/bin/triangulate.sh" \
         | grep -q 'report.txt'
 }
+
+@test "a failed run salvages pipeline.log, which holds the stage's stderr" {
+    # The stage output goes to $scratch/pipeline.log with 2>&1, and cleanup
+    # deletes $scratch unconditionally. On squirrel-zapper 2026-09-20 a
+    # microVM failure fell past the end of the report's 25-line window and
+    # the only copy of it was already gone.
+    sed -n '/^salvage_logs() {/,/^}/p' "$REPO/bin/triangulate.sh" \
+        | grep -q 'pipeline.log'
+}
