@@ -4521,3 +4521,163 @@ is still undiagnosed.
 Also now known: `gcc` on that host is **16.2.1**, not 15. The supported
 range is gcc 13–14, so it warns and proceeds — correctly, and the warning
 was visible in the output above the failure.
+
+### The OVMF failure, diagnosed: upstream's `-Werror` and a warning GCC 16 invented
+
+The salvage worked, which is how there is anything to read. From
+`triangulate-logs-squirrel-zapper-20260920-025119/ovmf-build.log`:
+
+```
+MdeModulePkg/Library/CustomizedDisplayLib/CustomizedDisplayLib.c:435:18:
+  error: variable 'Count' set but not used [-Werror=unused-but-set-variable=]
+  435 |   UINTN          Count;
+cc1: all warnings being treated as errors
+```
+
+Look at the diagnostic's name: `-Werror=unused-but-set-variable=`, with a
+trailing `=`. GCC 16 gave that warning a level argument, so it is not even
+spelled the way GCC 13 spells it. `Count` really is set and never read, in
+`MdeModulePkg`, in code we did not write and have no standing to change.
+
+**This is the second time, and that is the point.** The first was GCC 15's
+C23 default, which is a change of *language* and got the right fix —
+`-std=gnu17`, stated rather than inherited. This one is different in kind:
+nothing about the code changed, nothing about the language changed, a
+compiler simply learned to say something new, and `-Werror` turned it into
+a build failure. **A new compiler invents new warnings. GCC 17 will bring
+a third.**
+
+`-Wno-unused-but-set-variable` would have made today's error go away and
+taught nothing. So would patching `CustomizedDisplayLib.c` — worse,
+actually: it would be the first hunk of a fork of EDK II we did not intend
+to have, and it would grow by one hunk per compiler release forever.
+
+#### Whose `-Werror` is it?
+
+`-Werror` is on every `gcc` line this build runs, out of
+`BaseTools/Conf/tools_def.template`. **It is upstream's discipline for
+upstream's own development**, and it is a good one: a warning nobody is
+allowed to ignore is a warning that gets fixed.
+
+We are not upstream. We are a downstream consumer pinning one commit of
+`acidanthera/audk` and one release of OpenCorePkg, compiled by whatever C
+compiler the host distribution ships. **We cannot fix their warnings**, and
+**a warning we cannot act on should not stop our build.** Upstream keeps
+its discipline — nothing here changes what tianocore or acidanthera see —
+and we stop inheriting a build failure from it.
+
+So: `-Wno-error`, for the firmware builds only, through the same two seams
+the dialect fix used.
+
+| | how `-std=gnu17` got in | how `-Wno-error` gets in |
+|---|---|---|
+| OpenCorePkg | `$(OCPKG_BUILD_OPTIONS)`, upstream's own hook | same hook |
+| OvmfPkg | `boot/patches/0002-ovmf-pin-the-c-dialect.patch` | `boot/patches/0003-firmware-drop-werror.patch` |
+
+Both patches are applied by `boot/build-ovmf.sh`, each guarded by a grep so
+a warm tree is not patched twice and asserted afterwards so a patch that
+silently did nothing cannot pass for success.
+
+#### The seam had room for one flag, and the separator is a tab
+
+`efibuild.sh` reads `BUILD_ARGUMENTS` out of the environment and splits it:
+
+```
+IFS=', ' read -r -a BUILD_ARGUMENTS <<< "$BUILD_ARGUMENTS"
+```
+
+On spaces **and** commas. `-D OCPKG_BUILD_OPTIONS=-std=gnu17` is two
+arguments and survives; `-D OCPKG_BUILD_OPTIONS="-std=gnu17 -Wno-error"` is
+three, and `build` would reject the third. There is exactly one macro hook
+in `OpenCorePkg.dsc` and `build` has no other way to append a flag, so the
+two flags have to arrive as one argument.
+
+A tab is not in that `IFS`. It survives the split as a single argument, and
+`build.py` writes it back out as an ordinary space in the generated
+`GNUmakefile`:
+
+```
+... -D DISABLE_NEW_DEPRECATED_INTERFACES -std=gnu17 -Wno-error -D OC_TARGET_RELEASE=1 ...
+```
+
+Written as `printf -- '-std=%s\t%s'` rather than as a literal tab, so it is
+visible in the file and cannot be lost to a reformat — and **asserted after
+the build**, not trusted: `boot/build-opencore.sh` now greps a generated
+`GNUmakefile` for both flags and dies if either is missing. The
+`GNUmakefile`s are rewritten on every build, warm or cold, which
+`build.log` is not: a warm rebuild that compiles nothing has no `gcc` lines
+in it.
+
+#### The warnings are still printed
+
+This is the half that would make the fix worthless if it were wrong. The
+point is that upstream's warnings stop being **fatal**, not that they stop
+**existing**. Shown rather than asserted, on this host's gcc 13.3.0, with
+`squirrel-zapper`'s exact diagnostic reduced to one line of C:
+
+```
+$ printf 'int f(void){ int Count; Count = 1; return 0; }\n' > werror-demo.c
+
+$ gcc -Wall -Werror -c werror-demo.c -o /dev/null
+werror-demo.c:1:18: error: variable 'Count' set but not used [-Werror=unused-but-set-variable]
+cc1: all warnings being treated as errors
+exit=1
+
+$ gcc -Wall -Werror -Wno-error -c werror-demo.c -o /dev/null
+werror-demo.c:1:18: warning: variable 'Count' set but not used [-Wunused-but-set-variable]
+exit=0
+```
+
+Same file, same line, same column, same diagnostic — `error` becomes
+`warning` and the compiler stops failing. `-Wall` is untouched, `cc1` says
+everything it said before, and all of it is still in `build.log` and
+`ovmf-build.log`. A test asserts that the patch adds exactly one compiler
+flag and that the flag is `-Wno-error` — not `-w`, not `-Wno-<anything>`.
+
+**And it is firmware only.** `shellcheck`, `bin/tier-check.sh --strict` and
+`bin/bash32-check.sh` all still fail the suite. The argument above is about
+C we did not write and cannot change; it does not transfer to code we own,
+and there is a test whose entire job is to say so where someone would look
+for permission.
+
+#### The checksums did not change — measured, not assumed
+
+`decisions/0004`'s claim is that this boot stack is reproducible, so a flag
+change that moved a checksum would matter more than the failure it fixed.
+`-Werror` should not affect code generation — it decides whether a
+diagnostic aborts the build, not what the compiler emits — but "should not"
+is not evidence. Two cold builds, both packages, on the primary host, gcc
+13.3.0, 2026-09-19, same UTC day so the `OpenCore.efi` build-date wrinkle
+cannot confuse the comparison:
+
+| artifact | before | after |
+|---|---|---|
+| `OVMF_CODE.fd` | `195c4dcff2abf2f5aea08c290f057432704a250eab56b0b887ac0f8503ee58d2` | identical |
+| `OVMF_VARS.fd` | `5d2ac383371b408398accee7ec27c8c09ea5b74a0de0ceea6513388b15be5d1e` | identical |
+| `OVMF.fd` | `e44f708330318e8963baea94c91ed265761794e565e6a48db8821e92e4cbda17` | identical |
+| `BOOTx64.efi` | `eb05c27990e7162011b2ef5229d3e2b8be23a8e0bfd79d77c1891cee175e0094` | identical |
+| `OpenCore.efi` | `a6e91a7a995f8792e987da25c2c7061e2dc7907f8c2eef7dec61ebd00ff3669a` | identical |
+| `OpenRuntime.efi` | `d5bece452e5c2180b7f588b40b12c2fe64663548dbbe0de01038c3db45083a5d` | identical |
+| `OpenPartitionDxe.efi` | `e0ee5f238725685eff2f423558b933497c5475c257f747aa281e2d88018723ea` | identical |
+| `OpenHfsPlus.efi` | `93f491375fbd4c0541b55d64b8d4e2f01cafde4f66b7f520f943d3351a45040a` | identical |
+
+All eight. If they had differed, something other than diagnostics had
+changed and this would be a different entry.
+
+#### The ceiling did not move, and that is deliberate
+
+`squirrel-zapper` is gcc **16.2.1**, and after the dialect fix its
+`opencore` stage built clean in 397 s — a real C23-default compiler, two
+majors above the one that motivated that fix, completing the stage that
+failed the first time. That is the only evidence anyone has about 15 or 16,
+and it is **half a boot stack**.
+
+The `-Werror` fix has not been run there. A fix that has not been run on
+the host that exposed the bug is a hypothesis, and the failure the declared
+range exists to warn about is not the loud one: it is a green build that
+emits *different bytes*, which no compiler above 13.3.0 has ever been
+checked for. So `MQG_CC_CEILING` stays at 14 and the `decisions/0004` table
+gained a `16.2.1` row saying exactly how far that host got and what remains
+unknown. **The user's next run is what moves it.**
+
+Test count 407 → 415.

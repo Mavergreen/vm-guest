@@ -171,15 +171,86 @@ range that quietly implied a tested GCC 15 would be the fourth.
 |---|---|---|
 | **13.3.0** | **VERIFIED** | The primary host. Every checksum in the tables above came out of it, repeatedly, from cold trees; the four cold builds in `NOTES.md` are the dialect measurement |
 | 13.x, 14.x | **EXPECTED, not verified** | Nobody has built with 14. Inside the range because it is the same series as the verified point and defaults to the same dialect (`gnu17`), which is now stated anyway |
-| **15.x** | **NOT VERIFIED — outside the range, warned about** | The version that *motivated* this work, and still untested. Its C23 default is what broke `squirrel-zapper`, and that specific failure is fixed — but the fix was measured through a `-std=c2x` shim on GCC 13, which stands in for the *dialect* and for nothing else. It says nothing about GCC 15's code generation or its new diagnostics under `-Werror`. **A re-run on `squirrel-zapper` is pending; this is where its result goes.** |
+| **15.x** | **NOT VERIFIED — outside the range, warned about** | The version that *motivated* this work, and still untested: nobody has run a GCC 15. Its C23 default is what broke `squirrel-zapper`, and that specific failure is fixed — but the fix was measured through a `-std=c2x` shim on GCC 13, which stands in for the *dialect* and for nothing else |
+| **16.2.1** | **PARTLY EXERCISED, NOT VERIFIED — outside the range** | `squirrel-zapper`, 2026-09-20, second `--build` run. **The `opencore` stage built clean in 397 s** — a real C23-default compiler, two majors above the one that motivated the dialect fix, completing the stage that failed before. Then `ovmf` died in 26 s, on a warning GCC 16 invented in code we do not own: `variable 'Count' set but not used [-Werror=unused-but-set-variable=]` in `MdeModulePkg/Library/CustomizedDisplayLib`. **That is fixed too** (below), and the fix is **untested on that host** — the run ended there and no firmware image has ever been produced by a GCC above 14. **The next `squirrel-zapper` run is what moves the ceiling; this row is where its result goes.** |
 | below 13 | **NOT TESTED** | Never tried. Not "known to fail" |
 
-**When the GCC 15 re-run lands:** if it builds and the artifact checksums
-match this document's, raise `MQG_CC_CEILING` to 15 in `lib/compiler.sh`,
-add the host and date to the 15.x row above, and update `INGREDIENTS.md`
-and G22. All four, or the next reader inherits a number with no evidence
-behind it. If it does not build, 15 stays outside and the reason goes in
-the same row.
+**When a complete run above 14 lands:** if it builds and the artifact
+checksums match this document's, raise `MQG_CC_CEILING` in
+`lib/compiler.sh`, add the host and date to the row above, and update
+`INGREDIENTS.md` and G22. All four, or the next reader inherits a number
+with no evidence behind it. If it does not build, the ceiling stays where
+it is and the reason goes in the same row.
+
+**Why the ceiling did not move on 2026-09-20.** Two failures on that host
+have now been diagnosed and fixed, and it is tempting to read that as
+support for 15 and 16. It is not. A fix that has not been run on the host
+that exposed the bug is a hypothesis, `opencore` building is half a boot
+stack, and the failure mode this range exists to warn about — a green
+build that emits *different bytes* — is precisely the one no compiler
+above 13.3.0 has ever been checked for. The ceiling is 14 because 14 is
+where the evidence stops.
+
+### Also answered 2026-09-20: `-Werror` is upstream's, and we stop inheriting it
+
+EDK II puts `-Werror` on every `gcc` line
+(`BaseTools/Conf/tools_def.template`). **The firmware builds no longer
+inherit it**: `-Wno-error` is appended through the same two seams the
+dialect uses — `$(OCPKG_BUILD_OPTIONS)` for OpenCorePkg, and
+`boot/patches/0003-firmware-drop-werror.patch` for `OvmfPkgX64.dsc`.
+
+**The reason, which is not "the build was annoying".** `-Werror` is
+upstream's discipline for upstream's own development, and a good one: a
+warning nobody may ignore is a warning that gets fixed. We are not
+upstream. We are a downstream consumer pinning one commit of
+`acidanthera/audk` and one release of OpenCorePkg, compiled by whatever C
+compiler the host distribution ships. **We cannot fix their warnings** —
+patching upstream source to satisfy a compiler upstream never used would
+be us maintaining a fork we did not intend to have, growing by a hunk per
+compiler release — and **a warning we cannot act on should not stop our
+build**. Upstream keeps its discipline; we stop inheriting a build failure
+from it.
+
+**It fixes a class, not a case.** A new compiler invents new warnings, and
+`-Werror` converts every one of them into a build failure in code we do
+not own. This was the second instance: GCC 15's C23 default (a change of
+*language*, properly fixed by stating the dialect) and then GCC 16's
+`-Werror=unused-but-set-variable=` — note the trailing `=`, GCC 16 gave
+that warning a level argument, so it is not even spelled the way GCC 13
+spells it. `-Wno-unused-but-set-variable` would have fixed that instance
+and taught nothing, and GCC 17 will bring a third.
+
+**The warnings are still printed.** `-Wno-error` cancels the promotion to
+errors and nothing else. `-Wall` is untouched, every diagnostic still goes
+to `ovmf-build.log` and `build.log`, and warnings becoming *invisible*
+would be a regression — non-fatal is the point.
+
+**Firmware only.** Our own shell and test code keeps every gate it has:
+`shellcheck`, `bin/tier-check.sh --strict`, `bin/bash32-check.sh`. The
+argument above is about C we did not write and cannot change; it does not
+transfer to code we own.
+
+**It does not change the artifacts, and that was measured rather than
+assumed** — this document's whole claim is that the boot stack is
+reproducible, so a flag change that moved a checksum would matter more
+than the failure it fixed. Cold builds either side of the change, on the
+primary host, gcc 13.3.0, 2026-09-19:
+
+| Artifact | before | after |
+|---|---|---|
+| `OVMF_CODE.fd` | `195c4dcf…` | `195c4dcf…` |
+| `OVMF_VARS.fd` | `5d2ac383…` | `5d2ac383…` |
+| `OVMF.fd` | `e44f7083…` | `e44f7083…` |
+| `BOOTx64.efi` | `eb05c279…` | `eb05c279…` |
+| `OpenCore.efi` | `a6e91a7a…` | `a6e91a7a…` |
+| `OpenRuntime.efi` | `d5bece45…` | `d5bece45…` |
+| `OpenPartitionDxe.efi` | `e0ee5f23…` | `e0ee5f23…` |
+| `OpenHfsPlus.efi` | `93f49137…` | `93f49137…` |
+
+All eight identical, which is what `-Werror` ought to do: it decides
+whether a diagnostic aborts the build, not what the compiler emits. (Both
+builds are same-day, which the `OpenCore.efi` row requires — see the build
+date note above.)
 
 #### What the check does in each case
 
