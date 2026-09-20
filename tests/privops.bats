@@ -214,3 +214,15 @@ setup() {
     # And no bare capture of a -nographic QEMU remains.
     ! grep -q 'out=$(timeout .* qemu-system' "$REPO/lib/privops-qemu-linux.sh"
 }
+
+@test "compressed kernel modules are staged, not silently skipped" {
+    # Arch ships hfsplus.ko.zst; Debian ships hfsplus.ko. Matching
+    # "$m.ko" exactly meant find returned nothing on Arch, the copy was
+    # skipped without a word, and the HFS+ mount failed with no hint.
+    grep -q 'name "$m.ko.zst"' "$REPO/lib/privops-qemu-linux.sh"
+    grep -q 'name "$m.ko.xz"' "$REPO/lib/privops-qemu-linux.sh"
+    # busybox insmod reads no compressed format, so staging decompresses.
+    grep -q 'zstd -dqf' "$REPO/lib/privops-qemu-linux.sh"
+    # And a module we cannot decompress is fatal, not skipped.
+    grep -q 'cannot decompress' "$REPO/lib/privops-qemu-linux.sh"
+}

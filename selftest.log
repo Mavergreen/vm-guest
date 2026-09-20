@@ -16,24 +16,27 @@ readable  yes
 magic     0000000   M   Z
 
 == initramfs ==
-built     /tmp/tmp.IrxXASyB2i/initramfs.cpio.gz (766798 bytes)
+built     /tmp/tmp.kybxatrdNm/initramfs.cpio.gz (766797 bytes)
 
 == command ==
 timeout 60 qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-reboot \
   -kernel /lib/modules/7.2.6-arch2-1/vmlinuz \
-  -initrd /tmp/tmp.IrxXASyB2i/initramfs.cpio.gz \
+  -initrd /tmp/tmp.kybxatrdNm/initramfs.cpio.gz \
   -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=nls_base,nls_utf8,hfsplus" \
-  -drive file=/tmp/tmp.IrxXASyB2i/scratch.img,format=raw,if=virtio
+  -drive file=/tmp/tmp.kybxatrdNm/scratch.img,format=raw,if=virtio
 
 == console (unfiltered, 60s limit) ==
+c[?7l[2J[0mSeaBIOS (version Arch Linux 1.17.0-2-2)
 
+
+iPXE (http://ipxe.org) 00:03.0 C900 PCI2.10 PnP PMM+1EFD3D90+1EF33D90 C900
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+Probing EDD (edd=off to disable)... oc[?7l[2JMQG-PRIVOPS-MOUNT-FAILED
+[    0.491287] reboot: Power down
 
 == verdict ==
-exit      124 (timeout killed it)
-bytes     0 of console output
-
-ZERO output and a timeout means the guest never reached the
-serial console: not a slow host, which would still print. Suspect
-the kernel image, -enable-kvm, or the console= argument -- in that
-order. Try: re-run with MQG_PRIVOPS_TIMEOUT=30 and add
-"earlyprintk=serial,ttyS0" to see whether the kernel starts at all.
+exit      0
+bytes     394 of console output

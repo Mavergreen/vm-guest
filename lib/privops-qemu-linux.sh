@@ -162,9 +162,50 @@ privops_qemu_linux_build_initramfs() {
     mkdir -p "$root"/{bin,dev,proc,sys,mnt,lib/modules}
     cp "$(command -v busybox)" "$root/bin/busybox" || die "cannot stage busybox"
 
+    # Modules are matched as $m.ko* and DECOMPRESSED while staging, because
+    # busybox insmod reads none of the compressed formats.
+    #
+    # Arch ships hfsplus.ko.zst; Debian ships hfsplus.ko. The old glob was
+    # `-name "$m.ko"` exactly, so on Arch find matched nothing, the `&&`
+    # skipped the copy without a word, insmod found no file, and the HFS+
+    # mount failed with MQG-PRIVOPS-MOUNT-FAILED and no hint as to why.
+    # Third Debian-shaped assumption in this file, after the kernel path
+    # and the busybox linkage.
+    #
+    # A module we cannot stage is now FATAL rather than skipped. The whole
+    # purpose of this microVM is mounting HFS+; proceeding without hfsplus
+    # guarantees a failure several steps later that says nothing about the
+    # cause.
     for m in $MQG_PRIVOPS_MODULES; do
-        staged=$(find "$MQG_PRIVOPS_MODULES_DIR/$kver" -name "$m.ko" -print -quit 2>/dev/null)
-        [ -n "$staged" ] && cp "$staged" "$root/lib/modules/$m.ko"
+        staged=$(find "$MQG_PRIVOPS_MODULES_DIR/$kver" \
+            \( -name "$m.ko" -o -name "$m.ko.zst" -o -name "$m.ko.xz" \
+               -o -name "$m.ko.gz" \) -print -quit 2>/dev/null)
+        if [ -z "$staged" ]; then
+            # Built into the kernel rather than a module is legitimate and
+            # common; there is nothing to stage and insmod is not needed.
+            # Distinguished from "we could not read it", which is not.
+            warn "no $m module under $MQG_PRIVOPS_MODULES_DIR/$kver" \
+                 "-- assuming it is built into the kernel"
+            continue
+        fi
+        case $staged in
+            *.zst)
+                command -v zstd >/dev/null 2>&1 \
+                    || die "$staged is zstd-compressed and zstd is not installed"
+                zstd -dqf "$staged" -o "$root/lib/modules/$m.ko" \
+                    || die "cannot decompress $staged" ;;
+            *.xz)
+                command -v xz >/dev/null 2>&1 \
+                    || die "$staged is xz-compressed and xz is not installed"
+                xz -dc "$staged" > "$root/lib/modules/$m.ko" \
+                    || die "cannot decompress $staged" ;;
+            *.gz)
+                gzip -dc "$staged" > "$root/lib/modules/$m.ko" \
+                    || die "cannot decompress $staged" ;;
+            *)
+                cp "$staged" "$root/lib/modules/$m.ko" \
+                    || die "cannot stage $staged" ;;
+        esac
     done
 
     cat > "$root/init" <<'INIT'
