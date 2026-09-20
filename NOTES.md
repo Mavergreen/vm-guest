@@ -4879,3 +4879,65 @@ correct and still would not have helped here.
 waiting for its command to fail. This is the third instance in this
 project. A check for bare command substitutions in assignments would find
 the rest, and is a better use of effort than finding the fourth by hand.
+
+### The microVM was never hanging: we were not collecting its output
+
+Five runs on `squirrel-zapper`, two wrong diagnoses, and the machine was
+innocent throughout.
+
+**The symptom.** The media stage failed at the `privops` step with the
+console section empty — first at a 300 s timeout, then at 900 s. Zero
+bytes. I read that as "the guest never reached the serial port", which is
+a reasonable reading and was wrong.
+
+**The disproof.** Running QEMU by hand on that host, output going to a
+pipe:
+
+```
+$ qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-reboot -kernel …
+SeaBIOS (version Arch Linux 1.17.0-2-2)
+iPXE (http://ipxe.org) …
+Booting from ROM...
+```
+
+Same host, same QEMU 11.1.1, same kernel. It prints. What differed was
+that our code captured it:
+
+```sh
+out=$(timeout "$T" qemu-system-x86_64 … -nographic … 2>&1)
+```
+
+`-nographic` hands QEMU **both stdin and stdout**, and a command
+substitution changes what those are. On this host the capture works; on
+that one it yields nothing.
+
+**Fixed** in both the backend and `bin/privops-selftest.sh`: stream to a
+file, `</dev/null`, then read the file. A step that competes with its
+caller for the terminal is its own bug.
+
+**Two wrong turns, both worth naming.**
+
+1. *Raising the timeout 300 → 900.* Treated a hang as slowness. Bought
+   three times the wait for the same non-answer. The `set -e` half of that
+   commit was a real fix; the number was not.
+2. *Hunting the kernel image.* Six-path discovery, magic bytes, `MZ`,
+   `/lib/modules` versus `/boot`. The kernel was correct from the first
+   run.
+
+**What made it survive five rounds.** "The microVM produced no output" and
+"we did not collect the microVM's output" are the same observation. Every
+tool I added — salvaging `report.txt`, salvaging `pipeline.log` — faithfully
+preserved an emptiness that was manufactured at the point of capture.
+Better evidence-keeping cannot fix evidence that was never created.
+
+**The rule worth keeping:** a diagnostic must not share a failure mode
+with the thing it diagnoses. `privops-selftest.sh` now streams for exactly
+that reason, and it is the tool that should have existed before the first
+remote run — it answers in seconds what the pipeline answers in twenty
+minutes, because the backend depends on the host's kernel, busybox and
+QEMU all at once and is therefore the part most likely to fail somewhere
+new.
+
+**Still unknown:** the precise mechanism by which command substitution
+starves `-nographic` on that host and not this one. Recorded as unexplained
+rather than guessed at. The fix does not depend on knowing.

@@ -234,7 +234,7 @@ INIT
 }
 
 privops_run_qemu_linux() {
-    local img=$1 script=$2 initramfs out mods kernel rc
+    local img=$1 script=$2 initramfs out mods kernel rc console
     kernel=$(privops_qemu_linux_kernel) || die \
         "no readable kernel image for $MQG_PRIVOPS_KVER (looked for: $(
             privops_qemu_linux_kernel_candidates | tr '\n' ' '))"
@@ -267,12 +267,29 @@ privops_run_qemu_linux() {
     # head -1`: the lesson was written down and did not travel. It is the
     # same class as the `${arr[@]+...}` guard that prereqs.sh had and three
     # other sites did not.
-    out=$(timeout "$MQG_PRIVOPS_TIMEOUT" qemu-system-x86_64 \
+    #
+    # SECOND, and this is what actually went wrong: the console is
+    # STREAMED TO A FILE, not captured with `out=$(...)`. On that host the
+    # capturing form produced ZERO bytes, while the identical QEMU command
+    # run by hand with its output going to a pipe printed SeaBIOS and iPXE
+    # normally. `-nographic` hands QEMU both stdin and stdout, and a
+    # command substitution changes what those are. The symptom -- "the
+    # microVM produced no output" -- is indistinguishable from the microVM
+    # genuinely hanging, which is why it survived five runs and two wrong
+    # diagnoses: a 300s timeout raised to 900s (it was never slowness) and
+    # a hunt through kernel images (the kernel was fine all along).
+    #
+    # </dev/null for the same reason: -nographic takes stdin, and a step
+    # that competes with its caller for the terminal is its own bug.
+    console=$(mktemp)
+    timeout "$MQG_PRIVOPS_TIMEOUT" qemu-system-x86_64 \
         -enable-kvm -m 512 -nographic -no-reboot \
         -kernel "$kernel" -initrd "$initramfs" \
         -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=$mods" \
-        -drive file="$img",format=raw,if=virtio 2>&1) && rc=0 || rc=$?
-    rm -f "$initramfs"
+        -drive file="$img",format=raw,if=virtio \
+        </dev/null > "$console" 2>&1 && rc=0 || rc=$?
+    out=$(cat "$console")
+    rm -f "$console" "$initramfs"
 
     # 124 is timeout(1)'s own "I killed it". Distinguished from a guest
     # that ran and failed, because the remedies are unrelated: one is a

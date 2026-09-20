@@ -203,3 +203,14 @@ setup() {
     # And the timeout is overridable for slower hosts.
     grep -q 'MQG_PRIVOPS_TIMEOUT:=900' "$REPO/lib/privops-qemu-linux.sh"
 }
+
+@test "the microVM console is streamed to a file, not captured inline" {
+    # squirrel-zapper 2026-09-20: out=$(... qemu -nographic ...) produced
+    # zero bytes, while the identical command run by hand into a pipe
+    # printed SeaBIOS and iPXE. The symptom is indistinguishable from the
+    # microVM hanging, and cost five runs and two wrong diagnoses.
+    grep -q '> "$console" 2>&1' "$REPO/lib/privops-qemu-linux.sh"
+    grep -q '</dev/null' "$REPO/lib/privops-qemu-linux.sh"
+    # And no bare capture of a -nographic QEMU remains.
+    ! grep -q 'out=$(timeout .* qemu-system' "$REPO/lib/privops-qemu-linux.sh"
+}

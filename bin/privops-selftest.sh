@@ -86,12 +86,28 @@ printf '  -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=%s" \\\n' "$mods
 printf '  -drive file=%s,format=raw,if=virtio\n' "$work/scratch.img"
 
 printf '\n== console (unfiltered, %ss limit) ==\n' "$timeout_s"
-out=$(timeout "$timeout_s" qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-reboot \
+# Streamed to a file and then printed, NOT captured with out=$(...).
+#
+# On squirrel-zapper the capturing form produced zero bytes while the very
+# same QEMU, run by hand with its output going to a pipe, printed SeaBIOS
+# and iPXE normally. Whatever the cause -- `-nographic` hands QEMU both
+# stdin and stdout, and a command substitution changes what those are --
+# a diagnostic tool must not have a failure mode that looks exactly like
+# the failure it is diagnosing. Five round trips on someone else's laptop
+# were spent on "the microVM produced no output" when the truth was "we
+# did not collect it".
+#
+# </dev/null for the same reason: -nographic takes stdin, and a tool that
+# competes with its caller for the terminal is its own bug.
+console=$work/console.txt
+timeout "$timeout_s" qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-reboot \
     -kernel "$kernel" -initrd "$work/initramfs.cpio.gz" \
     -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=$mods" \
-    -drive file="$work/scratch.img",format=raw,if=virtio 2>&1) && rc=0 || rc=$?
+    -drive file="$work/scratch.img",format=raw,if=virtio \
+    </dev/null > "$console" 2>&1 && rc=0 || rc=$?
 
-printf '%s\n' "$out"
+cat "$console"
+out=$(cat "$console")
 
 printf '\n== verdict ==\n'
 if [ "$rc" -eq 124 ]; then
