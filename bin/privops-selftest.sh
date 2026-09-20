@@ -65,7 +65,9 @@ trap 'rm -rf "$work"' EXIT
 cat > "$work/payload.sh" <<'PAYLOAD'
 echo "PAYLOAD RAN"
 PAYLOAD
-MQG_PRIVOPS_PAYLOAD=$work/payload.sh
+# Read by privops_qemu_linux_build_initramfs, which sources this from the
+# environment rather than taking it as an argument.
+export MQG_PRIVOPS_PAYLOAD="$work/payload.sh"
 privops_qemu_linux_build_initramfs "$work/initramfs.cpio.gz"
 printf 'built     %s (%s bytes)\n' "$work/initramfs.cpio.gz" \
     "$(wc -c < "$work/initramfs.cpio.gz")"
@@ -92,8 +94,11 @@ out=$(timeout "$timeout_s" qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-
 printf '%s\n' "$out"
 
 printf '\n== verdict ==\n'
-printf 'exit      %s%s\n' "$rc" \
-    "$([ "$rc" -eq 124 ] && printf ' (timeout killed it)' || true)"
+if [ "$rc" -eq 124 ]; then
+    printf 'exit      %s (timeout killed it)\n' "$rc"
+else
+    printf 'exit      %s\n' "$rc"
+fi
 printf 'bytes     %s of console output\n' "$(printf '%s' "$out" | wc -c)"
 if [ "$rc" -eq 124 ] && [ -z "$out" ]; then
     printf '\nZERO output and a timeout means the guest never reached the\n'
