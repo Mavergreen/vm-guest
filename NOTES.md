@@ -4374,3 +4374,106 @@ as the fixture.
 - **OVMF was not assumed to be fine** because the failing run never reached
   it. It was built under the shim, and the finding above is why that
   mattered.
+
+## 2026-09-20 — the compiler range: what is claimed, and what is merely expected
+
+Answering the open question the previous entry left for the user:
+`decisions/0004` now says **(b)** — declare a supported range, test the
+edges, fail clearly outside it — and `lib/compiler.sh` is it.
+
+Not (c). Pinning a toolchain is the only option that makes "the same
+sources produce the same bytes" true, and it is the right answer the day
+these images have to be independently verifiable. Nothing about that
+changed. What has not happened is P6 saying what CI needs, and buying a
+container or a bootstrapped GCC against a requirement nobody has written
+down is a lot of machinery for a project whose other Tier 0 claim is that
+it needs a shell and a package manager. (b) is the cheapest thing that
+turns a silent break into a clear message, which is the specific harm the
+`squirrel-zapper` run exposed.
+
+### The range says which half of it is measured
+
+**gcc 13 through 14, verified only at gcc 13.3.0.**
+
+That phrasing is the whole point of the option and the easiest thing to get
+wrong. What is actually known:
+
+| | |
+|---|---|
+| gcc 13.3.0 | **verified** — this host, repeatedly, cold |
+| gcc 13.x, 14.x | **expected, never tried** — same series, same dialect default |
+| gcc 15 | **not verified, and therefore outside the range** |
+| below 13 | **not tested** — which is not "known to fail" |
+
+GCC 15 is the interesting one, and it is deliberately *above the ceiling*.
+It is the version that motivated this entire piece of work; its C23 default
+is what broke the OpenCore build; that failure is fixed. It is still
+untested. The four cold builds in the previous entry were done with a `gcc`
+wrapper prepending `-std=c2x`, which is a faithful stand-in for **the
+dialect** and for nothing else — it says nothing about GCC 15's code
+generation or about diagnostics it emits that GCC 13 does not, which under
+EDK II's `-Werror` are build failures. The re-run on `squirrel-zapper` is
+pending, and there is a row waiting for it in `decisions/0004` plus a note
+in `lib/compiler.sh` saying which four places have to move together when it
+lands.
+
+This project has three times caught itself repeating an undated inherited
+claim nobody had checked — the usb-tablet kext, "DNS needs configuration",
+security update 2016-001 vs 2016-004. A range implying a tested GCC 15
+would have been the fourth, in the same commit that congratulated itself
+for catching the other three.
+
+### Four outcomes, and why above-the-ceiling is not a failure
+
+- **Inside** — one log line.
+- **Below the floor** — fails, before the source tree is even looked for.
+  Says what was found, what is required, and that the project has not
+  tested it.
+- **Above the ceiling** — **warns and proceeds.** Refusing would mean this
+  project refuses to build on every new distribution, which is a worse
+  failure than the one it prevents. But the warning has to say what kind of
+  trouble this is, because up here *the failure mode is usually not an
+  error*: OvmfPkg compiled clean under C23 and emitted different firmware
+  bytes. A green build above the ceiling is not proof, and the warning says
+  which checksums to compare.
+- **Cannot tell** — warns, names what it could not parse, proceeds. This is
+  the macOS case (`gcc` there is clang) and the `cc` case.
+
+`MQG_COMPILER='<name> <version>'` replaces detection, in the shape
+`MQG_PKG_MANAGER` established in `boot/prereqs.sh` and for the same reason:
+a check fed by the environment is untestable without a seam, and installing
+three GCCs to test a version comparison is not a reasonable price. All four
+branches are tested on this one host through it. It moves nothing else —
+`--compiler` still reports the real compiler — so an image built with the
+check overridden has a manifest whose two compiler lines disagree in
+public.
+
+The manifest gained `compilerrange` beside `compiler`. The first says which
+compiler; the second says whether the project claimed to support it **at
+the time**, and cannot be reconstructed later: the range moves as evidence
+arrives and the image does not. Without it, an image built above the
+ceiling silently becomes a supported build the day the ceiling is raised.
+
+### Two things that surprised me
+
+**`IFS=$'\t' read -r a b c` silently drops empty fields.** Tab is an IFS
+*whitespace* character, so a run of tabs collapses into one delimiter. The
+parser emits `family\tversion\tbanner`, and an unparseable compiler has an
+empty version — so the two adjacent tabs counted as one, the banner slid
+left into `$version`, and the UNKNOWN branch reported "gcc is not on PATH"
+for a compiler that had answered perfectly well. **The one case the
+function exists to report was the one case it mis-reported**, and it took
+running the unparseable test to see it. Explicit `${var%%"$tab"*}` has no
+such rule. Non-whitespace delimiters (`:`) do not collapse, which is why
+nobody hits this with `/etc/passwd`.
+
+**Version parsing wants no per-vendor patterns at all.** Four banner
+shapes — `gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0`, `gcc (GCC) 15.1.1
+20250425`, `Apple clang version 17.0.0 (clang-1700.0.13.3)`, and the
+override's bare `gcc 13.3.0` — are all handled by "the first field that is
+a bare dotted number". Every one of them puts its packaging junk in a field
+that is not a bare number. The `gcc (GCC) 15.1.1 20250425` case is the one
+that looks like it needs special handling and does not: the build date is
+also a bare number, but it comes second.
+
+Test count 371 → 404.
