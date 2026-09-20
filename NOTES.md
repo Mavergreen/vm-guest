@@ -4681,3 +4681,146 @@ gained a `16.2.1` row saying exactly how far that host got and what remains
 unknown. **The user's next run is what moves it.**
 
 Test count 407 → 415.
+
+---
+
+## 2026-09-20 — P4 — the privops backend on a host that is not Debian
+
+`./bin/triangulate.sh --build` on `squirrel-zapper` (EndeavourOS, gcc
+16.2.1, QEMU 11.1.1) got through the entire media build — 52,292 entries,
+6,427,352,649 bytes, all sixteen of Apple's packages matching their pinned
+checksums, install hooks and both OpenSSH packages injected — and then died
+on the last step:
+
+```
+mqg: restoring root ownership (privops backend: qemu-linux)
+mqg: error: privops backend 'qemu-linux' is not available on this host
+```
+
+Every firmware stage had passed. This was the only thing between that host
+and a complete `--build`.
+
+### What failed
+
+Two defects, and the second cost more than the first.
+
+`lib/privops.sh` decided availability with a four-way `&&`, whose last
+clause was `[ -r "/boot/vmlinuz-$(uname -r)" ]`. Arch installs its kernel
+as `/boot/vmlinuz-linux`; there is no `/boot/vmlinuz-<release>` there at
+all. `lib/privops-qemu-linux.sh` passed the same string to `-kernel`, so
+fixing only the predicate would have produced a check that passes and a
+microVM that does not boot.
+
+The four-way `&&` reported **one bit**. Four requirements, one "not
+available", no indication which. On a machine belonging to someone else
+each guess is a round trip; this one cost three.
+
+### Why the Debian assumption survived this long
+
+Because it is not a distro assumption to anyone who only has Debian. The
+path is right on every host this project had ever run on — the primary host
+is Mint 22.3 — so it was never a claim being tested, just a string that
+worked. `docs/host-profile.md` §4 exists for exactly this class and had no
+row for it: the ledger tracks assumptions about *hardware* and *firmware*
+closely, and a filesystem path did not feel like an assumption. It is now
+`G23`, struck as resolved, because the class is the finding: a path that
+exists on the host you wrote it on is not a fact about Linux.
+
+The same thinking hid a second requirement. The initramfs contains one
+binary and no dynamic loader, so busybox must be **static** — the file's own
+header said so and nothing checked. Debian ships `busybox` (dynamic) and
+`busybox-static` (static) separately; the primary host had the right one by
+luck of packaging. A dynamic busybox passes `command -v`, copies fine,
+produces a well-formed cpio archive, and then panics on exec inside the
+microVM with nothing pointing at busybox.
+
+And `boot/prereqs.sh`, whose whole job is to answer "can this host do the
+work" before the work starts, listed neither `busybox` nor `cpio`. It told
+`squirrel-zapper` yes, and the host then spent an hour proving otherwise.
+
+### What the fix does
+
+`privops_qemu_linux_kernel` searches instead of assuming, most specific
+first: `/boot/vmlinuz-<release>`, `/lib/modules/<release>/vmlinuz`,
+`/boot/kernel-<release>`, then the generic `/boot/vmlinuz-linux`,
+`/boot/vmlinuz`, `/boot/kernel-*`. **The ordering is a safety property, not
+a preference.** The initramfs stages `hfsplus` and the `nls` modules out of
+`/lib/modules/<running release>`; boot a generically-named kernel of some
+other version and insmod rejects every one on version magic, the mount
+fails, and the console says `MQG-PRIVOPS-MOUNT-FAILED` without a word about
+why. A version-keyed path therefore wins over a generic one even when both
+exist, `privops_run_qemu_linux` boots the path that was found, and a
+non-keyed choice gets a warning saying what could go wrong.
+
+`privops_backend_missing` replaces the one-bit answer with one line per
+unmet requirement, and the caller prints them:
+
+```
+mqg: warning:   missing: busybox (not on PATH)
+mqg: warning:   missing: a readable kernel image for 6.17.9-arch1-1 (looked
+                for: /boot/vmlinuz-6.17.9-arch1-1 /lib/modules/6.17.9-arch1-1/vmlinuz ...)
+mqg: error: privops backend 'qemu-linux' is not available on this host: 2
+            requirement(s) above are unmet. Nothing here installs anything
+```
+
+`privops_backend_available` is still a silent predicate — it is now defined
+in terms of the report rather than the other way round, because a predicate
+that printed would print from `privops_describe` and from every test that
+only wanted a yes or no, and a predicate with side effects is its own bug.
+Backends supply `privops_<backend>_missing` alongside `privops_run_<backend>`;
+that is the seam now.
+
+Busybox linkage is checked with `ldd`, not `file`: `ldd` ships with the C
+library (glibc and musl both), `file` is a package a host need not have and
+this project does not require. The answer is read from ldd's *output*, not
+its exit status, which is non-zero both for a static binary and for a file
+it cannot parse. A dynamic busybox is reported as its own requirement —
+"install busybox" is the wrong advice to somebody who has one.
+
+`boot/prereqs.sh` gained `busybox` (Debian `busybox-static`, Arch
+`busybox`) and `cpio`. Arch's `cpio` package name stays `?`: the tool was
+already present on `squirrel-zapper`, so nobody had to name it, and this
+table's rule is that a guessed name costs more than an honest blank.
+
+Nothing installs anything. The job was to say what is needed and let a
+human decide.
+
+### What is still untested, and it is most of it
+
+**Only the Debian path has ever been executed.** `/lib/modules/<release>/vmlinuz`,
+`/boot/vmlinuz-linux`, `/boot/vmlinuz` and `/boot/kernel-*` are exercised by
+fixtures in `tests/privops.bats` and by no real kernel. The search roots are
+`MQG_PRIVOPS_BOOT_DIR`, `MQG_PRIVOPS_MODULES_DIR` and `MQG_PRIVOPS_KVER` so
+that a Debian host can pose as Arch or Gentoo — the same move
+`MQG_PKG_MANAGER` made for `prereqs.sh` — but a fixture proves the search
+logic, not that Arch's `/boot/vmlinuz-linux` boots a microVM that mounts
+HFS+. The dynamic-busybox report is likewise tested with a stand-in binary,
+not with a dynamic busybox. **The next `--build` on `squirrel-zapper` is the
+first real run of any of it.**
+
+### G20 was misattributed again, one level finer
+
+The same run printed:
+
+```
+| G20 | REFUTE | squirrel-zapper | media build or its post-unmount
+| verification failed on this host -- the interesting case. Keep the log
+```
+
+G20 is *"a second writer to installer media corrupts it"*. The media had
+just been built perfectly and the ownership step failed for want of a
+backend: no second writer, no corruption, no verification attempted. An
+earlier round fixed stage-level misattribution, where "the run failed" was
+read as "the media stage failed"; this is the same class one level down,
+where `media_built=no` was read as "G20 happened".
+
+`tri_media_failure_kind` now recognises the post-unmount check
+**positively**, by the message it dies with, and calls everything else
+"other" — including the ESD check, whose nearly identical sentence is about
+`dmg2img` and a source image rather than about media. G20 REFUTEs only on
+"verification"; any other media-stage failure is CANNOT-SAY naming the
+reason, lifted from the pipeline log by `tri_media_failure_reason`. A
+verdict that misattributes is worse than no verdict: it sends someone
+hunting a filesystem bug that is not there.
+
+Test count 416 → 437.
