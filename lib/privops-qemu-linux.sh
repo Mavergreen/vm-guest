@@ -24,7 +24,12 @@
 #
 # Requires lib/common.sh.
 
-MQG_PRIVOPS_MODULES=${MQG_PRIVOPS_MODULES:-nls_base nls_utf8 hfsplus}
+# virtio_pci and virtio_blk are listed because Debian builds them into the
+# kernel and another distribution need not. If /dev/vda never appears, the
+# mount loop finds no block device and reports MQG-PRIVOPS-MOUNT-FAILED --
+# which reads as an HFS+ problem and is not one. Staging a module that is
+# already built in costs a warning and nothing else.
+MQG_PRIVOPS_MODULES=${MQG_PRIVOPS_MODULES:-nls_base nls_utf8 hfsplus virtio virtio_ring virtio_pci virtio_blk}
 
 # Where to look for a kernel and its modules, and which kernel release to
 # look for. All three are variables so the search can be pointed at a
@@ -215,7 +220,16 @@ $B mount -t proc none /proc
 $B mount -t sysfs none /sys
 $B mount -t devtmpfs none /dev
 for m in $($B cat /proc/cmdline | $B tr ' ' '\n' | $B sed -n 's/^mqg_modules=//p' | $B tr ',' ' '); do
-    [ -f "/lib/modules/$m.ko" ] && $B insmod "/lib/modules/$m.ko" 2>/dev/null
+    if [ -f "/lib/modules/$m.ko" ]; then
+        # insmod's stderr is NOT discarded. A module that fails to load is
+        # the difference between "HFS+ is unsupported here" and "we never
+        # loaded the driver", and those look identical from the outside.
+        if $B insmod "/lib/modules/$m.ko" 2>/insmod.err; then
+            echo "MQG-PRIVOPS-INSMOD ok $m"
+        else
+            echo "MQG-PRIVOPS-INSMOD FAILED $m: $($B cat /insmod.err)"
+        fi
+    fi
 done
 # Try partitions before the whole disk. A bare filesystem image lives at
 # /dev/vda, but a GPT-partitioned disk -- which is what real installer
@@ -264,7 +278,25 @@ if [ -n "$MQG_DEV" ]; then
     $B sync
     $B umount /mnt && echo "MQG-PRIVOPS-OK rc=$rc" || echo "MQG-PRIVOPS-UNMOUNT-FAILED"
 else
+    # A bare "mount failed" sent this project on two wrong hunts across
+    # five remote runs. Say what was actually there: no block device at all
+    # means virtio never loaded, and is a different problem entirely from a
+    # device present whose filesystem would not mount.
     echo "MQG-PRIVOPS-MOUNT-FAILED"
+    echo "MQG-PRIVOPS-DIAG block devices in /dev:"
+    $B ls -l /dev/vd* /dev/sd* 2>&1 | $B sed 's/^/  /'
+    echo "MQG-PRIVOPS-DIAG /proc/partitions:"
+    $B cat /proc/partitions 2>&1 | $B sed 's/^/  /'
+    echo "MQG-PRIVOPS-DIAG filesystems the kernel knows:"
+    $B grep -c . /proc/filesystems 2>/dev/null
+    $B grep hfs /proc/filesystems 2>&1 | $B sed 's/^/  /'
+    echo "MQG-PRIVOPS-DIAG modules loaded:"
+    $B cat /proc/modules 2>&1 | $B cut -d" " -f1 | $B sed 's/^/  /'
+    for d in /dev/vda1 /dev/vda2 /dev/vda; do
+        [ -b "$d" ] || continue
+        echo "MQG-PRIVOPS-DIAG mount $d says:"
+        $B mount -t hfsplus "$d" /mnt 2>&1 | $B sed 's/^/  /'
+    done
 fi
 $B poweroff -f
 INIT
