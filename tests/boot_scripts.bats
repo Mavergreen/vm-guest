@@ -17,8 +17,12 @@ setup() {
 }
 
 @test "prereqs.sh reports success when everything it needs is present" {
-    # PATH containing stubs for every required tool.
-    for t in gcc make git python3 nasm iasl mtools sgdisk mcopy mformat; do
+    # PATH containing stubs for every required tool. The media tools
+    # (dmg2img, kpartx, mkfs.hfsplus) belong here too: before 2026-09-20
+    # this script checked only the OpenCore build tools, so on a host
+    # missing six things it reported three. See boot/prereqs.sh.
+    for t in gcc make git python3 nasm iasl mtools sgdisk mcopy mformat \
+             dmg2img kpartx mkfs.hfsplus; do
         printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
         chmod +x "$STUB_BIN/$t"
     done
@@ -38,12 +42,46 @@ setup() {
 }
 
 @test "prereqs.sh names the packages to install, not just the binaries" {
-    for t in gcc make git python3 mtools sgdisk mcopy mformat; do
+    for t in gcc make git python3 mtools sgdisk mcopy mformat \
+             dmg2img kpartx mkfs.hfsplus; do
         printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
         chmod +x "$STUB_BIN/$t"
     done
-    run env PATH="$STUB_BIN" "$REPO/boot/prereqs.sh"
+    run env PATH="$STUB_BIN" MQG_PKG_MANAGER=apt "$REPO/boot/prereqs.sh"
     [[ "$output" == *"acpica-tools"* ]]
+}
+
+@test "prereqs.sh names Arch packages on an Arch host, not Debian ones" {
+    # Confirmed on squirrel-zapper 2026-09-20: the Debian name for iasl is
+    # acpica-tools and the Arch name is acpica, and sgdisk comes from gdisk
+    # on Debian and gptfdisk on Arch. Printing an apt line on an Arch host
+    # is not merely unhelpful, it is wrong advice.
+    for t in gcc make git python3 mtools mcopy mformat \
+             dmg2img kpartx mkfs.hfsplus; do
+        printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
+        chmod +x "$STUB_BIN/$t"
+    done
+    run env PATH="$STUB_BIN" MQG_PKG_MANAGER=pacman "$REPO/boot/prereqs.sh"
+    [[ "$output" == *"acpica"* ]]
+    [[ "$output" == *"gptfdisk"* ]]
+    [[ "$output" != *"acpica-tools"* ]]
+    [[ "$output" == *"pacman"* ]]
+    [[ "$output" != *"apt install"* ]]
+}
+
+@test "prereqs.sh admits when it has no package name for a platform" {
+    # An unconfirmed name is printed as unknown rather than guessed. A
+    # guess that is wrong costs more than a blank, because the reader
+    # cannot tell which one they are looking at.
+    for t in gcc make git python3 mtools sgdisk mcopy mformat \
+             dmg2img kpartx mkfs.hfsplus; do
+        printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
+        chmod +x "$STUB_BIN/$t"
+    done
+    run env PATH="$STUB_BIN" MQG_PKG_MANAGER=nonesuch "$REPO/boot/prereqs.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no package name confirmed"* ]]
+    [[ "$output" != *"install"*"acpica"* ]]
 }
 
 @test "prereqs.sh does not attempt to install anything" {
