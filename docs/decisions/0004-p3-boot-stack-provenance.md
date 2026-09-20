@@ -127,29 +127,95 @@ clean under C23 and produces **different firmware bytes**
 same tree, same compiler). A host with a newer GCC would have shipped a
 firmware this document does not describe, with a green build.
 
-**What was not done, and is the user's call.** Pinning the dialect is not
-pinning the toolchain. A GCC 15 host still emits different code than a GCC
-13 host from identical sources and identical flags; so does clang. The
-open question, stated plainly:
+**What was not done: the toolchain is still not pinned.** Pinning the
+dialect is not pinning the compiler. A GCC 15 host still emits different
+code than a GCC 13 host from identical sources and identical flags; so does
+clang. That was left as an open question — record only (a), declare a
+supported range (b), or build with a pinned toolchain (c) — and it is
+answered below.
 
-> **Should Tier 0 pin the compiler, and if so how?** The options are not
-> equal. (a) Record and compare only — where we are now: the compiler and
-> its version go in the image manifest (`compiler` line) and in
-> `docs/host-profile.md` G22, and a cross-host checksum difference can at
-> least be attributed. (b) Declare a supported range and refuse outside it
-> — cheap, and turns a compile error into a clear message, but it makes
-> this project refuse to build on new distributions. (c) Build with a
-> pinned toolchain — a container, or a bootstrapped GCC. That is the only
-> option that makes "the same sources produce the same bytes" true, and it
-> is a large amount of machinery for a project whose other Tier 0 claim is
-> that it needs nothing but a shell and a package manager.
->
-> **Not decided here.** P6 (CI) forces the question — a runner image's
-> compiler moves without anyone choosing it — so it should be answered
-> before P6, not during.
+### Answered 2026-09-20: a declared range, not a pinned toolchain
 
-Until it is answered, the honest statement of Tier 0 is: **built from
-pinned source by an unpinned compiler, in a stated dialect.**
+**(b).** `lib/compiler.sh` declares the compilers this project has a reason
+to believe in; `boot/build-opencore.sh` and `boot/build-ovmf.sh` both check
+against it before they build anything.
+
+**Why not (c).** Pinning the toolchain is the right answer *if these images
+ever have to be independently verifiable* — it is the only option that makes
+"the same sources produce the same bytes" true, and nothing below changes
+that. But this is a real project, not a demonstration of reproducibility,
+and P6 has not yet said what CI needs. A container or a bootstrapped GCC is
+a large amount of machinery bought against a requirement nobody has written
+down, in a project whose other Tier 0 claim is that it needs nothing but a
+shell and a package manager. **(b) is the cheapest change that converts a
+silent break into a clear message**, which is the specific harm this section
+recorded. (c) stays available: the day P6 or an independent verifier needs
+byte-identical output across hosts, the range is what says which toolchain
+to pin to.
+
+**Why not (a) alone.** Recording is what we already had, and it is
+retrospective: it tells you *after* a build why two hosts disagree. It did
+nothing for `squirrel-zapper`, which got a compile error out of libDER and
+no explanation.
+
+#### The range, and which parts of it are measured
+
+The distinction below is the point of the option, and it is preserved
+everywhere the range is written down (`lib/compiler.sh`, `INGREDIENTS.md`,
+`docs/host-profile.md` G22) because this project has three times caught
+itself repeating an inherited claim nobody had checked — the usb-tablet
+kext, "DNS needs configuration", security update 2016-001 vs 2016-004. A
+range that quietly implied a tested GCC 15 would be the fourth.
+
+| GCC | Status | Evidence |
+|---|---|---|
+| **13.3.0** | **VERIFIED** | The primary host. Every checksum in the tables above came out of it, repeatedly, from cold trees; the four cold builds in `NOTES.md` are the dialect measurement |
+| 13.x, 14.x | **EXPECTED, not verified** | Nobody has built with 14. Inside the range because it is the same series as the verified point and defaults to the same dialect (`gnu17`), which is now stated anyway |
+| **15.x** | **NOT VERIFIED — outside the range, warned about** | The version that *motivated* this work, and still untested. Its C23 default is what broke `squirrel-zapper`, and that specific failure is fixed — but the fix was measured through a `-std=c2x` shim on GCC 13, which stands in for the *dialect* and for nothing else. It says nothing about GCC 15's code generation or its new diagnostics under `-Werror`. **A re-run on `squirrel-zapper` is pending; this is where its result goes.** |
+| below 13 | **NOT TESTED** | Never tried. Not "known to fail" |
+
+**When the GCC 15 re-run lands:** if it builds and the artifact checksums
+match this document's, raise `MQG_CC_CEILING` to 15 in `lib/compiler.sh`,
+add the host and date to the 15.x row above, and update `INGREDIENTS.md`
+and G22. All four, or the next reader inherits a number with no evidence
+behind it. If it does not build, 15 stays outside and the reason goes in
+the same row.
+
+#### What the check does in each case
+
+| Compiler | What happens |
+|---|---|
+| Inside the range | One log line, build proceeds |
+| **Below the floor** | **Fails**, before the source tree is even looked for. Says what was found, what is required, and that the project has *not tested* it — which is not the same as knowing it fails |
+| **Above the ceiling** | **Warns and proceeds.** Refusing would make this project refuse to build on every new distribution, which is a worse failure than the one it would prevent. The warning says that the failure mode up here is usually *not* an error — OvmfPkg compiled clean under C23 and emitted different firmware bytes — so a green build is not proof, and names the checksums to compare against |
+| Cannot tell | **Warns and proceeds**, naming what it could not parse. "I cannot tell" is its own outcome: reporting it as a pass would be a claim, as a failure would block a host that is probably fine. This is the macOS case, where `gcc` is clang, and the `cc` case |
+
+`MQG_COMPILER='<name> <version>'` replaces detection, in the shape
+`MQG_PKG_MANAGER` established in `boot/prereqs.sh` and for the same reason:
+a check fed by the environment cannot be tested without a seam, and
+installing three GCCs to test a version comparison is not a reasonable
+price. It is also the way past the floor for someone who knows better than
+the file does. It moves nothing else — `--compiler` still reports the real
+compiler — so an image built with the check talked out of the way has a
+manifest whose two compiler lines disagree, in public.
+
+**The manifest now records both**: `compiler` (which compiler) and
+`compilerrange` (whether the project claimed to support it *at build time*,
+and whether the override was in effect). The second cannot be reconstructed
+later, because the range moves as evidence arrives and the image does not —
+an image built above the ceiling has to carry its own "this was untested
+territory", or it silently becomes a supported build the day the ceiling is
+raised.
+
+**What this does not do.** It does not make Tier 0 reproducible. The honest
+statement of Tier 0 is still: **built from pinned source by an unpinned
+compiler, in a stated dialect** — now with the addition that the compiler is
+*range-checked and recorded*, so an out-of-range build announces itself
+instead of being discovered in a checksum diff. P6 still forces the harder
+question: a runner image's compiler moves without anyone choosing it, and
+when it moves past 14 this check will say so rather than fail, which is a
+decision P6 should make deliberately (pin the runner's compiler, or raise
+the ceiling on evidence).
 
 ### Build prerequisites, which are the one host dependency left
 
