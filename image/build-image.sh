@@ -71,6 +71,7 @@ openssh|the ModernMavericks/openssh release the guest got, or none
 updates|which post-10.9.5 updates the image carries
 accel|accelerator, machine, cpu, memory and disk size
 qemu|the QEMU this was built with
+compiler|the C compiler the boot stack was built with, and the dialect it was asked for -- NOT a pin, see docs/decisions/0004
 image|sha256 and size of the qcow2 produced
 ingredients|digest over every pin this repo controls (bin/ingredient-fingerprint.sh)
 ingredient.*|each of those pins, one line each, so a diff names what moved"
@@ -898,6 +899,21 @@ stage_manifest() {
         printf 'accel\t%s machine=%s cpu=%s ram=%s smp=%s disk=%sG\n' \
             "$accel" "$machine" "$cpu" "$ram" "$smp" "$disk_gb"
         printf 'qemu\t%s\n' "$("$qemu_bin" --version | head -1)"
+        # THE ONE INPUT THAT IS RECORDED BUT NOT PINNED.
+        #
+        # Every source above is pinned by commit and checksum. The compiler
+        # that turned them into the OpenCore and OVMF binaries is not, and
+        # it is not neutral: OpenCorePkg 1.0.7 does not compile at all under
+        # a C23-default gcc, and OvmfPkg compiles but comes out with
+        # different bytes. boot/build-opencore.sh now states the dialect it
+        # wants; the compiler itself is still whatever the host has.
+        #
+        # So this line is not a pin, it is an admission -- and it is here so
+        # that two manifests that differ can say whether the compiler was
+        # one of the reasons. See docs/decisions/0004, "The compiler is not
+        # pinned", and docs/host-profile.md G22.
+        printf 'compiler\t%s\n' \
+            "$("$MQG_REPO_ROOT/boot/build-opencore.sh" --compiler 2>/dev/null || echo unknown)"
         printf 'image\t%s %s bytes\n' \
             "$(sha256_file "$out_qcow2")" "$(stat -c %s "$out_qcow2")"
         # EVERY PIN, ONE LINE EACH, AND A DIGEST OVER THE LOT.

@@ -75,11 +75,81 @@ submodule pins, i.e. a second thing that can drift.
   namespace at all and produce byte-identical output to a networked run.
 - **Re-runnable.** A warm tree rebuilds in 20 s (OpenCore) / 11 s (OVMF)
   and yields the same checksums; a cold build is 3m23s / 1m22s on 12 cores.
+- **Except that `OpenCore.efi` carries the build date.** Found 2026-09-20
+  while checking whether a flag change had moved any checksum. A cold
+  rebuild of the same pinned sources by the same compiler on a later day
+  differs from the 2026-09-17 row above in exactly **two bytes** — the `17`
+  of an embedded `2026-09-17`. The other four OpenCore artifacts and all
+  three OVMF images are byte-identical across days. So `OpenCore.efi`'s
+  checksum in the table is "this source set, built on that date", and
+  comparing it against another host's is only meaningful if both built on
+  the same UTC day. Not fixed here: `SOURCE_DATE_EPOCH`-style determinism
+  is a separate piece of work, and pretending the number is stable would be
+  worse than writing down that it is not.
 - **Not yet cross-host.** Everything above was built on one machine
   (`docs/host-profile.md` §1). The claim that it rebuilds elsewhere is a
   hypothesis until a second host tries; `docs/test-hosts.md` names which
   machines can falsify what. **This is the main thing P4 and P6 should not
   assume.**
+
+### The compiler is not pinned — the hole in Tier 0
+
+**Tier 0 says "built from pinned source". Every input is pinned except the
+one that translates them.** We pin OpenCorePkg, `ocbuild`, `audk` and
+twelve submodules by commit and checksum; we say nothing at all about the
+compiler. The same pinned sources therefore do not produce the same
+artifact — or, in one case, any artifact — on two different hosts.
+
+This is not hypothetical. On `squirrel-zapper` (EndeavourOS, GCC 15-era),
+2026-09-20, `bin/triangulate.sh --build` reached the `opencore` stage and
+died:
+
+```
+OpenCorePkg/Library/OcAppleImg4Lib/libDER_config.h:31:17:
+  error: two or more data types in declaration specifiers
+   31 | typedef BOOLEAN bool;
+libDER_config.h:31:1: error: useless type name in empty declaration [-Werror]
+```
+
+`bool` became a keyword in C23; GCC 15 defaults to `-std=gnu23`; EDK II
+compiles with `-Werror` and sets no `-std` at all, so the dialect was
+whatever the host's compiler felt like. The primary host's GCC 13.3.0
+defaults to `gnu17` and builds fine, which is why two phases went by
+without anyone noticing.
+
+**What was done about it.** The *dialect* is now stated rather than
+inherited — `-std=gnu17`, for OpenCorePkg through upstream's own
+`$(OCPKG_BUILD_OPTIONS)` hook and for OvmfPkg through
+`boot/patches/0002-ovmf-pin-the-c-dialect.patch`. That fixes the failure,
+and it also fixes something quieter that the failure hid: OvmfPkg compiles
+clean under C23 and produces **different firmware bytes**
+(`OVMF_CODE.fd` `195c4dcf…` under gnu17, `3373692a…` under `-std=c2x`,
+same tree, same compiler). A host with a newer GCC would have shipped a
+firmware this document does not describe, with a green build.
+
+**What was not done, and is the user's call.** Pinning the dialect is not
+pinning the toolchain. A GCC 15 host still emits different code than a GCC
+13 host from identical sources and identical flags; so does clang. The
+open question, stated plainly:
+
+> **Should Tier 0 pin the compiler, and if so how?** The options are not
+> equal. (a) Record and compare only — where we are now: the compiler and
+> its version go in the image manifest (`compiler` line) and in
+> `docs/host-profile.md` G22, and a cross-host checksum difference can at
+> least be attributed. (b) Declare a supported range and refuse outside it
+> — cheap, and turns a compile error into a clear message, but it makes
+> this project refuse to build on new distributions. (c) Build with a
+> pinned toolchain — a container, or a bootstrapped GCC. That is the only
+> option that makes "the same sources produce the same bytes" true, and it
+> is a large amount of machinery for a project whose other Tier 0 claim is
+> that it needs nothing but a shell and a package manager.
+>
+> **Not decided here.** P6 (CI) forces the question — a runner image's
+> compiler moves without anyone choosing it — so it should be answered
+> before P6, not during.
+
+Until it is answered, the honest statement of Tier 0 is: **built from
+pinned source by an unpinned compiler, in a stated dialect.**
 
 ### Build prerequisites, which are the one host dependency left
 

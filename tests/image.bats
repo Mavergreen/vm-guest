@@ -46,6 +46,22 @@ setup() {
     done
 }
 
+# The compiler is the input the pins forgot. OpenCorePkg 1.0.7 does not
+# build at all under a C23-default gcc and OvmfPkg builds to different
+# bytes, so an image manifest that names every pinned source and not the
+# thing that translated them is incomplete. See docs/decisions/0004.
+@test "the manifest records the compiler, which is recorded but not pinned" {
+    run "$BUILD" --manifest-fields
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"compiler"* ]]
+}
+
+@test "the build scripts can say which compiler they will use" {
+    run "$REPO/boot/build-opencore.sh" --compiler
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"-std="* ]]
+}
+
 @test "machine, CPU and RAM are parameters, not constants" {
     run "$BUILD" --machine pc --cpu qemu64 --ram 2048 --smp 1 --describe
     [ "$status" -eq 0 ]
