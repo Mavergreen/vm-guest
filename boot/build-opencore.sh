@@ -143,6 +143,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$MQG_REPO_ROOT/lib/common.sh"
 # shellcheck source=../lib/vendor.sh
 . "$MQG_REPO_ROOT/lib/vendor.sh"
+# shellcheck source=../lib/compiler.sh
+. "$MQG_REPO_ROOT/lib/compiler.sh"
 
 artifact_names() {
     local entry
@@ -228,6 +230,24 @@ if [ "${1:-}" = "--compiler" ]; then
     host_compiler
     exit 0
 fi
+
+# The same compiler, judged against the range this project declares it has
+# a reason to believe in (lib/compiler.sh). Separate from --compiler on
+# purpose: that one reports what is there and is never influenced by
+# MQG_COMPILER, this one reports what we think of it. image/build-image.sh
+# records both, so a manifest says which compiler built an image AND
+# whether the project claimed to support it at the time.
+if [ "${1:-}" = "--compiler-range" ]; then
+    compiler_range_line
+    exit 0
+fi
+
+# Before anything expensive, and before the source tree is even looked for:
+# a host whose compiler is below the floor should hear that first, not
+# after a fetch and three minutes of compiling. Dies only below the floor;
+# above the ceiling and "cannot tell" warn and carry on. See
+# docs/decisions/0004.
+compiler_range_check
 
 [ -d "$SRC" ] || die "no OpenCorePkg source tree at $SRC -- run boot/fetch-opencorepkg.sh first"
 

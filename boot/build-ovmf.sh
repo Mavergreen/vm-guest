@@ -66,6 +66,8 @@ FIRMWARE_FILES=(
 MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/common.sh
 . "$MQG_REPO_ROOT/lib/common.sh"
+# shellcheck source=../lib/compiler.sh
+. "$MQG_REPO_ROOT/lib/compiler.sh"
 
 if [ "${1:-}" = "--list-artifacts" ]; then
     printf '%s\n' "${FIRMWARE_FILES[@]}"
@@ -77,6 +79,15 @@ if [ "${1:-}" = "--show-build" ]; then
         "$OVMF_DSC" "$OVMF_ARCH" "$OVMF_TOOLCHAIN" "$OVMF_TARGET"
     exit 0
 fi
+
+# The host compiler against the declared range, before anything else --
+# this build is the one that goes WRONG rather than failing when the
+# compiler is not what we expect (OvmfPkg compiles clean under C23 and
+# emits different firmware), so the warning has to arrive before the bytes
+# do. Same check boot/build-opencore.sh runs; it lives in lib/compiler.sh
+# rather than in either script because both need it and a check that exists
+# twice is a check that will only be fixed once. See docs/decisions/0004.
+compiler_range_check
 
 MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 MQG_BUILD_DIR=${MQG_BUILD_DIR:-$MQG_IMAGE_DIR/build}
