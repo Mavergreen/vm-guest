@@ -324,3 +324,45 @@ tri_report() {
     after=$(find "$REPO" -maxdepth 1 -name '.mqg-triangulate*' | wc -l)
     [ "$before" -eq "$after" ]
 }
+
+@test "a failed build salvages logs before cleanup removes the build tree" {
+    # squirrel-zapper 2026-09-20: the ovmf stage failed, the run said
+    # "report the error rather than working around it", and then cleanup
+    # deleted the log that held the error. A cleanup that runs on failure
+    # must not destroy the evidence of the failure.
+    run bash -c '
+        set -e
+        . '"$REPO"'/bin/triangulate.sh --source-only 2>/dev/null || true
+        true
+    '
+    # The salvage function exists and is called on the failure path, not
+    # only defined. Asserting the wiring, because a salvage routine nobody
+    # calls is the same as no salvage routine.
+    grep -q "^    salvage_logs$" "$REPO/bin/triangulate.sh"
+    grep -q "salvage_logs()" "$REPO/bin/triangulate.sh"
+}
+
+@test "salvage_logs copies .log files out of a doomed directory" {
+    doomed="$BATS_TEST_TMPDIR/build"
+    mkdir -p "$doomed/deep"
+    printf 'the error that matters\n' > "$doomed/deep/ovmf-build.log"
+    printf 'not a log\n' > "$doomed/notes.txt"
+
+    cd "$BATS_TEST_TMPDIR"
+    run bash -c '
+        scratch=$(mktemp -d)
+        created_list=$scratch/created
+        printf "%s\n" "'"$doomed"'" > "$created_list"
+        keep=0
+        PWD_SAVE=$PWD
+        '"$(sed -n '/^salvage_logs() {/,/^}/p' "$REPO/bin/triangulate.sh")"'
+        salvage_logs
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"saved 1 log"* ]]
+    found=$(find "$BATS_TEST_TMPDIR" -name 'ovmf-build.log' -path '*triangulate-logs-*' | wc -l)
+    [ "$found" -eq 1 ]
+    # It copies logs, not everything: the build tree is gigabytes.
+    notes=$(find "$BATS_TEST_TMPDIR" -name 'notes.txt' -path '*triangulate-logs-*' | wc -l)
+    [ "$notes" -eq 0 ]
+}

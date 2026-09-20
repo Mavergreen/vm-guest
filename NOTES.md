@@ -4477,3 +4477,47 @@ that looks like it needs special handling and does not: the build date is
 also a bare number, but it comes second.
 
 Test count 371 → 404.
+
+### The cleanup deleted the evidence it had just asked for
+
+`squirrel-zapper`, 2026-09-20, second `--build` run. The C23 dialect fix
+worked: `opencore` built in 397 s on **gcc 16.2.1** — two majors above the
+version that motivated the fix, and the stage that failed the first time.
+Then `ovmf` failed in 26 s, and the run ended:
+
+```
+mqg: error: OVMF build failed -- see .../ovmf-build.log, and report the
+     error rather than working around it
+triangulate: removed /home/schmonz/.local/share/mavericks-qemu-guest
+```
+
+Those two lines are three seconds apart. The script asked for a log and
+then deleted it, on a machine eleven minutes away from being able to
+produce another one, belonging to someone else.
+
+The report's 25-line stage tail ends exactly where the real error begins,
+because the tail is what `build-image.sh` printed to the terminal and the
+compiler diagnostics went to the log file.
+
+**Fixed:** `salvage_logs()` copies `*.log` under 8 MB out of every tracked
+directory into `$PWD/triangulate-logs-<host>-<stamp>/` before the EXIT trap
+runs, and says so. Two tests: one asserts the call site exists rather than
+only the function — a salvage routine nobody calls is the same as none —
+and one asserts it copies logs and *not* everything, since the build trees
+around them are gigabytes.
+
+`--keep` already existed and is the wrong instrument: it keeps the whole
+build tree, so the choice was between gigabytes and nothing. Logs are
+kilobytes.
+
+**The general rule:** a cleanup that runs on the failure path must not
+remove the evidence of the failure. This one was worse than most, because
+the same run printed an instruction to report an error whose only record
+it was about to destroy.
+
+Cost: one eleven-minute run on someone else's laptop, and the OVMF failure
+is still undiagnosed.
+
+Also now known: `gcc` on that host is **16.2.1**, not 15. The supported
+range is gcc 13–14, so it warns and proceeds — correctly, and the warning
+was visible in the output above the failure.

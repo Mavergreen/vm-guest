@@ -115,6 +115,46 @@ scratch=$(mktemp -d "${TMPDIR:-/tmp}/mqg-triangulate.XXXXXX") \
 created_list=$scratch/created
 : > "$created_list"
 
+# Copy build logs somewhere that survives cleanup.
+#
+# This exists because of a self-inflicted wound on squirrel-zapper
+# 2026-09-20: the ovmf stage failed, the report printed its 25-line tail,
+# the final line said "report the error rather than working around it" --
+# and then cleanup deleted $MQG_IMAGE_DIR, taking ovmf-build.log with it.
+# The one artifact needed to diagnose the failure was destroyed by the
+# script that had just asked for it, and the cost was a second eleven-minute
+# run on someone else's laptop.
+#
+# A cleanup that runs on failure must not remove the evidence of the
+# failure. Logs are kilobytes; the build trees they sit in are gigabytes,
+# so --keep (which keeps everything) is the wrong instrument for this.
+# shellcheck disable=SC2317  # reached through the EXIT/INT/TERM trap below
+salvage_logs() {
+    local stamp dest n=0 f
+    [ -s "$created_list" ] || return 0
+    stamp=$(date -u +%Y%m%d-%H%M%S)
+    dest="$PWD/triangulate-logs-$(hostname 2>/dev/null || echo host)-$stamp"
+    while IFS= read -r p; do
+        if [ -z "$p" ] || [ ! -d "$p" ]; then
+            continue
+        fi
+        # -type f and a size cap: a build tree can contain a log of any
+        # size, and this is meant to be small enough to paste or mail.
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            mkdir -p "$dest" || return 0
+            cp "$f" "$dest/" 2>/dev/null && n=$((n + 1))
+        done <<EOF
+$(find "$p" -type f -name '*.log' -size -8M 2>/dev/null)
+EOF
+    done < "$created_list"
+    if [ "$n" -gt 0 ]; then
+        printf 'triangulate: saved %d log(s) to %s\n' "$n" "$dest" >&2
+        printf 'triangulate: these survive the cleanup below -- they are what\n' >&2
+        printf 'triangulate: diagnoses the failure. Send them, not the summary.\n' >&2
+    fi
+}
+
 # shellcheck disable=SC2317  # reached through the EXIT/INT/TERM trap below
 cleanup() {
     local p
@@ -885,6 +925,9 @@ fi
 # that cannot do something is not. The report is the deliverable either
 # way, so it is printed before this decides anything.
 if [ "$build_ok" = no ] || [ "$install_ok" = no ]; then
+    # Before the EXIT trap removes the build trees. The stage tail printed
+    # in the report is 25 lines; the log is the whole story.
+    salvage_logs
     die "$level stopped at the '${failed_stage:-unknown}' stage on this host" \
         "-- see the stage table above. Every stage after it never ran, and" \
         "the ledger rows say CANNOT-SAY rather than blaming them"

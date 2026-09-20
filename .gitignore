@@ -20,3 +20,4 @@ __pycache__/
 # in a directory it removes. If a run is interrupted, the directory is what
 # is left; it is never something to commit.
 .mqg-triangulate.*
+triangulate-logs-*/
