@@ -21,8 +21,11 @@ setup() {
     # (dmg2img, kpartx, mkfs.hfsplus) belong here too: before 2026-09-20
     # this script checked only the OpenCore build tools, so on a host
     # missing six things it reported three. See boot/prereqs.sh.
+    # busybox and cpio are here for the same reason: the media build's
+    # privops microVM needs them, and a "prereqs" script that omits a
+    # prerequisite answers the question wrongly.
     for t in gcc make git python3 nasm iasl mtools sgdisk mcopy mformat \
-             dmg2img kpartx mkfs.hfsplus; do
+             dmg2img kpartx mkfs.hfsplus busybox cpio; do
         printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
         chmod +x "$STUB_BIN/$t"
     done

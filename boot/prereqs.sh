@@ -41,7 +41,23 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 #   debian   -- primary host, Linux Mint 22.3, P0 onward
 #   arch     -- squirrel-zapper, EndeavourOS, 2026-09-20 (user confirmed
 #               every name below existed; dmg2img and hfsprogs came from
-#               the AUR rather than the official repositories)
+#               the AUR rather than the official repositories; `busybox`
+#               installed there by pacman the same day. `cpio` was already
+#               present on that host, so nobody had to name its package --
+#               hence the `?`)
+#
+# busybox and cpio are here because the media build needs them, not the
+# boot stack: lib/privops-qemu-linux.sh builds a busybox initramfs with
+# cpio to do the one privileged step (restoring root ownership) inside a
+# QEMU microVM. They were missing from this table until a host got all the
+# way through a 6.4 GB media build and stopped on the last step for want of
+# them, which is exactly the question this script exists to answer in
+# advance. THE DEBIAN NAME IS `busybox-static`, NOT `busybox`: the
+# initramfs holds one binary and no loader, so a dynamically linked busybox
+# builds a perfectly good archive that then cannot exec. Debian ships both;
+# the check that tells them apart is in lib/privops-qemu-linux.sh, which is
+# where the requirement is, but this script is where someone reads it
+# first.
 REQUIRED='
 gcc|build-essential|gcc|-|-
 make|build-essential|make|-|-
@@ -55,6 +71,8 @@ sgdisk|gdisk|gptfdisk|?|gptfdisk
 dmg2img|dmg2img|dmg2img (AUR)|?|?
 kpartx|kpartx|multipath-tools|?|?
 mkfs.hfsplus|hfsprogs|hfsprogs (AUR)|?|?
+busybox|busybox-static|busybox|?|?
+cpio|cpio|?|-|?
 '
 
 # Which package manager to name. Detected from the host, and overridable
