@@ -4155,3 +4155,222 @@ explain. The guest knows what it talked to; ask it before guessing.
 
 **Q1 is not decided here.** Whether the image carries updates is the user's
 call, and P5's baseline depends on it.
+
+
+## 2026-09-20 — a compiler nobody pinned, and a verdict that blamed the wrong stage
+
+`./bin/triangulate.sh --build` on `squirrel-zapper` (EndeavourOS, GCC
+15-era) got through `esd` in 248 s and died in `opencore` at 111 s:
+
+```
+OpenCorePkg/Library/OcAppleImg4Lib/libDER_config.h:31:17: error: two or more data types in declaration specifiers
+   31 | typedef BOOLEAN bool;
+      |                 ^~~~
+libDER_config.h:31:1: error: useless type name in empty declaration [-Werror]
+cc1: all warnings being treated as errors
+```
+
+`bool` is a keyword in C23. GCC 15 defaults to `-std=gnu23`. EDK II sets no
+`-std` at all and compiles with `-Werror`, so a `typedef` that was legal
+for thirty years became a syntax error the moment the host compiler moved.
+This host's GCC is 13.3.0, defaults to `gnu17`, and builds fine — which is
+exactly why two phases went by without anyone seeing it.
+
+### Reproduced here first, with a four-line shim
+
+GCC 13 knows the same rules under the older name `-std=c2x`, so the failure
+is reachable on this host. Two ways were tried and both are worth keeping.
+
+The first was to inject `-std=c2x` into the build through EDK II's own flag
+seam. That works — and it is how the *fix* gets in — but it is not a
+faithful stand-in for a compiler whose **default** is C23, because it only
+reaches the packages whose `.dsc` we touch.
+
+The second is exact, and it is the one to use again:
+
+```
+mkdir -p /tmp/c23 && printf '#!/bin/sh\nexec /usr/bin/gcc -std=c2x "$@"\n' \
+    > /tmp/c23/gcc && chmod +x /tmp/c23/gcc
+PATH=/tmp/c23:$PATH ./boot/build-opencore.sh
+```
+
+A `gcc` that prepends `-std=c2x` **is** a C23-default compiler as far as
+this build is concerned: an explicit `-std` later on the command line still
+wins, exactly as it would against a real default. Nothing in the repository
+or in the unpacked source tree is touched. The result was the same file,
+the same line, the same two diagnostics:
+
+```
+OpenCorePkg/Library/OcAppleImg4Lib/libDER_config.h:31:17: error: two or more data types in declaration specifiers
+OpenCorePkg/Library/OcAppleImg4Lib/libDER_config.h:31:1: error: useless type name in empty declaration [-Werror]
+```
+
+`BaseTools` — the host-side C that EDK II builds first — compiled clean
+under the shim, which matches `squirrel-zapper` getting as far as it did.
+
+### The narrow fix was tried and is disproved
+
+The preference was `-std=gnu17` scoped to the one failing library. That was
+done first: a `[BuildOptions]` section in `OcAppleImg4Lib.inf`. It fixes
+libDER, and the build then dies somewhere else:
+
+```
+OpenCorePkg/Library/OcCompressionLib/zlib/adler32.c:63:15:
+  error: old-style function definition [-Werror=old-style-definition]
+```
+
+C23 removed K&R function definitions too, and OpenCorePkg vendors zlib. The
+breakage is not one file, it is "third-party C carried inside OpenCorePkg",
+so the dialect is set for the platform. `-Werror` was never touched.
+
+### The seam, which is upstream's own
+
+`OpenCorePkg.dsc`'s `[BuildOptions]` expands `$(OCPKG_BUILD_OPTIONS)` into
+every `CC_FLAGS` line and never defines it — upstream left the hook there on
+purpose. `efibuild.sh` passes `$BUILD_ARGUMENTS` straight through to
+`build`, and reads it from the environment, so
+
+```
+BUILD_ARGUMENTS="-D OCPKG_BUILD_OPTIONS=-std=gnu17" ./build_oc.tool
+```
+
+survives the `ARCHS`/`TOOLCHAINS`/`TARGETS`/`OFFLINE_MODE`/`EFIBUILD_SH`
+invocation in `boot/build-opencore.sh` **without patching anything**. The
+build prints its own flags, so the evidence is in the log:
+
+```
+Building OpenCorePkg/OpenCorePkg.dsc for X64 in RELEASE with GCC
+and flags -D OCPKG_BUILD_OPTIONS=-std=gnu17 ...
+```
+
+Three things were checked and ruled out on the way: `build` has no
+`--buildoptions` option at all (`BaseTools/Source/Python/build/buildoptions.py`
+lists `-D/--define` and `-F/--flag`, and `-F` sets `BUILD_FLAGS`, not
+`CC_FLAGS`); `tools_def.template` contains no `-std` anywhere, which is the
+root of the whole problem; and `$(OCPKG_BUILD_OPTIONS)`, left undefined,
+reaches the generated `GNUmakefile` *literally* and is expanded to nothing
+by make — so it was already a live injection point, just an empty one.
+
+### The quieter half: OVMF compiles fine and comes out different
+
+The `opencore` stage fails first, so `squirrel-zapper` never reached the
+`ovmf` stage and nobody knows what a GCC 15 would do to the firmware. Under
+the shim, here, it builds **clean** — and produces different bytes:
+
+| `OVMF_CODE.fd` | sha256 |
+|---|---|
+| gcc 13.3.0 default (`gnu17`) | `195c4dcff2abf2f5aea08c290f057432704a250eab56b0b887ac0f8503ee58d2` |
+| same tree, same compiler, `-std=c2x` | `3373692a6739121bec67d458d09a60d602b40cf5235398f208d58f28db3306b8` |
+
+That is worse than the OpenCore failure, because it is silent. A host with
+a newer GCC would have shipped a firmware `decisions/0004` does not
+describe, with a green build and a passing tier check. `OvmfPkgX64.dsc` has
+no `$(...)` hook to borrow, so it gets
+`boot/patches/0002-ovmf-pin-the-c-dialect.patch` — one line in its
+`[BuildOptions]`, applied by `boot/build-ovmf.sh` the same way
+`build_oc.tool` is patched, guarded by a grep and asserted afterwards.
+
+### The checksums did not change
+
+This is the thing to be loud about, and the answer is **no**.
+
+Four cold builds (`rm -rf UDK/Build` before each), both packages each time:
+
+| compiler default | fix | OpenCore | OVMF |
+|---|---|---|---|
+| `gnu17` (this host) | no | builds | builds, `195c4dcf…` |
+| C23 (shim) | no | **fails**, `libDER_config.h:31` | builds, `3373692a…` |
+| `gnu17` (this host) | yes | builds, identical | builds, `195c4dcf…` |
+| C23 (shim) | yes | **builds, identical** | builds, `195c4dcf…` |
+
+Every shipped artifact is byte-identical with the fix and without it,
+because `-std=gnu17` is what GCC 13 was already doing — and, the row that
+matters, a C23-default compiler with the fix produces **the same bytes as
+this host does**. `OVMF_CODE.fd` is `195c4dcff2abf2f5aea08c290f057432704a250eab56b0b887ac0f8503ee58d2`
+in three of the four rows and only moves in the one where the dialect is
+unstated, which is the whole argument for stating it.
+
+There is one exception to "identical", and it is **not** the fix's doing.
+
+### `OpenCore.efi` embeds the build date
+
+Comparing a cold rebuild against the 2026-09-17 checksums in
+`decisions/0004`, `OpenCore.efi` differed — by exactly two bytes, at offset
+358218:
+
+```
+2026-09-17 build:  ...0..2026f...0..09f...0..17...
+2026-09-20 build:  ...0..2026f...0..09f...0..20...
+```
+
+The date is compiled in as immediate operands. The other four OpenCore
+artifacts and all three OVMF images are identical across the three days. So
+`decisions/0004`'s `OpenCore.efi` row means "these sources, built on that
+date", and two hosts' checksums for it are only comparable if they built on
+the same UTC day. Found while checking whether a flag had moved a checksum,
+which is the argument for checking.
+
+### What this exposes is bigger than a flag
+
+`decisions/0004` defines Tier 0 as "built from pinned source". We pin
+OpenCorePkg, `ocbuild`, `audk` and twelve submodules by commit and
+checksum. **We do not pin, record or constrain the compiler** — and it is
+not a neutral party: the same pinned sources give a working artifact on GCC
+13, no artifact at all on GCC 15, and (for OVMF) a different artifact under
+a different dialect.
+
+Pinning the *dialect* removes the largest moving part. It does not close
+the hole: GCC 13 and GCC 15 still emit different code from identical
+sources and identical flags, and so does clang.
+
+Three things now record the gap rather than paper over it:
+
+- every image manifest carries a `compiler` line, next to `qemu`, from
+  `boot/build-opencore.sh --compiler` — recorded, explicitly **not** a pin;
+- `docs/host-profile.md` §4 has **G22**, and §1 finally says what this
+  host's compiler is;
+- `decisions/0004` has a section named "The compiler is not pinned — the
+  hole in Tier 0", ending in the question for the user: record only, declare
+  a supported range, or build in a pinned toolchain. **Not decided here.**
+  P6 forces it, because a runner image's compiler moves without anyone
+  choosing it.
+
+### The second bug the same run exposed: a verdict that named the wrong thing
+
+The same report printed:
+
+```
+| G20 | REFUTE | squirrel-zapper | media build or its post-unmount verification failed on this host -- the interesting case. Keep the log |
+```
+
+**The media stage never ran.** `opencore` failed first and the stage loop
+stops at the first failure. `g20_verdict` was fed the run's overall
+`build_ok`, so any failure anywhere became a failure of media — and G20 is
+the entry about installer media being silently corrupted by a second
+writer, so the verdict sent a reader hunting a filesystem bug that was not
+there.
+
+Judges now ask what *their own* stage did. `tri_stage_result` reads the
+stage table the run already builds and distinguishes `ok`, `reused`,
+`FAILED` and `not-run`; `tri_failed_stage` names the stage that stopped the
+pipeline. G20 REFUTEs only when the media stage itself failed; otherwise it
+says CANNOT-SAY and names the stage to go and look at. G5 got the same
+treatment — missing firmware checksums after a failed `opencore` stage are
+not "nothing built at this level" — and the final error now names the stage
+instead of the level. Six tests, with `squirrel-zapper`'s actual stage table
+as the fixture.
+
+### Disproved or ruled out along the way
+
+- **`--buildoptions` is not a thing.** The brief offered it as a candidate
+  seam; `build` has no such option.
+- **A per-library fix is not enough.** Tried, measured, moved the error.
+- **`-Werror` did not need touching**, and was not.
+- **Setting `OCPKG_BUILD_OPTIONS` as a plain environment variable** would
+  also have worked, because the unexpanded `$(OCPKG_BUILD_OPTIONS)` reaches
+  make. Rejected: `-D` bakes the literal flag into the generated makefile
+  and into the build log, where it can be read back, instead of depending on
+  make's environment inheritance.
+- **OVMF was not assumed to be fine** because the failing run never reached
+  it. It was built under the shim, and the finding above is why that
+  mattered.
