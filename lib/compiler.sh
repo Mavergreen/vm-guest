@@ -32,25 +32,34 @@
 #                inside the range because it is the same compiler series
 #                as the verified point, defaults to the same C dialect
 #                (gnu17), and the dialect is now stated anyway.
-#   gcc 15       NOT VERIFIED, and deliberately ABOVE the ceiling. It is
+#   gcc 15, 16   NOT VERIFIED, and deliberately ABOVE the ceiling. 15 is
 #                the version that motivated this whole piece of work --
 #                it defaults to -std=gnu23, under which OpenCorePkg 1.0.7
 #                would not compile at all -- and that specific failure is
-#                fixed. What has NOT happened is a build on a real GCC 15.
-#                The C23 half was reproduced on this host with a `gcc`
-#                wrapper prepending -std=c2x, which is a faithful stand-in
-#                for the dialect and for nothing else: it says nothing
-#                about GCC 15's code generation or its new diagnostics
-#                under EDK II's -Werror. A re-run on the user's Arch host
-#                is pending. WHEN IT ARRIVES: if it builds and the
-#                artifact checksums match, raise MQG_CC_CEILING below, fill
-#                in the 15.x row in decisions/0004, and update
-#                INGREDIENTS.md and host-profile G22 -- all four, or the
-#                next reader gets a number with no evidence behind it.
-#                (tests/compiler.bats asserts these constants, so the
-#                suite will remind you that you are changing a claim.) If
-#                it does not build, 15 stays outside and the reason gets
-#                written down in the same row.
+#                fixed. What has NOT happened is a complete build on any
+#                real compiler above 14. The nearest thing is
+#                squirrel-zapper, gcc 16.2.1, 2026-09-20: the OpenCore
+#                stage built clean in 397 s, which is real evidence that
+#                the dialect fix works on a live C23-default compiler,
+#                and then the OVMF stage died -- not on anything about
+#                gcc 16's code, but on a warning gcc 16 invented
+#                (-Werror=unused-but-set-variable=) in MdeModulePkg,
+#                under EDK II's -Werror. That is fixed too, by no longer
+#                inheriting upstream's -Werror in the firmware builds
+#                (boot/build-opencore.sh, boot/patches/0003). Neither fix
+#                has been TESTED up here: nobody has yet produced a
+#                firmware image on a gcc above 14, and the failure mode
+#                that remains -- different code generation, a green build
+#                with different bytes -- is the silent one. WHEN A
+#                COMPLETE RUN ARRIVES: if it builds and the artifact
+#                checksums match, raise MQG_CC_CEILING below, fill in the
+#                row in decisions/0004, and update INGREDIENTS.md and
+#                host-profile G22 -- all four, or the next reader gets a
+#                number with no evidence behind it. (tests/compiler.bats
+#                asserts these constants, so the suite will remind you
+#                that you are changing a claim.) If it does not build, the
+#                ceiling stays and the reason gets written down in the
+#                same row.
 #   below 13     NOT TESTED. Not "known to fail" -- never tried. A version
 #                this project has never seen is not a version to guess
 #                about, so it is a refusal rather than a warning.
@@ -295,6 +304,9 @@ compiler_range_check() {
         ABOVE)
             warn "compiler: $detail"
             warn "this is untested territory, not known-bad: building anyway."
+            warn "A new compiler's new warnings will no longer stop the firmware build"
+            warn "(upstream's -Werror is not inherited -- decisions/0004). They are"
+            warn "still printed, and up here they are worth reading."
             warn "WHAT TO WATCH FOR -- up here the failure mode is usually not an error."
             warn "OvmfPkg compiled clean under C23 and produced DIFFERENT firmware bytes"
             warn "(OVMF_CODE.fd 3373692a..., where docs/decisions/0004 records 195c4dcf...)."
@@ -310,10 +322,10 @@ compiler_range_check() {
         BELOW)
             warn "compiler: $detail"
             warn "This project has NOT tested it. That is not the same as knowing it fails:"
-            warn "nobody has ever tried. EDK II compiles with -Werror, so an older"
-            warn "compiler's missing or differently-spelled diagnostics are a build"
-            warn "failure, and its code generation is a different artifact than the"
-            warn "checksums in docs/decisions/0004 describe."
+            warn "nobody has ever tried. The firmware builds no longer inherit"
+            warn "upstream's -Werror, so a diagnostic this compiler spells differently"
+            warn "is no longer fatal -- but its code generation is still a different"
+            warn "artifact than the checksums in docs/decisions/0004 describe."
             warn "To build anyway, say what to believe: MQG_COMPILER='$MQG_CC_FAMILY $MQG_CC_VERIFIED'."
             warn "The image manifest still records the real compiler, so the two lines"
             warn "will disagree where anyone can see them."
