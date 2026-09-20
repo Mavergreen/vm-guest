@@ -141,6 +141,27 @@ fi
 grep -q 'std=gnu17' "$UDK/$OVMF_DSC" \
     || die "$OVMF_DSC still does not state a C dialect"
 
+# Stop inheriting upstream's -Werror. EDK II puts it on every gcc line, and
+# for tianocore and acidanthera that is the right discipline; for a
+# downstream consumer pinning a commit it cannot patch it means every
+# warning a newer compiler invents is a build failure in code we do not
+# own. That has now happened twice -- GCC 15's C23 default (fixed properly,
+# above, by stating the dialect) and GCC 16's
+# -Werror=unused-but-set-variable= in MdeModulePkg, which is what this
+# fixes. The whole argument is in the patch's header. The warnings are
+# still compiled for and still printed into ovmf-build.log; they just stop
+# being fatal.
+#
+# Same guard-and-assert as the dialect patch, and for the same reason.
+WERROR_PATCH="$MQG_REPO_ROOT/boot/patches/0003-firmware-drop-werror.patch"
+if ! grep -q 'Wno-error' "$UDK/$OVMF_DSC"; then
+    log "patching $OVMF_DSC to stop treating upstream's warnings as errors"
+    git -C "$UDK" apply -p1 "$WERROR_PATCH" \
+        || die "cannot patch $OVMF_DSC -- did audk $AUDK_COMMIT change?"
+fi
+grep -q 'Wno-error' "$UDK/$OVMF_DSC" \
+    || die "$OVMF_DSC still promotes upstream's warnings to errors"
+
 log "building $OVMF_DSC from audk $AUDK_COMMIT in $UDK"
 log "arch $OVMF_ARCH, toolchain $OVMF_TOOLCHAIN, target $OVMF_TARGET"
 log "compiler: $("$MQG_REPO_ROOT/boot/build-opencore.sh" --compiler)"

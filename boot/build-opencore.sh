@@ -84,6 +84,57 @@ OC_TARGET=RELEASE
 # See docs/decisions/0004 for the hole that remains.
 OC_STD=gnu17
 
+# UPSTREAM'S -Werror IS UPSTREAM'S DISCIPLINE, NOT OURS.
+#
+# EDK II puts -Werror on every gcc line (BaseTools/Conf/tools_def.template).
+# For acidanthera and tianocore that is a good rule: a warning nobody may
+# ignore is a warning that gets fixed. We are not them. We are a downstream
+# consumer pinning one commit of audk and one release of OpenCorePkg, built
+# by whatever compiler the host distribution ships. We cannot fix their
+# warnings -- patching upstream source to satisfy a compiler upstream never
+# used would be a fork we did not intend to have, growing by one hunk per
+# compiler release -- and A WARNING WE CANNOT ACT ON SHOULD NOT STOP OUR
+# BUILD.
+#
+# This is the class, not a case. A new compiler invents new warnings, and
+# -Werror turns every one of them into a build failure in code we do not
+# own. Twice now:
+#
+#   GCC 15  -std=gnu23 by default. That one is a change of LANGUAGE, not a
+#           new diagnostic, and OC_STD above is its proper fix.
+#   GCC 16  squirrel-zapper, 2026-09-20, gcc 16.2.1. OpenCore built clean
+#           in 397 s; OVMF died in 26 s on
+#           `variable 'Count' set but not used
+#           [-Werror=unused-but-set-variable=]` in MdeModulePkg. Note the
+#           trailing `=`: GCC 16 gave that warning a level argument, so it
+#           is not even spelled the way GCC 13 spells it.
+#
+# -Wno-unused-but-set-variable would have fixed the instance and taught
+# nothing, and GCC 17 will bring a third. So: upstream keeps -Werror, we
+# stop inheriting a build failure from it.
+#
+# THE WARNINGS ARE STILL PRINTED. -Wno-error cancels the promotion to
+# errors and nothing else; -Wall is untouched and every diagnostic is still
+# in build.log. Non-fatal is the point; invisible would be a regression.
+#
+# Our own shell and test code keeps every gate it has -- shellcheck,
+# bin/tier-check.sh --strict, bin/bash32-check.sh. This is about upstream
+# C we did not write, and nothing else.
+OC_NO_WERROR=-Wno-error
+
+# The two flags as ONE `build` macro value, and why the separator is a tab.
+#
+# efibuild.sh reads BUILD_ARGUMENTS out of the environment and splits it
+# with `IFS=', ' read -r -a` -- on spaces AND commas. A macro value holding
+# a space would therefore arrive at `build` as two arguments, the second of
+# them an unrecognised option. A tab is not in that IFS, so it survives the
+# split as a single argument; build.py normalises it back to a space when
+# it writes CC_FLAGS into the generated GNUmakefile, which is where the two
+# flags separate again. Written with printf rather than as a literal tab so
+# it is visible in this file and cannot be lost to a reformat -- and
+# asserted after the build rather than trusted, below.
+OC_BUILD_OPTIONS=$(printf -- '-std=%s\t%s' "$OC_STD" "$OC_NO_WERROR")
+
 # The pinned commits. These are what "reproducible" means for this build,
 # and this is the one place they are written down: boot/fetch-edk2.sh asks
 # this script (--show-pins) what to download. vendor/sources.tsv holds the
@@ -411,7 +462,7 @@ start=$(date +%s)
     cd "$SRC"
     ARCHS=$OC_ARCH TOOLCHAINS=$OC_TOOLCHAIN TARGETS=$OC_TARGET \
         OFFLINE_MODE=1 EFIBUILD_SH="$efibuild" \
-        BUILD_ARGUMENTS="-D OCPKG_BUILD_OPTIONS=-std=$OC_STD" \
+        BUILD_ARGUMENTS="-D OCPKG_BUILD_OPTIONS=$OC_BUILD_OPTIONS" \
         ./build_oc.tool
 ) || die "build_oc.tool failed -- see $UDK/build.log, and report the error rather than working around it"
 elapsed=$(( $(date +%s) - start ))
@@ -419,6 +470,24 @@ log "build_oc.tool finished in $((elapsed / 60))m$((elapsed % 60))s"
 
 BUILT="$UDK/Build/OpenCorePkg/${OC_TARGET}_${OC_TOOLCHAIN}/$OC_ARCH"
 [ -d "$BUILT" ] || die "build reported success but $BUILT does not exist"
+
+# Assert that both halves of $OC_BUILD_OPTIONS reached the compiler, the
+# way boot/build-ovmf.sh asserts its two patches took. This is the check
+# that a tab quietly becoming a space -- or upstream's hook quietly going
+# away on a pin bump -- cannot get past. The generated GNUmakefiles are
+# rewritten on every build, warm or cold, so this holds when nothing was
+# recompiled; grepping build.log would not.
+#
+# `sort | sed -n 1p` rather than `head -1`: under `set -o pipefail` a head
+# that closes the pipe early makes find die of SIGPIPE and takes the whole
+# script with it.
+mk=$(find "$BUILT" -name GNUmakefile | sort | sed -n '1p')
+[ -n "$mk" ] || die "no GNUmakefile under $BUILT -- cannot check the build flags"
+for flag in "-std=$OC_STD" "$OC_NO_WERROR"; do
+    grep -q -- "$flag" "$mk" \
+        || die "$flag never reached the compiler (checked $mk)" \
+               "-- did OpenCorePkg $OC_VERSION drop \$(OCPKG_BUILD_OPTIONS)?"
+done
 
 mkdir -p "$OUT"
 missing=()

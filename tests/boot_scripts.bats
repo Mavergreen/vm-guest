@@ -281,8 +281,87 @@ setup() {
     grep -q 'OC_STD=gnu17' "$REPO/boot/build-opencore.sh"
     # Through upstream's own hook, carried by efibuild.sh's BUILD_ARGUMENTS,
     # so build_oc.tool needs no patch for this.
-    grep -q 'BUILD_ARGUMENTS="-D OCPKG_BUILD_OPTIONS=-std=\$OC_STD"' \
+    grep -q 'BUILD_ARGUMENTS="-D OCPKG_BUILD_OPTIONS=\$OC_BUILD_OPTIONS"' \
         "$REPO/boot/build-opencore.sh"
+    grep -q 'OC_BUILD_OPTIONS=.*-std=%s' "$REPO/boot/build-opencore.sh"
+}
+
+# --- upstream's -Werror, which is upstream's discipline and not ours ---
+#
+# EDK II compiles with -Werror. We pin a commit of audk and a release of
+# OpenCorePkg and cannot fix their warnings, so every diagnostic a newer
+# compiler invents is a build failure in code we do not own: GCC 15's C23
+# default (fixed properly by stating the dialect, above) and then GCC 16's
+# -Werror=unused-but-set-variable= in MdeModulePkg, on squirrel-zapper.
+# Firmware only -- our own shell and tests keep every gate they have.
+# See the 2026-09-20 entries in NOTES.md and docs/decisions/0004.
+
+@test "the OpenCore build stops treating upstream's warnings as errors" {
+    grep -q '^OC_NO_WERROR=-Wno-error$' "$REPO/boot/build-opencore.sh"
+}
+
+@test "the two firmware flags travel as one tab-separated argument" {
+    # efibuild.sh splits BUILD_ARGUMENTS with `IFS=', ' read -r -a`, i.e.
+    # on spaces AND commas. A space here would arrive at `build` as two
+    # arguments and quietly lose -Wno-error. Evaluate the real line rather
+    # than describing it, so a reformat that ate the tab fails here.
+    line=$(grep '^OC_BUILD_OPTIONS=' "$REPO/boot/build-opencore.sh")
+    OC_STD=gnu17
+    OC_NO_WERROR=-Wno-error
+    eval "$line"
+    [ "$OC_BUILD_OPTIONS" = "$(printf -- '-std=gnu17\t-Wno-error')" ]
+    case "$OC_BUILD_OPTIONS" in *" "*) return 1 ;; esac
+}
+
+@test "the build asserts that both flags reached the compiler" {
+    # A hook that silently stopped expanding would otherwise pass for
+    # success -- the same reason the .dsc patches are asserted after.
+    grep -q 'name GNUmakefile' "$REPO/boot/build-opencore.sh"
+    grep -q 'for flag in "-std=\$OC_STD" "\$OC_NO_WERROR"' \
+        "$REPO/boot/build-opencore.sh"
+}
+
+@test "the OVMF -Werror patch adds the flag and nothing else" {
+    p="$REPO/boot/patches/0003-firmware-drop-werror.patch"
+    [ -f "$p" ]
+    grep -q '^+  GCC:\*_\*_\*_CC_FLAGS = -Wno-error' "$p"
+    # It only ever adds, like 0002: a .dsc patch that removes a line is a
+    # different and much larger claim.
+    [ -z "$(grep -E '^-[^-]' "$p" || true)" ]
+}
+
+@test "build-ovmf.sh applies the -Werror patch and checks that it took" {
+    grep -q '0003-firmware-drop-werror.patch' "$REPO/boot/build-ovmf.sh"
+    # Guarded before, asserted after -- the build_oc.tool pattern.
+    [ "$(grep -c "grep -q 'Wno-error'" "$REPO/boot/build-ovmf.sh")" -eq 2 ]
+}
+
+@test "the fix is the class, not the diagnostic of the day" {
+    # -Wno-unused-but-set-variable would have fixed squirrel-zapper's GCC
+    # 16 failure and taught nothing; GCC 17 will bring a third one. Nothing
+    # under boot/ may name an individual warning.
+    ! grep -rq -- '-Wno-error=' "$REPO/boot"
+}
+
+@test "dropping -Werror does not hide the warnings" {
+    # The point is that upstream's warnings stop being fatal, not that they
+    # stop existing. The patch adds exactly one compiler flag, and it is
+    # -Wno-error -- not -w, not -Wno-<something>, nothing that would stop a
+    # diagnostic being printed.
+    p="$REPO/boot/patches/0003-firmware-drop-werror.patch"
+    [ "$(grep -c '^+.*CC_FLAGS' "$p")" -eq 1 ]
+    grep -q '^+  GCC:\*_\*_\*_CC_FLAGS = -Wno-error' "$p"
+    # And the compiler's output still lands in a log the failure path names.
+    grep -q 'ovmf-build.log' "$REPO/boot/build-ovmf.sh"
+}
+
+@test "our own shell and tests keep every gate they have" {
+    # Scope: the -Werror change is for upstream C we did not write. If
+    # anyone reaches for the same argument to quiet shellcheck, tier-check
+    # or the bash 3.2 check, this is where it stops.
+    grep -q 'shellcheck' "$REPO/bin/run-tests.sh"
+    grep -q 'tier-check.sh" --strict' "$REPO/bin/run-tests.sh"
+    grep -q 'bash32-check.sh' "$REPO/bin/run-tests.sh"
 }
 
 @test "the OVMF dialect patch adds the flag and nothing else" {
