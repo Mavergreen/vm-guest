@@ -4824,3 +4824,58 @@ verdict that misattributes is worse than no verdict: it sends someone
 hunting a filesystem bug that is not there.
 
 Test count 416 → 437.
+
+### A 369-second silence: `set -e` ate the diagnostic, again
+
+`squirrel-zapper`, 2026-09-20, two runs. The media stage failed after
+369 s with this as its final log line:
+
+```
+mqg: running privileged operations in a QEMU microVM (no host root)
+```
+
+No error. No die message. Nothing on the terminal, nothing in
+`pipeline.log`, nothing in the report's 25-line tail — because there was
+nothing to find.
+
+**Cause.** `lib/privops-qemu-linux.sh:250` read:
+
+```sh
+out=$(timeout 300 qemu-system-x86_64 ... 2>&1)
+```
+
+The microVM exceeded 300 s on that host, `timeout` returned 124, and
+**a command substitution that fails in an assignment is fatal under
+`set -e`** (`media/build-installer-img.sh:30` sets `-euo pipefail`). The
+script died on that line — six lines above the `die "privileged
+operations failed inside the microVM"` written to explain exactly this.
+
+The arithmetic fits: 369 s ≈ time to reach the microVM, plus the 300 s
+timeout.
+
+**This project had already written this lesson down.** The
+`screenshot.sh | head -1` entry above says it: *"a command substitution
+that fails in an assignment is fatal under `set -e`"*, and *"progress
+reporting must not be able to end the thing it is reporting on."* The
+lesson was recorded and did not travel, the same way `prereqs.sh` had the
+`${arr[@]+"${arr[@]}"}` guard while three other sites did not.
+
+**Why 300 s was wrong anyway.** It is a wall-clock bound on someone
+else's hardware. Fine on a 6-core Coffee Lake; expired on a 2-core
+Broadwell doing identical work. A fixed number cannot know that.
+
+**Fixed.** `rc` is captured (`&& rc=0 || rc=$?`), 124 is distinguished
+from a guest that ran and failed — the remedies are unrelated, one being
+a slower machine and the other a broken payload — the timeout is 900 s
+and overridable via `MQG_PRIVOPS_TIMEOUT`, and the console tail is
+printed either way.
+
+**Cost.** Two 19-minute runs on someone else's laptop, and two of my own
+round trips spent salvaging logs that never contained anything, because
+the failure produced no output to salvage. The log-salvage work was
+correct and still would not have helped here.
+
+**Worth generalising:** every `x=$(...)` under `set -e` is a silent exit
+waiting for its command to fail. This is the third instance in this
+project. A check for bare command substitutions in assignments would find
+the rest, and is a better use of effort than finding the fourth by hand.

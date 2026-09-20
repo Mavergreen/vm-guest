@@ -188,3 +188,18 @@ setup() {
     [[ "$output" == *"available: no"* ]]
     [[ "$output" == *"missing: "* ]]
 }
+
+@test "a microVM timeout reports itself instead of dying silently" {
+    # squirrel-zapper 2026-09-20, twice: out=$(timeout 300 qemu ...) under
+    # set -e killed the script the instant the timeout expired, before
+    # reaching any die message. The media stage ran 369s and its last log
+    # line was "running privileged operations in a QEMU microVM".
+    run grep -n 'timeout "$MQG_PRIVOPS_TIMEOUT"' "$REPO/lib/privops-qemu-linux.sh"
+    [ "$status" -eq 0 ]
+    # The status is captured, not left to set -e.
+    grep -q 'rc=0 || rc=\$?' "$REPO/lib/privops-qemu-linux.sh"
+    # 124 is distinguished from a guest that ran and failed.
+    grep -q '"\$rc" -eq 124' "$REPO/lib/privops-qemu-linux.sh"
+    # And the timeout is overridable for slower hosts.
+    grep -q 'MQG_PRIVOPS_TIMEOUT:=900' "$REPO/lib/privops-qemu-linux.sh"
+}

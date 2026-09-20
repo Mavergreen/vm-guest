@@ -234,7 +234,7 @@ INIT
 }
 
 privops_run_qemu_linux() {
-    local img=$1 script=$2 initramfs out mods kernel
+    local img=$1 script=$2 initramfs out mods kernel rc
     kernel=$(privops_qemu_linux_kernel) || die \
         "no readable kernel image for $MQG_PRIVOPS_KVER (looked for: $(
             privops_qemu_linux_kernel_candidates | tr '\n' ' '))"
@@ -247,12 +247,42 @@ privops_run_qemu_linux() {
     privops_qemu_linux_build_initramfs "$initramfs"
     mods=$(printf '%s' "$MQG_PRIVOPS_MODULES" | tr ' ' ',')
 
+    # The timeout is generous and overridable, because it is a wall-clock
+    # bound on someone else's hardware. 300s was fine on a 6-core Coffee
+    # Lake and expired on a 2-core Broadwell doing the same work, which is
+    # the kind of thing a fixed number cannot know.
+    : "${MQG_PRIVOPS_TIMEOUT:=900}"
+
     log "running privileged operations in a QEMU microVM (no host root)"
-    out=$(timeout 300 qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-reboot \
+    # rc is captured, NOT left to `set -e`. A command substitution that
+    # fails in an ASSIGNMENT is fatal immediately under `set -e`, so
+    # `out=$(timeout ... )` killed this script the instant the timeout
+    # expired -- before reaching either of the die messages below that
+    # exist to say what went wrong. On squirrel-zapper 2026-09-20 that
+    # produced a 369-second media stage whose last line was "running
+    # privileged operations in a QEMU microVM" and nothing else, on a
+    # machine belonging to someone else, twice.
+    #
+    # NOTES.md already records this exact pattern from `screenshot.sh |
+    # head -1`: the lesson was written down and did not travel. It is the
+    # same class as the `${arr[@]+...}` guard that prereqs.sh had and three
+    # other sites did not.
+    out=$(timeout "$MQG_PRIVOPS_TIMEOUT" qemu-system-x86_64 \
+        -enable-kvm -m 512 -nographic -no-reboot \
         -kernel "$kernel" -initrd "$initramfs" \
         -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=$mods" \
-        -drive file="$img",format=raw,if=virtio 2>&1)
+        -drive file="$img",format=raw,if=virtio 2>&1) && rc=0 || rc=$?
     rm -f "$initramfs"
+
+    # 124 is timeout(1)'s own "I killed it". Distinguished from a guest
+    # that ran and failed, because the remedies are unrelated: one is a
+    # slower machine or a hung microVM, the other is a broken payload.
+    if [ "$rc" -eq 124 ]; then
+        printf '%s\n' "$out" | tail -20 >&2
+        die "the microVM did not finish within ${MQG_PRIVOPS_TIMEOUT}s" \
+            "-- raise MQG_PRIVOPS_TIMEOUT if this host is slower, or see" \
+            "the console output above if it hung"
+    fi
 
     # Surface whatever the payload printed. The microVM's console also
     # carries kernel noise and terminal escapes, so strip those rather than
