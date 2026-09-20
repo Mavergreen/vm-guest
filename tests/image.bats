@@ -56,6 +56,17 @@ setup() {
     [[ "$output" == *"compiler"* ]]
 }
 
+# WHICH compiler and WHAT WE THOUGHT OF IT are two different facts, and the
+# second one cannot be reconstructed later: the supported range moves as
+# evidence arrives (lib/compiler.sh) and the image does not. Without this
+# line, an image built above the ceiling silently becomes a supported build
+# the day the ceiling is raised. See docs/decisions/0004, "Answered".
+@test "the manifest records whether that compiler was inside the declared range" {
+    run "$BUILD" --manifest-fields
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"compilerrange"* ]]
+}
+
 @test "the build scripts can say which compiler they will use" {
     run "$REPO/boot/build-opencore.sh" --compiler
     [ "$status" -eq 0 ]

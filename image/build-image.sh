@@ -72,6 +72,7 @@ updates|which post-10.9.5 updates the image carries
 accel|accelerator, machine, cpu, memory and disk size
 qemu|the QEMU this was built with
 compiler|the C compiler the boot stack was built with, and the dialect it was asked for -- NOT a pin, see docs/decisions/0004
+compilerrange|whether that compiler was inside the range this project declares it supports, as judged when this image was built (lib/compiler.sh)
 image|sha256 and size of the qcow2 produced
 ingredients|digest over every pin this repo controls (bin/ingredient-fingerprint.sh)
 ingredient.*|each of those pins, one line each, so a diff names what moved"
@@ -914,6 +915,19 @@ stage_manifest() {
         # pinned", and docs/host-profile.md G22.
         printf 'compiler\t%s\n' \
             "$("$MQG_REPO_ROOT/boot/build-opencore.sh" --compiler 2>/dev/null || echo unknown)"
+        # ... AND WHAT WE THOUGHT OF IT AT THE TIME.
+        #
+        # The line above says which compiler; this one says whether the
+        # project claimed to support it when this image was made. They are
+        # not the same fact and the second one cannot be reconstructed
+        # later: the range moves as evidence arrives (lib/compiler.sh), the
+        # image does not, so an image built above the ceiling has to carry
+        # its own "this was untested territory" or it silently becomes a
+        # supported build the day the ceiling is raised. It also records an
+        # MQG_COMPILER override, which is the one way a below-floor
+        # compiler can get this far.
+        printf 'compilerrange\t%s\n' \
+            "$("$MQG_REPO_ROOT/boot/build-opencore.sh" --compiler-range 2>/dev/null || echo unknown)"
         printf 'image\t%s %s bytes\n' \
             "$(sha256_file "$out_qcow2")" "$(stat -c %s "$out_qcow2")"
         # EVERY PIN, ONE LINE EACH, AND A DIGEST OVER THE LOT.
