@@ -572,6 +572,8 @@ bash_version=${BASH_VERSION:-unknown}
 
 build_ok=unknown
 media_built=unknown
+media_failure_kind=unknown
+media_failure=
 failed_stage=
 
 boot_fresh=unknown
@@ -674,6 +676,14 @@ if [ "$level" != probe ]; then
         FAILED) media_built=no ;;
         *)      media_built=not-run ;;
     esac
+    # WHY the media stage failed, not just that it did. G20 is a claim
+    # about media corruption, and only the post-unmount verification can
+    # speak to it; a media stage that stopped for any other reason is not
+    # evidence. See tri_media_failure_kind.
+    if [ "$media_built" = no ]; then
+        media_failure_kind=$(tri_media_failure_kind "$scratch/pipeline.log")
+        media_failure=$(tri_media_failure_reason "$scratch/pipeline.log")
+    fi
     if stage_was_preexisting ovmf && stage_was_preexisting efi; then
         boot_fresh=no
     else
@@ -749,6 +759,7 @@ tri_fact level "$level"
 tri_fact build_ok "$build_ok"
 tri_fact failed_stage "${failed_stage:-none}"
 tri_fact media_built "$media_built"
+tri_fact media_failure "${media_failure:-none}"
 tri_fact install_ok "$install_ok"
 tri_fact ovmf_sha256 "$ovmf_sha"
 tri_fact opencore_sha256 "$opencore_sha"
@@ -782,7 +793,7 @@ add G16 g16_verdict "$guest_bus"
 add G17 g17_verdict "$nested"
 add G18 g18_verdict "$have_ept"
 add G19 g19_verdict
-add G20 g20_verdict "$media_built" "$failed_stage"
+add G20 g20_verdict "$media_built" "$failed_stage" "$media_failure_kind" "$media_failure"
 
 # --- report -----------------------------------------------------------------
 

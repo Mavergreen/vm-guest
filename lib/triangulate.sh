@@ -102,6 +102,52 @@ tri_failed_stage() {
     printf '%s' "$1" | awk -F'\t' '$2 == "FAILED" { print $1; exit }'
 }
 
+# tri_media_failure_kind <pipeline log> -- what KIND of failure the media
+# stage had: "verification", "other", or "unknown".
+#
+# WHY A STAGE RESULT IS NOT ENOUGH. G20 is a claim about a second writer
+# corrupting installer media, and the only evidence for or against it is
+# the post-unmount package check. The media stage does a dozen other
+# things first -- convert the ESD, populate an HFS+ volume, inject hooks,
+# restore root ownership in a microVM -- and any of them can stop it. On
+# squirrel-zapper 2026-09-20 the media was built, entry for entry, all
+# sixteen of Apple's packages matching, and the run then died because the
+# privops backend was unavailable on that distribution. The ledger called
+# that G20 REFUTE. Nothing had been written twice and nothing had been
+# verified.
+#
+# So "verification" is recognised POSITIVELY, from the message the check
+# itself dies with, and everything else is "other". An unrecognised failure
+# is not evidence about media corruption, and guessing that it is, is the
+# bug this exists to prevent.
+tri_media_failure_kind() {
+    local log=${1:-}
+    if [ -z "$log" ] || [ ! -r "$log" ]; then
+        printf 'unknown\n'
+        return 0
+    fi
+    # The ESD's copy of this message is deliberately NOT matched: it means
+    # the conversion off Apple's image was wrong before the media existed,
+    # which is a dmg2img question, not a G20 one. See check_esd_packages
+    # and verify_media_packages in media/build-installer-img.sh.
+    if grep -q 'the media does not contain what Apple shipped' "$log"; then
+        printf 'verification\n'
+    else
+        printf 'other\n'
+    fi
+}
+
+# tri_media_failure_reason <pipeline log> -- the last error the pipeline
+# printed, without its script prefix. Empty when the log says nothing.
+#
+# A verdict that says only "something else failed" sends a reader into a
+# megabyte of build log; one that names the failure sends them to the line.
+tri_media_failure_reason() {
+    local log=${1:-}
+    [ -n "$log" ] && [ -r "$log" ] || return 0
+    sed -n 's/^[A-Za-z0-9_.-]*: error: //p' "$log" | tail -1
+}
+
 # --- small pure judges -----------------------------------------------------
 
 # cpu_has_flag <flag list> <flag> -- spelling-insensitive.
@@ -411,15 +457,27 @@ g19_verdict() {
 # post-unmount checksum notices."
 #
 # `built` is what the media stage itself did, not what the run did: see
-# tri_stage_result. REFUTE is reserved for a media stage that ran and
-# failed, because that is the only outcome that is evidence about media.
-# A pipeline that stopped earlier says so and names the stage that stopped
-# it, so the reader goes to the right place.
+# tri_stage_result. `kind` is what kind of failure it was, when it failed:
+# see tri_media_failure_kind.
+#
+# REFUTE IS RESERVED FOR THE POST-UNMOUNT VERIFICATION FINDING CORRUPTION,
+# because that is the only outcome that is evidence about this entry. A
+# media stage that fell over for some other reason -- a missing privops
+# backend, a full disk, a tool this host does not have -- is a CANNOT-SAY
+# that names the reason. This is the same misattribution tri_stage_result
+# fixed one level up: there, "the run failed" was read as "media failed";
+# here, "media failed" was read as "G20 happened".
 g20_verdict() {
-    local built=$1 failed=${2:-}
+    local built=$1 failed=${2:-} kind=${3:-unknown} reason=${4:-}
     case $built in
         yes)    judge CONFIRM "media built here and verified against media/apple-packages.sha256 from a fresh mount: the verification the entry asks for ran, and passed" ;;
-        no)     judge REFUTE "media build or its post-unmount verification failed on this host -- the interesting case. Keep the log" ;;
+        no)
+            case $kind in
+                verification)
+                    judge REFUTE "the media built and then FAILED its post-unmount check against media/apple-packages.sha256${reason:+ -- $reason}. That is the interesting case, and the only one that is evidence here. Keep the log" ;;
+                *)
+                    judge CANNOT-SAY "the media stage failed before any verification ran${reason:+: $reason}. Whatever that is, it is not a second writer corrupting media -- nothing was verified and nothing reported corrupt. Fix the named failure and re-run" ;;
+            esac ;;
         reused) judge CANNOT-SAY "media was already on this host and was reused, not rebuilt: this run is no evidence either way" ;;
         not-run)
             if [ -n "$failed" ]; then

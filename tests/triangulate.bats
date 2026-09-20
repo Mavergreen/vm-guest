@@ -204,9 +204,63 @@ tri_report() {
     [[ "$output" != *REFUTE* ]]
 }
 
-@test "G20 still refutes when the media stage itself failed" {
-    run g20_verdict no media
+# The same class of misattribution, one level finer. On squirrel-zapper
+# 2026-09-20 the media stage built 52,292 entries with every one of Apple's
+# packages matching its pinned checksum, and then died restoring root
+# ownership because the privops backend was not available on that
+# distribution. The ledger said "G20 REFUTE -- media build or its
+# post-unmount verification failed". No second writer, no corruption, no
+# verification even attempted.
+
+@test "G20 refutes only when the post-unmount verification found corruption" {
+    run g20_verdict no media verification "the media does not contain what Apple shipped."
     [[ "$output" == REFUTE* ]]
+    [[ "$output" == *"post-unmount"* ]]
+}
+
+@test "G20 does not blame corruption for a media stage that failed for another reason" {
+    run g20_verdict no media other \
+        "privops backend 'qemu-linux' is not available on this host"
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *privops* ]]
+    [[ "$output" != *REFUTE* ]]
+}
+
+@test "G20 will not guess when the log does not say what failed" {
+    run g20_verdict no media unknown ""
+    [[ "$output" == CANNOT-SAY* ]]
+}
+
+# --- telling the two kinds of media-stage failure apart --------------------
+
+@test "tri_media_failure_kind recognises the post-unmount check by its message" {
+    printf 'mqg: error: the media does not contain what Apple shipped. Re-run\n' \
+        > "$BATS_TEST_TMPDIR/log"
+    [ "$(tri_media_failure_kind "$BATS_TEST_TMPDIR/log")" = verification ]
+}
+
+@test "tri_media_failure_kind calls anything else other, and no log unknown" {
+    printf "mqg: error: privops backend 'qemu-linux' is not available on this host\n" \
+        > "$BATS_TEST_TMPDIR/log"
+    [ "$(tri_media_failure_kind "$BATS_TEST_TMPDIR/log")" = other ]
+    [ "$(tri_media_failure_kind "$BATS_TEST_TMPDIR/nosuchlog")" = unknown ]
+    [ "$(tri_media_failure_kind)" = unknown ]
+}
+
+# The ESD check dies with nearly the same sentence about a different thing:
+# a bad conversion off Apple's image, before any media exists. Reading that
+# as media corruption would be the same bug with a different suspect.
+@test "tri_media_failure_kind does not mistake the ESD check for the media check" {
+    printf 'mqg: error: the ESD does not contain what Apple shipped. The suspects are dmg2img\n' \
+        > "$BATS_TEST_TMPDIR/log"
+    [ "$(tri_media_failure_kind "$BATS_TEST_TMPDIR/log")" = other ]
+}
+
+@test "tri_media_failure_reason returns the last error the pipeline printed" {
+    printf 'mqg: error: an earlier one\nmqg: some chatter\nmqg: error: the last one\n' \
+        > "$BATS_TEST_TMPDIR/log"
+    [ "$(tri_media_failure_reason "$BATS_TEST_TMPDIR/log")" = "the last one" ]
+    [ -z "$(tri_media_failure_reason "$BATS_TEST_TMPDIR/nosuchlog")" ]
 }
 
 @test "G5 blames the stage that stopped the build, not the missing checksums" {
