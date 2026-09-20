@@ -43,11 +43,14 @@
 #                about GCC 15's code generation or its new diagnostics
 #                under EDK II's -Werror. A re-run on the user's Arch host
 #                is pending. WHEN IT ARRIVES: if it builds and the
-#                checksums match, raise MQG_CC_CEILING to 15 here, and say
-#                so in decisions/0004 and host-profile G22 -- all three,
-#                or the next reader gets a number with no evidence behind
-#                it. If it does not build, 15 stays outside and the reason
-#                gets written down.
+#                artifact checksums match, raise MQG_CC_CEILING below, fill
+#                in the 15.x row in decisions/0004, and update
+#                INGREDIENTS.md and host-profile G22 -- all four, or the
+#                next reader gets a number with no evidence behind it.
+#                (tests/compiler.bats asserts these constants, so the
+#                suite will remind you that you are changing a claim.) If
+#                it does not build, 15 stays outside and the reason gets
+#                written down in the same row.
 #   below 13     NOT TESTED. Not "known to fail" -- never tried. A version
 #                this project has never seen is not a version to guess
 #                about, so it is a refusal rather than a warning.
