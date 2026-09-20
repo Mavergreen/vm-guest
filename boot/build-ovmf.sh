@@ -109,8 +109,30 @@ have=$(cat "$prepared")
 "$MQG_REPO_ROOT/boot/prereqs.sh" >/dev/null \
     || die "build prerequisites are missing -- run boot/prereqs.sh"
 
+# Pin the C dialect OvmfPkg is compiled in, rather than inheriting whatever
+# the host gcc defaults to this year. The reasoning and the measurement are
+# in the patch's own header; the short version is that -std=c2x changes
+# OVMF_CODE.fd's bytes on this host, so an unstated dialect is an unstated
+# input to a firmware decisions/0004 records by checksum.
+#
+# Patched, not edited, for the same reason build_oc.tool is: what we do to
+# upstream is a diff anyone can read. Guarded by the grep so a warm tree is
+# not patched twice, and asserted afterwards so a patch that silently did
+# nothing cannot pass for success. boot/build-opencore.sh re-unpacks this
+# tree whenever the audk pin moves, which is why this runs on every build
+# rather than once.
+DIALECT_PATCH="$MQG_REPO_ROOT/boot/patches/0002-ovmf-pin-the-c-dialect.patch"
+if ! grep -q 'std=gnu17' "$UDK/$OVMF_DSC"; then
+    log "patching $OVMF_DSC to state its C dialect"
+    git -C "$UDK" apply -p1 "$DIALECT_PATCH" \
+        || die "cannot patch $OVMF_DSC -- did audk $AUDK_COMMIT change?"
+fi
+grep -q 'std=gnu17' "$UDK/$OVMF_DSC" \
+    || die "$OVMF_DSC still does not state a C dialect"
+
 log "building $OVMF_DSC from audk $AUDK_COMMIT in $UDK"
 log "arch $OVMF_ARCH, toolchain $OVMF_TOOLCHAIN, target $OVMF_TARGET"
+log "compiler: $("$MQG_REPO_ROOT/boot/build-opencore.sh" --compiler)"
 start=$(date +%s)
 (
     cd "$UDK"

@@ -45,6 +45,45 @@ OC_ARCH=X64
 OC_TOOLCHAIN=GCC
 OC_TARGET=RELEASE
 
+# THE C DIALECT, WHICH IS AN INPUT NOBODY WROTE DOWN.
+#
+# EDK II's tools_def sets no -std at all, so every file is compiled in
+# whatever dialect the host's gcc defaults to. That was gnu17 for a decade.
+# GCC 15 defaults to gnu23, where `bool` is a keyword -- and OpenCorePkg
+# 1.0.7 carries Apple's libDER, which does
+#
+#     #ifndef bool
+#     typedef BOOLEAN bool;
+#     #endif
+#
+# in Library/OcAppleImg4Lib/libDER_config.h. A keyword is not a macro, so
+# the #ifndef does not save it, and with EDK II's -Werror the follow-on
+# warning is fatal:
+#
+#     libDER_config.h:31:17: error: two or more data types in declaration
+#     specifiers
+#     libDER_config.h:31:1: error: useless type name in empty declaration
+#
+# Reproduced on this host's gcc 13.3.0 -- which builds fine by default --
+# by putting a `gcc` wrapper that prepends -std=c2x first on PATH, which is
+# exactly what a C23-default compiler is. See NOTES.md.
+#
+# WHY GLOBAL AND NOT JUST THE ONE LIBRARY. It was tried: a [BuildOptions]
+# section in OcAppleImg4Lib.inf fixes libDER and the build then dies in
+# OcCompressionLib's bundled zlib, whose K&R function definitions C23 also
+# removed. The breakage is "third-party C vendored into OpenCorePkg", not
+# one file, so the dialect is set for the platform.
+#
+# HOW IT GETS THERE. OpenCorePkg.dsc's [BuildOptions] expands
+# $(OCPKG_BUILD_OPTIONS) into every CC_FLAGS line -- upstream's own hook,
+# and undefined by default. efibuild.sh passes $BUILD_ARGUMENTS through to
+# `build`, and BUILD_ARGUMENTS is read from the environment, so this
+# survives the ./build_oc.tool call below without patching anything.
+#
+# This does NOT pin the compiler, only the language it is asked to speak.
+# See docs/decisions/0004 for the hole that remains.
+OC_STD=gnu17
+
 # The pinned commits. These are what "reproducible" means for this build,
 # and this is the one place they are written down: boot/fetch-edk2.sh asks
 # this script (--show-pins) what to download. vendor/sources.tsv holds the
@@ -166,6 +205,27 @@ if [ "${1:-}" = "--udk-dir" ]; then
 fi
 if [ "${1:-}" = "--udk-commit" ]; then
     printf '%s\n' "$AUDK_COMMIT"
+    exit 0
+fi
+
+# The compiler this build will actually use, as one line.
+#
+# EDK II's GCC toolchain runs DEF(GCC_X64_PREFIX)gcc, and GCC_X64_PREFIX is
+# ENV(GCC_BIN) -- empty on a normal host, so it is plain `gcc` off PATH.
+# image/build-image.sh records this in the image manifest beside the qemu
+# line, because a pinned source set plus an unpinned compiler is not a
+# reproducible build, and the manifest is where that is admitted rather
+# than assumed. See docs/decisions/0004 and docs/host-profile.md G22.
+host_compiler() {
+    local cc=${GCC_BIN:-}gcc ver
+    command -v "$cc" >/dev/null 2>&1 || { printf '%s not found\n' "$cc"; return 0; }
+    ver=$("$cc" --version 2>/dev/null | head -1)
+    printf '%s (%s) -std=%s\n' "${ver:-unknown}" \
+        "$("$cc" -dumpmachine 2>/dev/null || echo unknown-target)" "$OC_STD"
+}
+
+if [ "${1:-}" = "--compiler" ]; then
+    host_compiler
     exit 0
 fi
 
@@ -325,11 +385,13 @@ fi
 
 log "building OpenCore $OC_VERSION in $SRC"
 log "arch $OC_ARCH, toolchain $OC_TOOLCHAIN, target $OC_TARGET (this takes a while and is noisy)"
+log "compiler: $(host_compiler)"
 start=$(date +%s)
 (
     cd "$SRC"
     ARCHS=$OC_ARCH TOOLCHAINS=$OC_TOOLCHAIN TARGETS=$OC_TARGET \
         OFFLINE_MODE=1 EFIBUILD_SH="$efibuild" \
+        BUILD_ARGUMENTS="-D OCPKG_BUILD_OPTIONS=-std=$OC_STD" \
         ./build_oc.tool
 ) || die "build_oc.tool failed -- see $UDK/build.log, and report the error rather than working around it"
 elapsed=$(( $(date +%s) - start ))

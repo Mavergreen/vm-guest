@@ -270,6 +270,36 @@ setup() {
     grep -q '^+src=\$(cat "\${EFIBUILD_SH}")' "$p"
 }
 
+# --- the C dialect, which used to be whatever the host felt like ------
+#
+# EDK II sets no -std, so before this the dialect was the host compiler's
+# default. GCC 15 changed that default to gnu23, where `bool` is a keyword,
+# and OpenCorePkg 1.0.7's vendored libDER does `typedef BOOLEAN bool;`.
+# See the 2026-09-20 entry in NOTES.md and docs/host-profile.md G22.
+
+@test "the OpenCore build states the C dialect it wants" {
+    grep -q 'OC_STD=gnu17' "$REPO/boot/build-opencore.sh"
+    # Through upstream's own hook, carried by efibuild.sh's BUILD_ARGUMENTS,
+    # so build_oc.tool needs no patch for this.
+    grep -q 'BUILD_ARGUMENTS="-D OCPKG_BUILD_OPTIONS=-std=\$OC_STD"' \
+        "$REPO/boot/build-opencore.sh"
+}
+
+@test "the OVMF dialect patch adds the flag and nothing else" {
+    p="$REPO/boot/patches/0002-ovmf-pin-the-c-dialect.patch"
+    [ -f "$p" ]
+    grep -q '^+  GCC:\*_\*_\*_CC_FLAGS = -std=gnu17' "$p"
+    # It only ever adds; a patch to a .dsc that removes a line is a
+    # different and much larger claim.
+    [ -z "$(grep -E '^-[^-]' "$p" || true)" ]
+}
+
+@test "build-ovmf.sh applies the dialect patch and checks that it took" {
+    grep -q '0002-ovmf-pin-the-c-dialect.patch' "$REPO/boot/build-ovmf.sh"
+    # Guarded before, asserted after -- the build_oc.tool pattern.
+    [ "$(grep -c "grep -q 'std=gnu17'" "$REPO/boot/build-ovmf.sh")" -eq 2 ]
+}
+
 # --- the SMC kexts ----------------------------------------------------
 #
 # These are the only non-Tier-0 things in the assembled EFI image, and the
