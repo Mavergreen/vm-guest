@@ -161,56 +161,87 @@ privops_qemu_linux_missing() {
 }
 
 privops_qemu_linux_build_initramfs() {
-    local out=$1 kver staged root
+    local out=$1 kver root order deps src base m
     kver=$MQG_PRIVOPS_KVER
     root=$(mktemp -d)
     mkdir -p "$root"/{bin,dev,proc,sys,mnt,lib/modules}
     cp "$(command -v busybox)" "$root/bin/busybox" || die "cannot stage busybox"
 
-    # Modules are matched as $m.ko* and DECOMPRESSED while staging, because
-    # busybox insmod reads none of the compressed formats.
+    # Modules are resolved with `modprobe --show-depends`, staged in the
+    # order it gives, and DECOMPRESSED on the way, because busybox insmod
+    # reads no compressed format and resolves no dependencies.
     #
-    # Arch ships hfsplus.ko.zst; Debian ships hfsplus.ko. The old glob was
-    # `-name "$m.ko"` exactly, so on Arch find matched nothing, the `&&`
-    # skipped the copy without a word, insmod found no file, and the HFS+
-    # mount failed with MQG-PRIVOPS-MOUNT-FAILED and no hint as to why.
-    # Third Debian-shaped assumption in this file, after the kernel path
-    # and the busybox linkage.
+    # Three host assumptions were wrong here in a row, each found only by
+    # running somewhere new:
+    #   1. the kernel is at /boot/vmlinuz-$(uname -r)  -- Arch: no
+    #   2. modules are uncompressed .ko                -- Arch: .ko.zst
+    #   3. hfsplus.ko needs nothing else loaded first  -- Arch: no
     #
-    # A module we cannot stage is now FATAL rather than skipped. The whole
-    # purpose of this microVM is mounting HFS+; proceeding without hfsplus
-    # guarantees a failure several steps later that says nothing about the
-    # cause.
+    # (3) surfaced as `insmod: can't insert hfsplus.ko: unknown symbol in
+    # module or invalid parameter`, and before the diagnostics went in it
+    # surfaced as nothing at all. Copying one named module and hoping is
+    # what modprobe exists to replace: it reads modules.dep, which the
+    # distribution generated for its own kernel, and says exactly which
+    # objects to insert and in what order. Asking it is strictly better
+    # than encoding another guess about a fourth distribution.
+    #
+    # The resolved order is written into the initramfs rather than passed
+    # on the kernel command line: order is the whole point, and a
+    # comma-separated cmdline was already carrying the request rather than
+    # the answer.
+    order="$root/lib/modules/load-order"
+    : > "$order"
     for m in $MQG_PRIVOPS_MODULES; do
-        staged=$(find "$MQG_PRIVOPS_MODULES_DIR/$kver" \
-            \( -name "$m.ko" -o -name "$m.ko.zst" -o -name "$m.ko.xz" \
-               -o -name "$m.ko.gz" \) -print -quit 2>/dev/null)
-        if [ -z "$staged" ]; then
-            # Built into the kernel rather than a module is legitimate and
-            # common; there is nothing to stage and insmod is not needed.
-            # Distinguished from "we could not read it", which is not.
+        deps=""
+        if command -v modprobe >/dev/null 2>&1; then
+            deps=$(modprobe -S "$kver" -n --show-depends "$m" 2>/dev/null \
+                   | sed -n 's/^insmod  *\([^ ]*\).*/\1/p')
+        fi
+        if [ -z "$deps" ]; then
+            # No modprobe, or it knows nothing about this module. Fall back
+            # to the old single-file search, which is right when a module
+            # has no dependencies and is all we can do anyway.
+            deps=$(find "$MQG_PRIVOPS_MODULES_DIR/$kver" \
+                \( -name "$m.ko" -o -name "$m.ko.zst" -o -name "$m.ko.xz" \
+                   -o -name "$m.ko.gz" \) -print -quit 2>/dev/null)
+        fi
+        if [ -z "$deps" ]; then
+            # Built into the kernel is legitimate and common: nothing to
+            # stage, nothing to insert. Distinguished from "we could not
+            # read it", which is not.
             warn "no $m module under $MQG_PRIVOPS_MODULES_DIR/$kver" \
                  "-- assuming it is built into the kernel"
             continue
         fi
-        case $staged in
-            *.zst)
-                command -v zstd >/dev/null 2>&1 \
-                    || die "$staged is zstd-compressed and zstd is not installed"
-                zstd -dqf "$staged" -o "$root/lib/modules/$m.ko" \
-                    || die "cannot decompress $staged" ;;
-            *.xz)
-                command -v xz >/dev/null 2>&1 \
-                    || die "$staged is xz-compressed and xz is not installed"
-                xz -dc "$staged" > "$root/lib/modules/$m.ko" \
-                    || die "cannot decompress $staged" ;;
-            *.gz)
-                gzip -dc "$staged" > "$root/lib/modules/$m.ko" \
-                    || die "cannot decompress $staged" ;;
-            *)
-                cp "$staged" "$root/lib/modules/$m.ko" \
-                    || die "cannot stage $staged" ;;
-        esac
+        for src in $deps; do
+            base=${src##*/}
+            base=${base%.zst}; base=${base%.xz}; base=${base%.gz}
+            # Dependencies are shared: hfsplus and another module may name
+            # the same object. Staging it twice is harmless; inserting it
+            # twice is an error insmod reports.
+            case " $(tr '\n' ' ' < "$order") " in
+                *" $base "*) continue ;;
+            esac
+            case $src in
+                *.zst)
+                    command -v zstd >/dev/null 2>&1 \
+                        || die "$src is zstd-compressed and zstd is not installed"
+                    zstd -dqf "$src" -o "$root/lib/modules/$base" \
+                        || die "cannot decompress $src" ;;
+                *.xz)
+                    command -v xz >/dev/null 2>&1 \
+                        || die "$src is xz-compressed and xz is not installed"
+                    xz -dc "$src" > "$root/lib/modules/$base" \
+                        || die "cannot decompress $src" ;;
+                *.gz)
+                    gzip -dc "$src" > "$root/lib/modules/$base" \
+                        || die "cannot decompress $src" ;;
+                *)
+                    cp "$src" "$root/lib/modules/$base" \
+                        || die "cannot stage $src" ;;
+            esac
+            printf '%s\n' "$base" >> "$order"
+        done
     done
 
     cat > "$root/init" <<'INIT'
@@ -219,7 +250,15 @@ B=/bin/busybox
 $B mount -t proc none /proc
 $B mount -t sysfs none /sys
 $B mount -t devtmpfs none /dev
-for m in $($B cat /proc/cmdline | $B tr ' ' '\n' | $B sed -n 's/^mqg_modules=//p' | $B tr ',' ' '); do
+# The host resolved dependencies and wrote the insertion order here.
+# Falls back to the cmdline list for an initramfs built before that.
+if [ -f /lib/modules/load-order ]; then
+    MQG_MODS=$($B cat /lib/modules/load-order)
+else
+    MQG_MODS=$($B cat /proc/cmdline | $B tr ' ' '\n' | $B sed -n 's/^mqg_modules=//p' | $B tr ',' ' ')
+fi
+for m in $MQG_MODS; do
+    m=${m%.ko}
     if [ -f "/lib/modules/$m.ko" ]; then
         # insmod's stderr is NOT discarded. A module that fails to load is
         # the difference between "HFS+ is unsupported here" and "we never

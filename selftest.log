@@ -16,14 +16,19 @@ readable  yes
 magic     0000000   M   Z
 
 == initramfs ==
-built     /tmp/tmp.kybxatrdNm/initramfs.cpio.gz (766797 bytes)
+mqg: warning: no nls_base module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
+mqg: warning: no virtio module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
+mqg: warning: no virtio_ring module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
+mqg: warning: no virtio_pci module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
+mqg: warning: no virtio_blk module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
+built     /tmp/tmp.aO2CK4IcdO/initramfs.cpio.gz (879371 bytes)
 
 == command ==
 timeout 60 qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-reboot \
   -kernel /lib/modules/7.2.6-arch2-1/vmlinuz \
-  -initrd /tmp/tmp.kybxatrdNm/initramfs.cpio.gz \
-  -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=nls_base,nls_utf8,hfsplus" \
-  -drive file=/tmp/tmp.kybxatrdNm/scratch.img,format=raw,if=virtio
+  -initrd /tmp/tmp.aO2CK4IcdO/initramfs.cpio.gz \
+  -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=nls_base,nls_utf8,hfsplus,virtio,virtio_ring,virtio_pci,virtio_blk" \
+  -drive file=/tmp/tmp.aO2CK4IcdO/scratch.img,format=raw,if=virtio
 
 == console (unfiltered, 60s limit) ==
 c[?7l[2J[0mSeaBIOS (version Arch Linux 1.17.0-2-2)
@@ -34,9 +39,24 @@ Press Ctrl-B to configure iPXE (PCI 00:03.0)...
 
 
 Booting from ROM...
-Probing EDD (edd=off to disable)... oc[?7l[2JMQG-PRIVOPS-MOUNT-FAILED
-[    0.491287] reboot: Power down
+Probing EDD (edd=off to disable)... oc[?7l[2JMQG-PRIVOPS-INSMOD ok nls_utf8
+MQG-PRIVOPS-INSMOD FAILED hfsplus: insmod: can't insert '/lib/modules/hfsplus.ko': unknown symbol in module or invalid parameter
+MQG-PRIVOPS-MOUNT-FAILED
+MQG-PRIVOPS-DIAG block devices in /dev:
+  ls: /dev/sd*: No such file or directory
+  brw-------    1 0        0         254,   0 Sep 20 19:07 /dev/vda
+MQG-PRIVOPS-DIAG /proc/partitions:
+  major minor  #blocks  name
+  
+   254        0      16384 vda
+MQG-PRIVOPS-DIAG filesystems the kernel knows:
+30
+MQG-PRIVOPS-DIAG modules loaded:
+  nls_utf8
+MQG-PRIVOPS-DIAG mount /dev/vda says:
+  mount: mounting /dev/vda on /mnt failed: No such device
+[    0.513087] reboot: Power down
 
 == verdict ==
 exit      0
-bytes     394 of console output
+bytes     1007 of console output
