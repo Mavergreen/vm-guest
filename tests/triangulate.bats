@@ -359,10 +359,22 @@ tri_report() {
         salvage_logs
     '
     [ "$status" -eq 0 ]
-    [[ "$output" == *"saved 1 log"* ]]
+    [[ "$output" == *"saved 1 file"* ]]
     found=$(find "$BATS_TEST_TMPDIR" -name 'ovmf-build.log' -path '*triangulate-logs-*' | wc -l)
     [ "$found" -eq 1 ]
     # It copies logs, not everything: the build tree is gigabytes.
     notes=$(find "$BATS_TEST_TMPDIR" -name 'notes.txt' -path '*triangulate-logs-*' | wc -l)
     [ "$notes" -eq 0 ]
+}
+
+@test "a failed run salvages the report, not only the build logs" {
+    # squirrel-zapper 2026-09-20, third run: both firmware builds succeeded
+    # and something after them failed. The salvaged logs all said "- Done -";
+    # the stage table naming the failure existed only on the user's
+    # terminal. The report is the deliverable, so it has to survive too --
+    # including when the failing stage produced no .log at all.
+    grep -q 'report.txt' "$REPO/bin/triangulate.sh"
+    # Written from $report, inside salvage_logs, before the trap runs.
+    sed -n '/^salvage_logs() {/,/^}/p' "$REPO/bin/triangulate.sh" \
+        | grep -q 'report.txt'
 }

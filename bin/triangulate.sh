@@ -148,10 +148,24 @@ salvage_logs() {
 $(find "$p" -type f -name '*.log' -size -8M 2>/dev/null)
 EOF
     done < "$created_list"
+    # The report is the deliverable, and until 2026-09-20 it went only to
+    # stdout -- so a failed run on someone else's machine left build logs
+    # saying every stage succeeded, and the stage table naming the one that
+    # did not was visible on their terminal and nowhere else. Write it
+    # beside the logs. This also covers a stage that fails without
+    # producing a .log at all, which is why $dest is created even when
+    # n is 0.
+    if [ -n "${report:-}" ]; then
+        mkdir -p "$dest" 2>/dev/null || true
+        if printf '%s' "${report:-}" > "$dest/report.txt" 2>/dev/null; then
+            n=$((n + 1))
+        fi
+    fi
     if [ "$n" -gt 0 ]; then
-        printf 'triangulate: saved %d log(s) to %s\n' "$n" "$dest" >&2
-        printf 'triangulate: these survive the cleanup below -- they are what\n' >&2
-        printf 'triangulate: diagnoses the failure. Send them, not the summary.\n' >&2
+        printf 'triangulate: saved %d file(s) to %s\n' "$n" "$dest" >&2
+        printf 'triangulate: these survive the cleanup below. report.txt has the\n' >&2
+        printf 'triangulate: stage table; the .log files have the compiler output.\n' >&2
+        printf 'triangulate: send the directory, not a summary of it.\n' >&2
     fi
 }
 
