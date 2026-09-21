@@ -45,6 +45,15 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 #               installed there by pacman the same day. `cpio` was already
 #               present on that host, so nobody had to name its package --
 #               hence the `?`)
+#   debian   -- xxd and bats confirmed missing on ap-juicer 2026-09-21,
+#               which is how the two-list drift below was noticed
+#
+# THIS LIST AND bin/triangulate.sh's MUST AGREE. They did not until
+# 2026-09-21: triangulate checked xxd, bats, rsync, openssl, curl and
+# unzip, which this script had never heard of, so a host asking "what am I
+# missing?" got a shorter answer than the truth. A prerequisites script
+# that under-reports is worse than none, because it answers wrongly rather
+# than not answering. tests/boot_scripts.bats asserts the two agree.
 #
 # busybox and cpio are here because the media build needs them, not the
 # boot stack: lib/privops-qemu-linux.sh builds a busybox initramfs with
@@ -73,6 +82,12 @@ kpartx|kpartx|multipath-tools|?|?
 mkfs.hfsplus|hfsprogs|hfsprogs (AUR)|?|?
 busybox|busybox-static|busybox|?|?
 cpio|cpio|?|-|?
+xxd|xxd|?|-|?
+bats|bats|?|?|?
+rsync|rsync|rsync|-|rsync
+openssl|openssl|openssl|-|openssl
+curl|curl|curl|-|curl
+unzip|unzip|unzip|-|unzip
 '
 
 # Which package manager to name. Detected from the host, and overridable

@@ -25,7 +25,8 @@ setup() {
     # privops microVM needs them, and a "prereqs" script that omits a
     # prerequisite answers the question wrongly.
     for t in gcc make git python3 nasm iasl mtools sgdisk mcopy mformat \
-             dmg2img kpartx mkfs.hfsplus busybox cpio; do
+             dmg2img kpartx mkfs.hfsplus busybox cpio \
+             xxd bats rsync openssl curl unzip; do
         printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
         chmod +x "$STUB_BIN/$t"
     done
@@ -746,4 +747,21 @@ _fake_firmware() {
     run env "${e[@]}" "$REPO/boot/make-nvram.sh" p3-full
     [ "$status" -ne 0 ]
     [[ "$output" == *"build-ovmf.sh"* ]]
+}
+
+@test "prereqs.sh and triangulate.sh check the same tools" {
+    # ap-juicer 2026-09-21: triangulate reported xxd and bats missing;
+    # prereqs.sh had never heard of either, so it would have printed a
+    # shorter list than the truth. Two lists drifting is how a
+    # prerequisites script comes to answer wrongly rather than not answer.
+    tri=$(sed -n 's/^RUNTIME_TOOLS="\(.*\)"$/\1/p;s/^BUILD_TOOLS="\(.*\)"$/\1/p' \
+          "$REPO/bin/triangulate.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)
+    [ -n "$tri" ] || { echo "could not find triangulate's tool lists"; false; }
+    # qemu-system-x86_64 and qemu-img are runtime, not build prerequisites,
+    # and prereqs.sh is about building. Everything else must be named.
+    tri=$(printf '%s\n' "$tri" | grep -vE '^qemu-(system-x86_64|img)$')
+    for t in $tri; do
+        run grep -q "^$t|" "$REPO/boot/prereqs.sh"
+        [ "$status" -eq 0 ] || { echo "triangulate checks '$t'; prereqs.sh does not"; false; }
+    done
 }

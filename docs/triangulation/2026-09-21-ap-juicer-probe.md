@@ -24,6 +24,43 @@ itself: under TCG the emulator implements SSE4.1 regardless, so every row
 passes and nothing is learned about the hardware. **G25 CANNOT-SAY** for
 exactly that reason — a verdict function correctly declining to answer.
 
+## With KVM, the CPU table means something
+
+Second probe, after `usermod -aG kvm`:
+
+```
+cpu_line_verdict  rejected
+  Conroe                         accepted
+  Penryn                         rejected  missing: sse4.1
+  Penryn,+ssse3,+sse4.1,+sse4.2  rejected  missing: sse4.1, sse4.2
+  Nehalem / Westmere / Sandy / Ivy / Haswell-noTSX   rejected
+  host, qemu64                   accepted
+```
+
+**The default `-cpu` line is refused on this host**, exactly as
+`docs/test-hosts.md` predicted from CPU generations before anyone ran the
+machine — and `decisions/0009` had already established the escape hatch by
+booting 10.9 on `-cpu Conroe`. The prediction and its remedy were both in
+place before the hardware arrived. **G25 REFUTE**, and it names the missing
+CPUID leaf per row rather than saying "no".
+
+## One of its four cores is dead
+
+```
+CPU(s): 4 · On-line: 0-2 · Off-line: 3
+[10.378314] CPU3 failed to report alive state
+```
+
+The probe first reported `cpu_cores 4, cpu_logical 3`, which reads as a
+parsing bug and is not one: a core did not come up during SMP boot and the
+kernel gave up after ten seconds. Hardware, not configuration — a failing
+core, a seating problem, or twenty-year-old thermal paste.
+
+Not a blocker: the host works at 75%. But it is a triangulation fact, not
+a footnote, because it changes every timing this project ever records
+there. The probe now reports `cpu_offline` and says so in its own words
+rather than leaving a confusing ratio for someone to misread.
+
 ## What it settled anyway
 
 | Entry | Verdict | Why it matters |

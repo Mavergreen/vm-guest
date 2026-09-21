@@ -1,0 +1,48 @@
+[    0.026614] ACPI: SSDT 0x000000007FBAD000 00008E (v01 PmRef  Cpu0Cst  00003001 INTL 20050309)
+[    0.026618] ACPI: SSDT 0x000000007FBAC000 000030 (v01 PmRef  Cpu0Ist  00003000 INTL 20050309)
+[    0.026622] ACPI: SSDT 0x000000007FBAB000 000047 (v01 PmRef  Cpu1Cst  00003000 INTL 20050309)
+[    0.026627] ACPI: SSDT 0x000000007FBAA000 000030 (v01 PmRef  Cpu1Ist  00003000 INTL 20050309)
+[    0.026631] ACPI: SSDT 0x000000007FBA9000 000047 (v01 PmRef  Cpu2Cst  00003000 INTL 20050309)
+[    0.026635] ACPI: SSDT 0x000000007FBA8000 000030 (v01 PmRef  Cpu2Ist  00003000 INTL 20050309)
+[    0.026640] ACPI: SSDT 0x000000007FBA7000 000047 (v01 PmRef  Cpu3Cst  00003000 INTL 20050309)
+[    0.026644] ACPI: SSDT 0x000000007FBA6000 000030 (v01 PmRef  Cpu3Ist  00003000 INTL 20050309)
+[    0.026649] ACPI: SSDT 0x000000007FBA5000 000047 (v01 PmRef  Cpu4Cst  00003000 INTL 20050309)
+[    0.026653] ACPI: SSDT 0x000000007FBA4000 000030 (v01 PmRef  Cpu4Ist  00003000 INTL 20050309)
+[    0.026658] ACPI: SSDT 0x000000007FBA3000 000047 (v01 PmRef  Cpu5Cst  00003000 INTL 20050309)
+[    0.026662] ACPI: SSDT 0x000000007FBA2000 000030 (v01 PmRef  Cpu5Ist  00003000 INTL 20050309)
+[    0.026667] ACPI: SSDT 0x000000007FBA1000 000047 (v01 PmRef  Cpu6Cst  00003000 INTL 20050309)
+[    0.026671] ACPI: SSDT 0x000000007FBA0000 000030 (v01 PmRef  Cpu6Ist  00003000 INTL 20050309)
+[    0.026675] ACPI: SSDT 0x000000007FB9F000 000047 (v01 PmRef  Cpu7Cst  00003000 INTL 20050309)
+[    0.026680] ACPI: SSDT 0x000000007FB9E000 000030 (v01 PmRef  Cpu7Ist  00003000 INTL 20050309)
+[    0.026684] ACPI: SSDT 0x000000007FB9D000 000CEC (v01 PmRef  CpuPm    00003000 INTL 20050309)
+[    0.027804] CPU topo: Max. logical packages:   2
+[    0.027805] CPU topo: Max. logical nodes:      1
+[    0.027806] CPU topo: Num. nodes per package:  1
+[    0.027810] CPU topo: Max. logical dies:       2
+[    0.027810] CPU topo: Max. dies per package:   1
+[    0.027816] CPU topo: Max. threads per core:   1
+[    0.027817] CPU topo: Num. cores per package:     2
+[    0.027818] CPU topo: Num. threads per package:   2
+[    0.027819] CPU topo: Allowing 4 present CPUs plus 0 hotplug CPUs
+[    0.059911] setup_percpu: NR_CPUS:8192 nr_cpumask_bits:4 nr_cpu_ids:4 nr_node_ids:1
+[    0.061499] percpu: Embedded 63 pages/cpu s221184 r8192 d28672 u524288
+[    0.061511] pcpu-alloc: s221184 r8192 d28672 u524288 alloc=1*2097152
+[    0.061517] pcpu-alloc: [0] 0 1 2 3 
+[    0.182799] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=4, Nodes=1
+[    0.196536] rcu: 	RCU restricting CPUs from NR_CPUS=8192 to nr_cpu_ids=4.
+[    0.196542] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=4
+[    0.196572] RCU Tasks: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    0.196575] RCU Tasks Rude: Setting shift to 2 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=4.
+[    0.226351] CPU0: Thermal monitoring enabled (TM2)
+[    0.226420] MDS: Vulnerable: Clear CPU buffers attempted, no microcode
+[    0.365322] smpboot: CPU0: Intel(R) Xeon(R) CPU            5150  @ 2.66GHz (family: 0x6, model: 0xf, stepping: 0x6)
+[    0.365821] core: PEBS disabled due to CPU errata
+[    0.368898] smp: Bringing up secondary CPUs ...
+[    0.369203] .... node  #0, CPUs:      #1 #2 #3
+[   10.378314] CPU3 failed to report alive state
+[   10.378367] smp: Brought up 1 node, 3 CPUs
+[   10.474671] cpuidle: using governor ladder
+[   10.474691] cpuidle: using governor menu
+[   10.630419] hpet: 3 channels of 0 reserved for per-cpu timers
+[   10.678166] ledtrig-cpu: registered to indicate activity on CPUs
+[   10.739680] intel_pstate: CPU model not supported

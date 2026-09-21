@@ -343,6 +343,24 @@ cpu_cores() {
     esac
 }
 
+# Processors the kernel could use if they all answered. /proc/cpuinfo
+# lists only the ONLINE ones, so a machine with a dead core reports fewer
+# than it has and nothing says why.
+cpu_present() {
+    case $os in
+        Linux)
+            if [ -r /sys/devices/system/cpu/present ]; then
+                # "0-3" or "0-2,4" -> a count
+                awk -F, '{ n=0; for (i=1;i<=NF;i++) { split($i,r,"-");
+                    n += (r[2] == "" ? 1 : r[2]-r[1]+1) } print n }' \
+                    /sys/devices/system/cpu/present
+            else
+                printf '0'
+            fi ;;
+        *) printf '0' ;;
+    esac
+}
+
 cpu_logical() {
     case $os in
         Linux)  grep -c '^processor' /proc/cpuinfo ;;
@@ -463,6 +481,18 @@ vendor=$(cpu_vendor || true); vendor=${vendor:-unknown}
 flags=$(cpu_flags || true)
 cores=$(cpu_cores || echo 0)
 logical=$(cpu_logical || echo 0)
+# ap-juicer 2026-09-21 reported 4 cores and 3 logical CPUs, which reads as
+# a parsing bug and is not one: "CPU3 failed to report alive state" in
+# dmesg -- a core that did not come up. A host quietly running on less
+# hardware than it has is a triangulation fact, not a footnote: it changes
+# every timing this project records there.
+present=$(cpu_present 2>/dev/null || echo 0)
+cpu_offline=none
+if [ "$present" -gt 0 ] 2>/dev/null && [ "$logical" -gt 0 ] 2>/dev/null \
+   && [ "$present" -gt "$logical" ]; then
+    cpu_offline=$((present - logical))
+    tri_special "this host has $present processors but only $logical are online: $cpu_offline offline. Check 'lscpu' and dmesg for why -- a core that failed to start makes every timing here slower than the hardware implies"
+fi
 # threads-per-core, guarded. `cpu_cores` reads the topology (cpu cores x
 # sockets) while `cpu_logical` counts ONLINE processors, so the two are not
 # comparable and their ratio can be nonsense: ap-juicer reported 4 cores, 3
@@ -886,6 +916,7 @@ tri_fact cpu_brand "$brand"
 tri_fact cpu_vendor "$vendor"
 tri_fact cpu_cores "$cores"
 tri_fact cpu_logical "$logical"
+tri_fact cpu_offline "$cpu_offline"
 tri_fact cpu_threads_per_core "$threads"
 tri_fact flag_ssse3 "$have_ssse3"
 tri_fact flag_sse4_1 "$have_sse41"
