@@ -123,4 +123,61 @@ if [ "$rc" -eq 124 ] && [ -z "$out" ]; then
     printf 'order. Try: re-run with MQG_PRIVOPS_TIMEOUT=30 and add\n'
     printf '"earlyprintk=serial,ttyS0" to see whether the kernel starts at all.\n'
 fi
-exit "$rc"
+[ "$rc" -eq 0 ] || exit "$rc"
+
+# --- the source disks and the raw channel --------------------------------
+#
+# Booting is no longer the whole question. Since the media build moved
+# inside the microVM (G26) it needs three more things of this host, and a
+# host that has none of them still passes everything above:
+#
+#   * more than one virtio disk at once,
+#   * an HFS+ volume mounted READ-ONLY off one of them,
+#   * bytes written to a raw disk arriving intact in the file on this side.
+#
+# A diagnostic that stops short of what the pipeline needs sends somebody
+# to a twenty-minute media build to find out the rest. So this asks.
+printf '\n== source disks and the raw channel ==\n'
+if ! command -v mkfs.hfsplus >/dev/null 2>&1; then
+    printf 'skipped: no mkfs.hfsplus, so there is no HFS+ source to make.\n'
+    printf '(The media build needs it too -- see boot/prereqs.sh.)\n'
+    exit 0
+fi
+
+# shellcheck source=../lib/hfs.sh
+. "$MQG_REPO_ROOT/lib/hfs.sh"
+hfs_create "$work/src.img" 32 "MQG SELFTEST"
+hfs_create_gpt "$work/dst.img" 32 "MQG SELFTEST"
+truncate -s 8M "$work/raw.img"
+
+cat > "$work/populate.sh" <<'PAYLOAD'
+$B mkdir -p "$MQG_MNT/dir"
+echo "written inside the microVM" > "$MQG_MNT/dir/file"
+$B chmod 4755 "$MQG_MNT/dir/file"
+PAYLOAD
+privops_run_qemu_linux "$work/src.img" "$work/populate.sh" >/dev/null 2>&1 \
+    || { printf 'FAILED to write a scratch HFS+ volume in the microVM\n'; exit 1; }
+
+cat > "$work/copy.sh" <<'PAYLOAD'
+$B cp -a "$MQG_SRC1/." "$MQG_MNT/"
+echo "mode   $($B stat -c %a "$MQG_MNT/dir/file")"
+echo "owner  $($B stat -c %u:%g "$MQG_MNT/dir/file")"
+$B dd if="$MQG_SRC1/dir/file" of="$MQG_RAW2" 2>/dev/null
+PAYLOAD
+MQG_PRIVOPS_CONSOLE=$work/console2.txt \
+    privops_run_qemu_linux "$work/dst.img" "$work/copy.sh" \
+        "ro:$work/src.img" "raw:$work/raw.img" 2>&1 | sed 's/^/  /'
+
+printf 'disks the guest saw:\n'
+grep -a 'MQG-PRIVOPS-DISK' "$work/console2.txt" | tr -d '\r' | sed 's/^/  /'
+came_back=$(head -c 27 "$work/raw.img" | tr -d '\000')
+printf 'raw disk  %s\n' "${came_back:-(nothing came back)}"
+if [ "$came_back" = "written inside the microVM" ]; then
+    printf '\nThis host can build installer media: two source disks, a\n'
+    printf 'read-only HFS+ mount and the raw channel all work.\n'
+    exit 0
+fi
+printf '\nThe raw channel did not deliver. The media build cannot get\n'
+printf "BaseSystem.dmg out of the ESD this way, so it would fail at its\n"
+printf 'first microVM pass. See media/privops/extract-basesystem.sh.\n'
+exit 1

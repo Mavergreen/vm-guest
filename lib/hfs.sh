@@ -6,6 +6,20 @@
 # and mounts to a desktop user without a password, auto-loading the hfsplus
 # module. See the P4 entries in NOTES.md.
 #
+# THE MEDIA BUILD NO LONGER USES THE LOOP-AND-MOUNT HALF OF THIS FILE, and
+# that is not an oversight to be tidied up by wiring it back in. udisks2
+# grants `loop-setup` to a user AT A SEAT, so an SSH session to a headless
+# host is refused -- see G26 in docs/host-profile.md.
+# media/build-installer-img.sh does the whole HFS+ assembly inside the
+# privops microVM instead, and calls only hfs_create_gpt here, which writes
+# a plain file with mkfs.hfsplus, sgdisk and dd and needs no privilege and
+# no mount at all.
+#
+# What still attaches and mounts: media/content-digest.sh, a by-hand
+# comparison tool no pipeline stage calls, and tests/hfs.bats. Both
+# therefore still need a seat. Anything NEW that wants to read or write an
+# HFS+ volume should take a payload to privops_run rather than come here.
+#
 # Everything here reports the *observed* state rather than trusting
 # udisksctl's exit status, because udisksctl lies in both directions:
 # `loop-delete` on a still-mounted device returns 0 and does not detach,

@@ -347,3 +347,17 @@ PAYLOAD
     [ "$(head -c 2097152 "$W/scratch.raw" | sha256sum | cut -d' ' -f1)" \
       != "$(head -c 2097152 /dev/zero | sha256sum | cut -d' ' -f1)" ]
 }
+
+@test "the selftest asks for everything the media build needs, not just a boot" {
+    # A diagnostic that stops short of what the pipeline needs sends
+    # somebody to a twenty-minute media build to find out the rest. Since
+    # the media build moved inside the microVM it needs two more things of
+    # a host -- a read-only HFS+ source disk, and bytes coming back out on
+    # a raw one -- and privops-selftest.sh is what a new host runs first.
+    grep -q '"ro:\$work/src.img" "raw:\$work/raw.img"' \
+        "$REPO/bin/privops-selftest.sh"
+    grep -q 'This host can build installer media' \
+        "$REPO/bin/privops-selftest.sh"
+    # And it still streams the console to a file rather than capturing it.
+    grep -q '> "\$console" 2>&1' "$REPO/bin/privops-selftest.sh"
+}
