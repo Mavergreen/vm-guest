@@ -265,7 +265,7 @@ g2_verdict() {
 g3_verdict() {
     local brand=$1 has_sse41=$2 qemu_cpu=$3
     if [ "$has_sse41" = no ]; then
-        judge REFUTE "host CPU ('$brand') lacks SSE4.1, which our -cpu line requires. Masking DOWN is not the problem here; the guest model asks for more than the host has, and no mask fixes that. The CPU line needs to become a parameter"
+        judge REFUTE "host CPU ('$brand') lacks SSE4.1, which the DEFAULT -cpu line asks for. Masking DOWN is not the problem here; the default asks for more than the host has, and no mask fixes that. It is NOT a stopper: 10.9 does not need SSE4.1 -- '-cpu Conroe' boots this guest to SSH (docs/decisions/0009) -- so the CPU line is a parameter and this host should take the Conroe row of lib/cpu.sh's table. See the -cpu table above for which rows this host can actually provide"
     elif [ "$qemu_cpu" = rejected ]; then
         judge REFUTE "host has the flags but QEMU rejected the -cpu line under this accelerator"
     elif [ "$qemu_cpu" = accepted ]; then
@@ -273,6 +273,38 @@ g3_verdict() {
     else
         judge CANNOT-SAY "host CPU ('$brand') has the flags, but the -cpu line was not exercised (no QEMU)"
     fi
+}
+
+# G25 -- "every -cpu line in lib/cpu.sh's table can be provided by this
+# host". True on the primary host, which is Coffee Lake and therefore newer
+# than every model in the table. It is the entry a 2006 machine exists to
+# refute, and refuting it is useful rather than fatal: the table has rows
+# below the one that gets refused.
+#
+# WHY THE ACCELERATOR IS AN ARGUMENT. TCG implements SSE4.1 itself, so
+# under TCG every row is accepted and the answer is about the emulator
+# rather than about the machine. That is CANNOT-SAY, not CONFIRM -- a
+# confident yes from the wrong measurement is how docs/test-hosts.md came
+# to write a host off for a year.
+g25_verdict() {
+    local qemu_version=$1 accel=$2 provided=$3 refused=$4 absent=$5 why=$6
+    if [ -z "$qemu_version" ]; then
+        judge CANNOT-SAY "no QEMU here to ask which CPU models it can provide"
+        return
+    fi
+    if [ "$accel" != kvm ]; then
+        judge CANNOT-SAY "the table was probed under $accel, which emulates every feature it is asked for, so the results describe the emulator and not this host's CPU. Re-run where a hardware accelerator is available"
+        return
+    fi
+    if [ -z "$provided" ] && [ -z "$refused" ]; then
+        judge CANNOT-SAY "QEMU $qemu_version offered none of the models in lib/cpu.sh's table by name:${absent:+ $absent}"
+        return
+    fi
+    if [ -n "$refused" ]; then
+        judge REFUTE "QEMU $qemu_version under KVM refused $refused and accepted ${provided:-nothing}${why:+ ($why)}. This host cannot provide every row of lib/cpu.sh's table. Read WHICH row before concluding anything: the table is a ladder, a refused row near the top means the host is older than the default and should use a row below it, and a refused row that names a feature 10.9 never needed (qemu64 asks for AMD's svm) means nothing at all. Picking an accepted row with --cpu is a supported outcome, not a broken host${absent:+; models this QEMU does not have at all: $absent}"
+        return
+    fi
+    judge CONFIRM "QEMU $qemu_version under KVM provides every -cpu line in lib/cpu.sh's table ($provided), as on the primary host${absent:+; models this QEMU does not have at all: $absent}"
 }
 
 # G4 -- "6 physical cores available for pinning, SMT siblings identifiable."

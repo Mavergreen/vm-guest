@@ -91,6 +91,60 @@ setup() {
     [[ "$output" == CANNOT-SAY* ]]
 }
 
+# The prediction above was half right and its CONCLUSION was wrong: a
+# Woodcrest host really cannot provide SSE4.1, and 10.9 does not need it
+# (docs/decisions/0009). So G3's refutation now has to point at the row of
+# the table that host should use, or the report repeats the mistake that
+# wrote the machine off in the first place.
+@test "G3's refutation sends an SSE4.1-less host to the Conroe row" {
+    run g3_verdict "Intel(R) Xeon(R) CPU 5150 @ 2.66GHz" no rejected
+    [[ "$output" == REFUTE* ]]
+    [[ "$output" == *"Conroe"* ]]
+    [[ "$output" == *"NOT a stopper"* ]]
+}
+
+# --- G25: which rows of the table a host can actually provide ---------------
+#
+# The whole reason this entry exists is that a host can answer it in about
+# a second, with nothing installed. The verdicts below are the ones the Mac
+# Pro 1,1 will produce when somebody finally runs it there.
+
+@test "G25 confirms when every row is available, as on the primary host" {
+    run g25_verdict 8.2.2 kvm "Conroe Penryn Nehalem" "" "" ""
+    [ "$status" -eq 0 ]
+    [[ "$output" == CONFIRM* ]]
+}
+
+@test "G25 refutes on a host too old for some rows, and names the rest" {
+    run g25_verdict 8.2.2 kvm "Conroe" "Penryn Penryn,+ssse3,+sse4.1,+sse4.2" "" \
+        "Penryn needs sse4.1 this host does not have"
+    [ "$status" -eq 0 ]
+    [[ "$output" == REFUTE* ]]
+    [[ "$output" == *"Conroe"* ]]
+    [[ "$output" == *"sse4.1"* ]]
+    [[ "$output" == *"not a broken host"* ]]
+}
+
+# TCG implements SSE4.1 itself, so a 2006 host passes every row under it
+# and the answer describes the emulator. A confident yes from the wrong
+# measurement is how docs/test-hosts.md wrote a machine off for a year.
+@test "G25 cannot say anything from a TCG run" {
+    run g25_verdict 8.2.2 tcg "Conroe Penryn Nehalem" "" "" ""
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *"tcg"* ]]
+}
+
+@test "G25 cannot say without a QEMU to ask" {
+    run g25_verdict "" kvm "" "" "" ""
+    [[ "$output" == CANNOT-SAY* ]]
+}
+
+@test "G25 cannot say when the QEMU has none of the models by name" {
+    run g25_verdict 11.1.1 kvm "" "" "Conroe Penryn" ""
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *"Conroe"* ]]
+}
+
 @test "G14 notices a Xeon and says what settling it would still take" {
     run g14_verdict "Intel(R) Xeon(R) CPU 5150 @ 2.66GHz"
     [[ "$output" == CANNOT-SAY* ]]

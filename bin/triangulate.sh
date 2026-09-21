@@ -48,6 +48,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$MQG_REPO_ROOT/lib/common.sh"
 # shellcheck source=../lib/triangulate.sh
 . "$MQG_REPO_ROOT/lib/triangulate.sh"
+# shellcheck source=../lib/cpu.sh
+. "$MQG_REPO_ROOT/lib/cpu.sh"
 
 # shellcheck disable=SC2034  # read by log()/warn()/die() at call time
 MQG_LOG_PREFIX=triangulate
@@ -533,9 +535,40 @@ devices_ok=yes
 # Only meaningful under a hardware accelerator. TCG implements SSE4.1
 # itself, so a Woodcrest host would pass this test under TCG and learn
 # nothing -- which is why the accelerator is part of the observation.
-CPU_LINE='Penryn,+ssse3,+sse4.1,+sse4.2'
+#
+# 2026-09-21: the prediction was half right and the conclusion drawn from
+# it was wrong. A Woodcrest host really cannot provide SSE4.1 -- but 10.9
+# does not need it. `-cpu Conroe` boots this guest to SSH (lib/cpu.sh,
+# docs/decisions/0009), so a host that fails the line below is not a host
+# that cannot run this project; it is a host that needs a different row of
+# the table. Which is why the probe no longer asks about one line.
+
+# cpu_line_accepted <cpu line> -- "accepted", "rejected" or "no-model".
+#
+# `enforce` is what turns QEMU's "does not support" warning into a refusal.
+# A paused VM with no disks, no network and no display, quit from the
+# monitor: about a tenth of a second each, and nothing is written anywhere.
+cpu_line_accepted() {
+    local line=$1 base
+    base=$(cpu_model_base "$line")
+    case $qemu_cpu_models in
+        *"$base"*) : ;;
+        *) printf 'no-model\n'; return 0 ;;
+    esac
+    if printf 'quit\n' | "$qemu_bin" -nodefaults -no-user-config -display none \
+            -machine "q35,accel=$accel" -cpu "$line,enforce" -S \
+            -monitor stdio > "$scratch/cpu-probe.log" 2>&1; then
+        printf 'accepted\n'
+    else
+        printf 'rejected\n'
+    fi
+}
+
+CPU_LINE=$MQG_CPU_DEFAULT
 qemu_cpu=unknown
 qemu_cpu_detail=""
+qemu_cpu_models=""
+[ -z "$qemu_path" ] || qemu_cpu_models=$("$qemu_bin" -cpu help 2>/dev/null || true)
 if [ -n "$qemu_path" ] && [ "$qemu_has_penryn" = yes ]; then
     if printf 'quit\n' | "$qemu_bin" -nodefaults -no-user-config -display none \
             -machine "q35,accel=$accel" -cpu "$CPU_LINE,enforce" -S \
@@ -545,6 +578,55 @@ if [ -n "$qemu_path" ] && [ "$qemu_has_penryn" = yes ]; then
         qemu_cpu=rejected
     fi
     qemu_cpu_detail=$(grep -i "doesn't support\|not support\|unsupported" "$scratch/cpu.log" | tr '\n' '; ' || true)
+fi
+
+# THE SAME TEST, ACROSS THE WHOLE TABLE.
+#
+# lib/cpu.sh lists the -cpu lines this project has evidence for. Which of
+# them a given host can actually PROVIDE is a different question from which
+# ones Mavericks can use, and it is a question the host can answer in about
+# a second without anyone installing anything on it. That is the point: the
+# Mac Pro 1,1 in docs/test-hosts.md has been written off for a year on a
+# prediction, and `bin/triangulate.sh --probe` there now settles it in two
+# minutes.
+#
+# Only meaningful under a hardware accelerator, and the accelerator is
+# therefore reported beside the result. TCG implements SSE4.1 itself, so a
+# Woodcrest host would accept every row under TCG and learn nothing.
+cpu_table_results=""
+cpu_provided=""
+cpu_refused=""
+cpu_no_model=""
+cpu_refused_why=""
+if [ -n "$qemu_path" ]; then
+    while IFS= read -r cpu_row; do
+        [ -n "$cpu_row" ] || continue
+        cpu_row_result=$(cpu_line_accepted "$cpu_row")
+        cpu_row_why=""
+        case $cpu_row_result in
+            accepted) cpu_provided="$cpu_provided $cpu_row" ;;
+            no-model) cpu_no_model="$cpu_no_model $cpu_row" ;;
+            rejected)
+                cpu_refused="$cpu_refused $cpu_row"
+                # WHICH FEATURE, NOT JUST "NO".
+                #
+                # A bare "rejected" invites the reader to assume the host is
+                # too old, and on the primary host that assumption is wrong:
+                # `qemu64` is refused on an Intel machine because QEMU's own
+                # qemu64 model asks for `svm`, which is AMD's. A rejection
+                # that does not name the feature is a rejection anyone can
+                # misread, and misreading this exact kind of evidence is what
+                # docs/test-hosts.md did to the Mac Pro 1,1.
+                cpu_row_why=$(sed -n 's/.*requested feature: \([^ ]*\).*/\1/p' \
+                    "$scratch/cpu-probe.log" | tr '\n' ',' | sed -e 's/,$//')
+                cpu_refused_why="$cpu_refused_why; $cpu_row needs ${cpu_row_why:-an unnamed feature} this host does not have"
+                ;;
+        esac
+        cpu_table_results="$cpu_table_results$cpu_row	$cpu_row_result	$cpu_row_why
+"
+    done <<EOF
+$(cpu_model_lines)
+EOF
 fi
 
 # --- tools, BY TOOL ---------------------------------------------------------
@@ -764,6 +846,9 @@ tri_fact qemu_missing_devices "${missing_devices# }"
 tri_fact cpu_line "$CPU_LINE"
 tri_fact cpu_line_verdict "$qemu_cpu"
 tri_fact cpu_line_detail "$qemu_cpu_detail"
+tri_fact cpu_models_provided "${cpu_provided# }"
+tri_fact cpu_models_refused "${cpu_refused# }"
+tri_fact cpu_models_absent "${cpu_no_model# }"
 tri_fact tools_missing "${tools_missing# }"
 tri_fact package_manager "$pkg_manager"
 tri_fact level "$level"
@@ -807,6 +892,7 @@ add G19 g19_verdict
 add G20 g20_verdict "$media_built" "$failed_stage" "$media_failure_kind" "$media_failure"
 add G21 g21_verdict "$ignore_msrs" "$install_ok"
 add G24 g24_verdict "$missing_devices" "$install_ok" "$qemu_version"
+add G25 g25_verdict "$qemu_version" "$accel" "${cpu_provided# }" "${cpu_refused# }" "${cpu_no_model# }" "${cpu_refused_why#; }"
 
 # --- report -----------------------------------------------------------------
 
@@ -833,6 +919,35 @@ say "  QEMU verdict (with 'enforce'): $qemu_cpu"
 [ -z "$qemu_cpu_detail" ] || say "  $qemu_cpu_detail"
 if [ "$qemu_cpu" = unknown ]; then
     say "  not exercised: no QEMU with a Penryn model on this host"
+fi
+say ""
+say "## Which of the tested -cpu lines this host can provide"
+say ""
+say "  lib/cpu.sh lists the lines this project has evidence for. This is"
+say "  the other half: which of them THIS host and THIS QEMU can hand to a"
+say "  guest, asked with 'enforce' against a paused diskless VM."
+say ""
+say "  Mavericks does not need SSE4.1 -- '-cpu Conroe' boots it to SSH"
+say "  (docs/decisions/0009) -- so a refused line is not a refused host."
+say "  It says which row of the table this machine should use."
+say ""
+if [ -z "$qemu_path" ]; then
+    say "  not exercised: no QEMU on this host"
+else
+    printf '%s' "$cpu_table_results" | while IFS='	' read -r m r w; do
+        [ -n "$m" ] || continue
+        printf '  %-32s %-9s %s\n' "$m" "$r" "${w:+missing: $w}"
+    done > "$scratch/cputable.txt"
+    say "$(cat "$scratch/cputable.txt")"
+    say ""
+    say "  accelerator: $accel"
+    if [ "$accel" != kvm ]; then
+        say "  NOTE: under $accel these results are about the emulator, not the"
+        say "  host CPU. TCG implements SSE4.1 itself, so every row passes and"
+        say "  nothing is learned about what this machine can provide."
+    fi
+    say "  no-model = this QEMU has no such CPU model at all, which is a"
+    say "  statement about the QEMU and not about the hardware."
 fi
 say ""
 say "## Tools -- by tool, never by package name"
