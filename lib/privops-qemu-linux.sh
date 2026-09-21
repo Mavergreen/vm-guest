@@ -39,12 +39,6 @@
 # already built in costs a warning and nothing else.
 MQG_PRIVOPS_MODULES=${MQG_PRIVOPS_MODULES:-nls_base nls_utf8 hfsplus virtio virtio_ring virtio_pci virtio_blk}
 
-# Where to look for a kernel and its modules, and which kernel release to
-# look for. All three are variables so the search can be pointed at a
-# fixture directory: reading /boot directly would make kernel discovery
-# testable only on a host that already names its kernel the way the test
-# expects -- which is the assumption that broke here in the first place.
-# Same reasoning as MQG_PKG_MANAGER in boot/prereqs.sh.
 # How much memory the microVM gets. 512 MB was enough when the payload only
 # chowned inodes; it is still enough now that the payload copies six
 # gigabytes, because a copy streams and the guest writes back as it goes.
@@ -52,6 +46,12 @@ MQG_PRIVOPS_MODULES=${MQG_PRIVOPS_MODULES:-nls_base nls_utf8 hfsplus virtio virt
 # fewer writeback stalls can, without editing this file.
 MQG_PRIVOPS_MEM=${MQG_PRIVOPS_MEM:-512}
 
+# Where to look for a kernel and its modules, and which kernel release to
+# look for. All three are variables so the search can be pointed at a
+# fixture directory: reading /boot directly would make kernel discovery
+# testable only on a host that already names its kernel the way the test
+# expects -- which is the assumption that broke here in the first place.
+# Same reasoning as MQG_PKG_MANAGER in boot/prereqs.sh.
 MQG_PRIVOPS_BOOT_DIR=${MQG_PRIVOPS_BOOT_DIR:-/boot}
 MQG_PRIVOPS_MODULES_DIR=${MQG_PRIVOPS_MODULES_DIR:-/lib/modules}
 MQG_PRIVOPS_KVER=${MQG_PRIVOPS_KVER:-$(uname -r)}
@@ -357,8 +357,14 @@ if [ -s /disk-roles ]; then
         mqg_letter=$($B echo bcdefghijkl | $B cut -c$mqg_sources)
         mqg_dev=/dev/vd$mqg_letter
         if [ ! -b "$mqg_dev" ]; then
-            echo "MQG-PRIVOPS-DISK $mqg_sources $mqg_dev MISSING ($mqg_role)"
-            continue
+            # The host said it attached this disk and the guest cannot see
+            # it, so something is wrong with QEMU or virtio -- not with
+            # the payload, which must not be run as though the disk were
+            # merely empty.
+            echo "MQG-PRIVOPS-SOURCE-MOUNT-FAILED $mqg_sources $mqg_dev no such block device ($mqg_role)"
+            $B cat /proc/partitions | $B sed 's/^/  /'
+            mqg_bad=1
+            break
         fi
         if [ "$mqg_role" = raw ]; then
             eval "MQG_RAW$mqg_sources=\$mqg_dev; export MQG_RAW$mqg_sources"
@@ -553,9 +559,9 @@ privops_run_qemu_linux() {
     # disks the microVM was unhappy about.
     if printf '%s\n' "$out" | grep -q 'MQG-PRIVOPS-SOURCE-MOUNT-FAILED'; then
         printf '%s\n' "$out" | grep 'MQG-PRIVOPS-SOURCE-MOUNT-FAILED' >&2
-        die "a source image the microVM was given holds no mountable HFS+" \
-            "volume -- the conversion that produced it is the suspect," \
-            "not the target image, which was not written to"
+        die "a disk the microVM was given was not there, or held no" \
+            "mountable HFS+ volume -- the conversion that produced it is" \
+            "the suspect, not the target image, which was not written to"
     fi
     printf '%s\n' "$out" | grep -q 'MQG-PRIVOPS-OK' \
         || { printf '%s\n' "$out" | tail -20 >&2

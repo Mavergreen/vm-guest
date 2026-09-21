@@ -5453,12 +5453,14 @@ first, because the initramfs is RAM and the OpenSSH packages alone are
 
 ### The measurement, which is the part that decides it
 
-Four runs on `pet-power-plant`, same InstallESD.dmg, warm cache, 6.4 GB
+Six runs on `pet-power-plant`, same InstallESD.dmg, warm cache, 6.4 GB
 across 52,292 files:
 
 | | before (udisks) | after (microVM) |
 |---|---|---|
-| total | **78 s, 79 s** | **112 s, 117 s** |
+| `--autoinstall` | **78 s, 79 s** | **112 s, 117 s** |
+| plus the payload and OpenSSH packages | — | 113 s |
+| no `--autoinstall`, and with the test suite running beside it | — | 121 s |
 
 **+38 s, 1.5x. Not twenty minutes.** And the whole of the difference is in
 one place:
