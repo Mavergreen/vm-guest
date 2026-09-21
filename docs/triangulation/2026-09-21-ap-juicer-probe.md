@@ -121,3 +121,73 @@ triangulating.
 3. **G14**: an install with SMBIOS `MacPro5,1`. This is the only machine
    that can settle whether `AppleTyMCEDriver`'s panic was about the Xeon
    or about something else — and my P1 explanation is what is on trial.
+
+---
+
+# `--full` completes — a 2006 headless Xeon runs the whole pipeline
+
+Eleven stages, all `ok`. A Mavericks guest installed, booted without
+installer media, and answered SSH on a machine that is nineteen years
+old, has no SSE4.1, no EPT, one dead core, and nobody logged in.
+
+```
+esd/opencore/ovmf/payload reused · efi 1s · openssh 0s
+media 426s · target 0s · install 1656s · verify 114s · manifest 130s
+```
+
+## What it settled
+
+**G26, by measurement.** An hour earlier this host failed at
+`NotAuthorizedCanObtain` — udisks2 refusing loop-setup to a session with
+no seat. The media stage now assembles HFS+ inside the privops microVM
+and asks udisks2 for nothing, so it built 6.4 GB over SSH to a headless
+server. **That also unblocks P6**, whose CI runners are headless by
+definition and would have hit this later with less context.
+
+**`Conroe` promoted BOOTED → VERIFIED.** `pet-power-plant` had only
+*booted* an image installed under the default line; this is the first
+completed **install** on the row. The distinction exists because ADR 0008
+showed a guest installed with one NIC will not work under another —
+booting and installing are different claims about the same string.
+
+**G13 and G16 on a third QEMU.** EHCI+UHCI carried a full install under
+QEMU 11.0.2; the guest reports connection bus `SATA`. Both findings now
+hold across 8.2.2, 11.0.2 and 11.1.1.
+
+**G21 refuted a second time**, independently: `ignore_msrs=N` here too,
+and the install completed.
+
+## Timings, against the other two hosts
+
+| stage | pet-power-plant (6c, 2018) | squirrel-zapper (2c, 2015) | ap-juicer (3c of 4, 2006, no EPT) |
+|---|---|---|---|
+| media | 113 s | 118 s | **426 s** |
+| install | 780–817 s | 1332 s | **1656 s** |
+
+Install is 2.1x the primary. Less than feared: no EPT means shadow
+paging, and the machine is from 2006. P6 should budget from this ratio
+rather than from a modern desktop's.
+
+## A verdict that asserted a falsehood
+
+The run printed:
+
+> G26 CONFIRM — udisks2 granted loop-setup here, so this host does have
+> whatever polkit wants — usually an active local session
+
+**udisks2 was never asked.** `g26_verdict` keyed on `media_built=yes`,
+which was a true test while the media build used udisks2 and became a lie
+the moment it stopped — on the very host whose refusal prompted the fix.
+
+Corrected. Worth stating as a rule: **a verdict function has to be
+reviewed when the thing it judges changes**, because a stale one does not
+fall silent, it keeps answering confidently. The ledger is where this
+project keeps what it believes, and a false CONFIRM is worse than a
+missing row.
+
+## Still open here
+
+**G14** — the reason this host was wanted. It needs an install with
+SMBIOS `MacPro5,1`, which `triangulate.sh` deliberately does not do. My
+P1 explanation of the `AppleTyMCEDriver` panic is what is on trial, and
+this is the only Xeon available to try it.

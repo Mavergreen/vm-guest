@@ -6,10 +6,14 @@ triangulate: stage efi
 triangulate: stage openssh
 triangulate: stage payload
 triangulate: stage media
+triangulate: stage target
+triangulate: stage install
+triangulate: stage verify
+triangulate: stage manifest
 mavericks-qemu-guest triangulation report
 =========================================
 level:     full
-generated: 2026-09-21T16:34:10Z
+generated: 2026-09-21T18:57:41Z
 host:      ap-juicer -- Debian GNU/Linux 13 (trixie) (Linux 7.1.8+deb13-amd64 x86_64), bash 5.2.37(1)-release
 
 ## Host
@@ -44,10 +48,10 @@ host:      ap-juicer -- Debian GNU/Linux 13 (trixie) (Linux 7.1.8+deb13-amd64 x8
   image_dir              /home/schmonz/.local/share/mavericks-qemu-guest
   image_dir_exists       yes
   image_fs               ext2/ext3
-  image_free_mib         196723
+  image_free_mib         190634
   repo_root              /persistent/code/trees/mavericks-qemu-guest
   repo_fs                zfs
-  repo_create_ms         0.19
+  repo_create_ms         0.09
   image_create_ms        0.08
   reflink                no
   chattr_nocow           no
@@ -62,14 +66,14 @@ host:      ap-juicer -- Debian GNU/Linux 13 (trixie) (Linux 7.1.8+deb13-amd64 x8
   cpu_models_provided    Conroe host qemu64
   cpu_models_refused     Penryn Penryn,+ssse3,+sse4.1,+sse4.2 Nehalem Westmere SandyBridge IvyBridge Haswell-noTSX
   cpu_models_absent      
-  tools_missing          
+  tools_missing          kpartx bats
   package_manager        apt-get
   level                  full
-  build_ok               no
-  failed_stage           media
-  media_built            no
-  media_failure          loop-setup failed for /home/schmonz/.local/share/mavericks-qemu-guest/media/work/esd.img: Error setting up loop device for /home/schmonz/.local/share/mavericks-qemu-guest/media/work/esd.img: GDBus.Error:org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain: Not authorized to perform operation
-  install_ok             unknown
+  build_ok               yes
+  failed_stage           none
+  media_built            yes
+  media_failure          none
+  install_ok             yes
   build_tree_kept        yes
   ovmf_sha256            86c15317568027fec58c510f66a75c8dca34d4b19d1e403c9ab12bfa4ab84719
   opencore_sha256        75c5df8cccef98c9717027800e25b23a64a9cd75c3b52d1e9114813b1c279c19
@@ -112,16 +116,15 @@ host:      ap-juicer -- Debian GNU/Linux 13 (trixie) (Linux 7.1.8+deb13-amd64 x8
   qemu-system-x86_64   /usr/bin/qemu-system-x86_64
   qemu-img             /usr/bin/qemu-img
   dmg2img              /usr/bin/dmg2img
-  kpartx               /usr/sbin/kpartx
+  kpartx               MISSING
   sgdisk               /usr/sbin/sgdisk
-  rsync                /usr/bin/rsync
   xxd                  /usr/bin/xxd
   openssl              /usr/bin/openssl
   curl                 /usr/bin/curl
   unzip                /usr/bin/unzip
   python3              /usr/bin/python3
   mkfs.hfsplus         /usr/sbin/mkfs.hfsplus
-  bats                 /usr/bin/bats
+  bats                 MISSING
   gcc                  /usr/bin/gcc
   make                 /usr/bin/make
   git                  /usr/bin/git
@@ -136,40 +139,16 @@ host:      ap-juicer -- Debian GNU/Linux 13 (trixie) (Linux 7.1.8+deb13-amd64 x8
 ## Pipeline stages
 
   esd        reused  0s
-  opencore   ok      454s
-  ovmf       ok      333s
-  efi        ok      3s
-  openssh    ok      2s
-  payload    ok      0s
-  media      FAILED  43s
-
-  The last 25 lines before it stopped:
-
-    build-image: stage target: skipped (--from/--stage)
-    build-image: stage install: skipped (--from/--stage)
-    build-image: stage verify: skipped (--from/--stage)
-    build-image: stage manifest: skipped (--from/--stage)
-    build-image: total 0s
-        payload 0s
-    /home/schmonz/.local/share/mavericks-qemu-guest/images/triangulate-20260921-163410.qcow2
-    build-image: authorizing /home/schmonz/.local/share/mavericks-qemu-guest/keys/mqg_rsa.pub
-    build-image: cpu: Conroe -- a guest installed on a different line booted on this one and answered SSH, but nothing has been installed on it -- 2026-09-21, pet-power-plant, QEMU 8.2.2, -accel kvm: an image installed under the default line booted on this one, answered SSH in 20 s, passed the verify stage's checks, and reported SSSE3 with no SSE4.1 and no SSE4.2. This is the row that says 10.9's floor is SSSE3 and not SSE4.1. No guest has been INSTALLED on it.
-    build-image: warning: cpu: this is not the line the default was verified on.
-    build-image: warning: If a guest installs on it, say so: that is how the row moves
-    build-image: warning: to VERIFIED (lib/cpu.sh, docs/decisions/0009).
-    build-image: building triangulate-20260921-163410 (accel kvm, machine q35, cpu Conroe, 4096MB)
-    build-image: stage esd: skipped (--from/--stage)
-    build-image: stage opencore: skipped (--from/--stage)
-    build-image: stage ovmf: skipped (--from/--stage)
-    build-image: stage efi: skipped (--from/--stage)
-    build-image: stage openssh: skipped (--from/--stage)
-    build-image: stage payload: skipped (--from/--stage)
-    build-image: === stage media ===
-    build-image: media: no output at /home/schmonz/.local/share/mavericks-qemu-guest/media/installer-linux.img yet
-    fetch-openssh: OpenSSH 10.5p1-mavericks.2 verified: OpenSSH-10.5p1-mavericks.2.pkg, OpenSSH-System-Replace-10.5p1-mavericks.2.pkg
-    mqg: converting InstallESD.dmg to raw (about 5 GB)
-    mqg: ESD raw image: 5465933824 bytes
-    mqg: error: loop-setup failed for /home/schmonz/.local/share/mavericks-qemu-guest/media/work/esd.img: Error setting up loop device for /home/schmonz/.local/share/mavericks-qemu-guest/media/work/esd.img: GDBus.Error:org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain: Not authorized to perform operation
+  opencore   reused  0s
+  ovmf       reused  0s
+  efi        reused  1s
+  openssh    ok      0s
+  payload    reused  0s
+  media      ok      426s
+  target     ok      0s
+  install    ok      1656s
+  verify     ok      114s
+  manifest   ok      130s
 
 ## What stays on this host
 
@@ -187,23 +166,24 @@ host:      ap-juicer -- Debian GNU/Linux 13 (trixie) (Linux 7.1.8+deb13-amd64 x8
 | G2 | CONFIRM | ap-juicer | GenuineIntel with vmx present |
 | G3 | REFUTE | ap-juicer | host CPU ('Intel(R) Xeon(R) CPU            5150  @ 2.66GHz') lacks SSE4.1, which the DEFAULT -cpu line asks for. Masking DOWN is not the problem here; the default asks for more than the host has, and no mask fixes that. It is NOT a stopper: 10.9 does not need SSE4.1 -- '-cpu Conroe' boots this guest to SSH (docs/decisions/0009) -- so the CPU line is a parameter and this host should take the Conroe row of lib/cpu.sh's table. See the -cpu table above for which rows this host can actually provide |
 | G4 | REFUTE | ap-juicer | 4 cores x 1 threads: P5's pinning choices are topology-specific and do not transfer unchanged |
-| G5 | CANNOT-SAY | ap-juicer | built here by this host's toolchain: OVMF_CODE.fd 86c15317568027fec58c510f66a75c8dca34d4b19d1e403c9ab12bfa4ab84719, OpenCore EFI image 75c5df8cccef98c9717027800e25b23a64a9cd75c3b52d1e9114813b1c279c19. One host cannot tell a reproducible build from a lucky one -- diff these against another host's JSON |
+| G5 | CANNOT-SAY | ap-juicer | these artifacts were already on this host, not built by this run: OVMF_CODE.fd 86c15317568027fec58c510f66a75c8dca34d4b19d1e403c9ab12bfa4ab84719, OpenCore EFI image 75c5df8cccef98c9717027800e25b23a64a9cd75c3b52d1e9114813b1c279c19. Re-run against an empty MQG_IMAGE_DIR for checksums this host's toolchain actually produced |
 | G6 | REFUTE | ap-juicer | QEMU 11.0.2, not 8.2.2: whatever this run observes is also evidence about this QEMU |
 | G7 | REFUTE | ap-juicer | kernel '7.1.8+deb13-amd64' is not t2-patched, so any KVM or IOMMU oddity seen on the primary host and not here was plausibly caused there |
-| G8 | CONFIRM | ap-juicer | 9940 MiB RAM, 196723 MiB free: room for a 4 GB guest and a 60 GB sparse target |
+| G8 | CONFIRM | ap-juicer | 9940 MiB RAM, 190634 MiB free: room for a 4 GB guest and a 60 GB sparse target |
 | G9 | CONFIRM | ap-juicer | repo on zfs, which is local: the split is unnecessary here, which is the portable half of the entry |
 | G10 | REFUTE | ap-juicer | ext2/ext3 has no reflinks: golden promotion is a full copy. Budget the time and the space |
 | G11 | CONFIRM | ap-juicer | image directory is ext2/ext3, not btrfs: the chore does not apply, which is what the entry predicted |
-| G12 | REFUTE | ap-juicer | repo is on zfs (local): 0.19 ms per file create against 0.08 ms in the image directory. A host whose repo is already local needs no split at all |
-| G13 | CANNOT-SAY | ap-juicer | this QEMU has ich9-usb-ehci1 and the UHCI companions, but no guest was booted: the entry is a claim about 10.9's AppleUSBXHCI, and only an install speaks to it |
+| G12 | REFUTE | ap-juicer | repo is on zfs (local): 0.09 ms per file create against 0.08 ms in the image directory. A host whose repo is already local needs no split at all |
+| G13 | CONFIRM | ap-juicer | a guest installed and answered SSH over the EHCI+UHCI stack on this host's QEMU |
 | G14 | CANNOT-SAY | ap-juicer | this IS a Xeon ('Intel(R) Xeon(R) CPU            5150  @ 2.66GHz') -- the host the entry has been waiting for. Settling it needs an install with SMBIOS MacPro5,1, which this script does not do: see docs/test-hosts.md |
-| G16 | CANNOT-SAY | ap-juicer | no guest was booted, and this is a claim about what the guest sees |
+| G16 | CONFIRM | ap-juicer | the guest reports connection bus 'SATA' |
 | G17 | CONFIRM | ap-juicer | nested virtualization is on |
 | G18 | REFUTE | ap-juicer | host has no EPT: VMware Fusion in the guest is out of reach here whatever CPU model we pick, and this host cannot evaluate decisions/0005 |
 | G19 | CANNOT-SAY | ap-juicer | not tested: this script never runs two installs at once, which is the standing advice the entry gives. Settling it needs the deliberate experiment the entry describes |
-| G20 | CANNOT-SAY | ap-juicer | the media stage failed before any verification ran: loop-setup failed for /home/schmonz/.local/share/mavericks-qemu-guest/media/work/esd.img: Error setting up loop device for /home/schmonz/.local/share/mavericks-qemu-guest/media/work/esd.img: GDBus.Error:org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain: Not authorized to perform operation. Whatever that is, it is not a second writer corrupting media -- nothing was verified and nothing reported corrupt. Fix the named failure and re-run |
-| G21 | CANNOT-SAY | ap-juicer | ignore_msrs is off here, but no install was attempted at this level: run --full to settle it |
-| G24 | CANNOT-SAY | ap-juicer | QEMU 11.0.2 offers e1000-82545em, but only a --full run puts a guest on it. The throughput half of this entry needs a deliberate benchmark, which this script does not run |
+| G20 | CONFIRM | ap-juicer | media built here and verified against media/apple-packages.sha256 from a fresh mount: the verification the entry asks for ran, and passed |
+| G21 | REFUTE | ap-juicer | ignore_msrs is OFF here and a guest installed and answered SSH anyway: the setting is not required, at least on this CPU and this QEMU. Stop asking users to change a kernel parameter until something shows it is needed |
+| G26 | CONFIRM | ap-juicer | udisks2 granted loop-setup here, so this host does have whatever polkit wants -- usually an active local session |
+| G24 | CONFIRM | ap-juicer | a guest installed and answered SSH over e1000-82545em on QEMU 11.0.2 -- the device works outside 8.2.2, though this run measured no throughput |
 | G25 | REFUTE | ap-juicer | QEMU 11.0.2 under KVM refused Penryn Penryn,+ssse3,+sse4.1,+sse4.2 Nehalem Westmere SandyBridge IvyBridge Haswell-noTSX and accepted Conroe host qemu64 (Penryn needs CPUID[eax=01h].ECX.sse4.1 this host does not have; Penryn,+ssse3,+sse4.1,+sse4.2 needs CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2 this host does not have; Nehalem needs CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt this host does not have; Westmere needs CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes this host does not have; SandyBridge needs CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX this host does not have; IvyBridge needs CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=01h].ECX.f16c,CPUID[eax=01h].ECX.rdrand,CPUID[eax=07h,ecx=00h].EBX.fsgsbase,CPUID[eax=07h,ecx=00h].EBX.smep,CPUID[eax=07h,ecx=00h].EBX.erms,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX this host does not have; Haswell-noTSX needs CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.fma,CPUID[eax=01h].ECX.pcid,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.movbe,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=01h].ECX.f16c,CPUID[eax=01h].ECX.rdrand,CPUID[eax=07h,ecx=00h].EBX.fsgsbase,CPUID[eax=07h,ecx=00h].EBX.bmi1,CPUID[eax=07h,ecx=00h].EBX.avx2,CPUID[eax=07h,ecx=00h].EBX.smep,CPUID[eax=07h,ecx=00h].EBX.bmi2,CPUID[eax=07h,ecx=00h].EBX.erms,CPUID[eax=07h,ecx=00h].EBX.invpcid,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=80000001h].ECX.abm,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX this host does not have). This host cannot provide every row of lib/cpu.sh's table. Read WHICH row before concluding anything: the table is a ladder, a refused row near the top means the host is older than the default and should use a row below it, and a refused row that names a feature 10.9 never needed (qemu64 asks for AMD's svm) means nothing at all. Picking an accepted row with --cpu is a supported outcome, not a broken host |
 
   CONFIRM = true here too. REFUTE = the opposite here, so the entry is
@@ -220,9 +200,6 @@ host:      ap-juicer -- Debian GNU/Linux 13 (trixie) (Linux 7.1.8+deb13-amd64 x8
   - free space and mount points come from 'df -P', which is POSIX, and that is the only part of this that needed no special case
   - this host has 4 processors but only 3 are online: 1 offline. Check 'lscpu' and dmesg for why -- a core that failed to start makes every timing here slower than the hardware implies
 
-triangulate: saved 5 file(s) to /persistent/code/trees/mavericks-qemu-guest/triangulate-logs-ap-juicer-20260921-164808
-triangulate: these survive the cleanup below. report.txt has the
-triangulate: stage table; the .log files have the compiler output.
-triangulate: send the directory, not a summary of it.
-triangulate: error: full stopped at the 'media' stage on this host -- see the stage table above. Every stage after it never ran, and the ledger rows say CANNOT-SAY rather than blaming them
-triangulate: removed /home/schmonz/.local/share/mavericks-qemu-guest/work/build-triangulate-20260921-163410
+triangulate: removed /home/schmonz/.local/share/mavericks-qemu-guest/images/triangulate-20260921-185741.qcow2
+triangulate: removed /home/schmonz/.local/share/mavericks-qemu-guest/images/triangulate-20260921-185741.manifest
+triangulate: removed /home/schmonz/.local/share/mavericks-qemu-guest/work/build-triangulate-20260921-185741

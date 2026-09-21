@@ -98,7 +98,7 @@ MQG_CPU_DEFAULT='Penryn,+ssse3,+sse4.1,+sse4.2'
 # Order is oldest feature set first, so the table reads as a ladder and the
 # floor is at the top where the interesting question is.
 MQG_CPU_MODELS="\
-Conroe	BOOTED	2026-09-21, pet-power-plant, QEMU 8.2.2, -accel kvm: an image installed under the default line booted on this one, answered SSH in 20 s, passed the verify stage's checks, and reported SSSE3 with no SSE4.1 and no SSE4.2. This is the row that says 10.9's floor is SSSE3 and not SSE4.1. No guest has been INSTALLED on it.
+Conroe	VERIFIED	2026-09-21, ap-juicer (Mac Pro 1,1, Xeon 5150, Debian 13, QEMU 11.0.2, -accel kvm, headless, no EPT): FULL unattended install in 1656 s, then booted without installer media and answered SSH. Promoted from BOOTED the same day -- pet-power-plant had only booted an image installed under the default line. This is the row that says 10.9's floor is SSSE3 and not SSE4.1, and it is now the row a pre-2008 host uses in earnest rather than as an experiment.
 Penryn	BOOTED	2026-09-21, same run, same evidence: SSH in 20 s, and the guest reported SSSE3 and SSE4.1 but no SSE4.2 -- which is what QEMU's Penryn-v1 is and what real Penryn was. No guest has been INSTALLED on it.
 Penryn,+ssse3,+sse4.1,+sse4.2	VERIFIED	The default. Full unattended install and SSH on pet-power-plant (QEMU 8.2.2) and on squirrel-zapper (QEMU 11.1.1). +ssse3 and +sse4.1 are redundant with the model; +sse4.2 is not -- see docs/decisions/0009.
 Nehalem	NOT-TESTED	Never booted here. It is the first model with SSE4.2, so it is the model the default line is really approximating, and it is also the first with EPT -- docs/host-profile.md G18 and decisions/0005 both wait on that.

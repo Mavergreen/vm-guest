@@ -511,13 +511,23 @@ g21_verdict() {
 # prompt, which is no use to an unattended pipeline.
 g26_verdict() {
     local media_failure=$1 media_built=$2
+    # The entry is RESOLVED: media/build-installer-img.sh assembles HFS+
+    # inside the privops microVM and asks udisks2 for nothing.
+    #
+    # This function used to say "udisks2 granted loop-setup here" whenever
+    # media built, which was true while the media build used udisks2 and
+    # became a falsehood the moment it stopped. ap-juicer 2026-09-21 --
+    # a headless server where udisks2 had refused an hour earlier -- built
+    # media successfully and was told polkit had granted it. A verdict that
+    # asserts something false is worse than one that says nothing: the
+    # ledger is where this project keeps what it believes.
     case "$media_failure" in
         *NotAuthorized*|*polkit*|*"loop-setup failed"*)
-            judge REFUTE "udisks2 refused loop-setup here: this host has no active local session for polkit to grant it to. The unprivileged path assumes a desktop seat, and a headless server does not have one. The fix is structural -- do the HFS+ work inside the privops microVM so no host loop device is needed at all" ;;
+            judge REFUTE "something still reached udisks2 and was refused. The media build should not: it assembles inside the microVM. Find the caller -- media/content-digest.sh and the test suite are the two that legitimately still use lib/hfs.sh" ;;
     esac
     case "$media_built" in
-        yes)  judge CONFIRM "udisks2 granted loop-setup here, so this host does have whatever polkit wants -- usually an active local session" ;;
-        *)    judge CANNOT-SAY "no media was built at this level, or it failed for an unrelated reason: nothing here speaks to whether udisks2 would authorize this user" ;;
+        yes)  judge CONFIRM "media built without asking udisks2 for anything -- no loop device, no mount, no seat. On a headless host this is the measurement that resolves the entry rather than a restatement of it" ;;
+        *)    judge CANNOT-SAY "no media was built at this level, so nothing here speaks to whether the seat requirement is really gone" ;;
     esac
 }
 

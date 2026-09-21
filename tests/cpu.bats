@@ -29,12 +29,19 @@ setup() {
     [[ "$output" == VERIFIED* ]]
 }
 
-@test "Conroe is BOOTED, not VERIFIED: nothing has been installed on it" {
+@test "Conroe is VERIFIED: a guest was installed on it, not merely booted" {
+    # Was BOOTED until 2026-09-21, when ap-juicer (Mac Pro 1,1, no SSE4.1,
+    # headless) completed a full unattended install on this line in 1656 s
+    # and then booted the result without installer media. This test failing
+    # on the promotion is the point: the two statuses are different claims
+    # and the table must not blur them -- ADR 0008 showed a guest installed
+    # with one NIC does not work under another.
     run cpu_line_verdict Conroe
     [ "$status" -eq 0 ]
-    [[ "$output" == BOOTED* ]]
-    [[ "$output" == *"SSSE3"* ]]
-    [[ "$output" == *"INSTALLED"* ]]
+    [[ "$output" == VERIFIED* ]]
+    [[ "$output" == *"install"* ]]
+    # And it still records WHY this row matters: 10.9's floor is SSSE3.
+    [[ "$output" == *"SSE4.1"* ]]
 }
 
 @test "bare Penryn is BOOTED and the row says it has no SSE4.2" {
