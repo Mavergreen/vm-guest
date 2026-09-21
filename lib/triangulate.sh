@@ -431,18 +431,82 @@ g13_verdict() {
 # G14 -- "SMBIOS must not be MacPro5,1: AppleTyMCEDriver panics on a
 # non-Xeon CPU."
 #
-# Settling this needs an install with SMBIOS MacPro5,1 on a Xeon, which is
-# not something this script does at any level. What it can do is say
-# whether the host is the Xeon the experiment needs.
+# THE ENTRY IS AN OBSERVATION WITH AN EXPLANATION STAPLED TO IT, AND THIS
+# FUNCTION HAS TO KEEP THEM APART.
+#
+# Observed: a guest panicked with MacPro5,1 on a non-Xeon host. That half
+# is now solid -- P1 saw it on 2026-09-17 under a UTM OpenCore, and it
+# reproduced on 2026-09-21 on this project's own OpenCore 1.0.7 and its own
+# OVMF, on an already-installed guest, with the same kext in the same
+# backtrace (docs/decisions/0010).
+#
+# Explained: "because AppleTyMCEDriver wants a Xeon". That half has never
+# been measured and only a Xeon host can measure it. A Xeon that runs
+# MacPro5,1 fine CONFIRMS the qualifier the entry leans on; a Xeon that
+# panics anyway REFUTES the explanation and leaves a solid observation with
+# no cause attached.
+#
+# WHY A FAILED INSTALL IS STILL CANNOT-SAY. The panic is on the guest's
+# SCREEN. It is not in the pipeline log, not in QEMU's output and not in
+# any exit status this script can read -- an install that ends in a panic
+# and an install that ends in a timeout, a wedged disk or a media problem
+# all look identical from here. g26_verdict printed a confident falsehood
+# for exactly this reason (it asserted what it had not measured), so this
+# says CANNOT-SAY and names the screenshot to read and what each reading
+# would mean. A verdict that asserts something false is worse than one that
+# says nothing.
+#
+# g14_verdict <cpu brand> <smbios asked for> <install_ok> <failed stage> [last screen]
 g14_verdict() {
-    local brand=$1
+    local brand=$1 smbios=$2 install_ok=${3:-} failed_stage=${4:-} screen=${5:-}
+    local xeon=no where
+
     case $(printf '%s' "$brand" | tr '[:upper:]' '[:lower:]') in
-        *xeon*)
-            judge CANNOT-SAY "this IS a Xeon ('$brand') -- the host the entry has been waiting for. Settling it needs an install with SMBIOS MacPro5,1, which this script does not do: see docs/test-hosts.md" ;;
-        "")
-            judge CANNOT-SAY "no CPU brand string" ;;
+        *xeon*) xeon=yes ;;
+    esac
+
+    if [ -z "$brand" ]; then
+        judge CANNOT-SAY "no CPU brand string, so this run cannot even say whether it is on the kind of host the entry is about"
+        return
+    fi
+
+    if [ "$xeon" = yes ]; then
+        where="this IS a Xeon ('$brand') -- the host the entry has been waiting for"
+    else
+        where="not a Xeon ('$brand')"
+    fi
+
+    # The experiment is opt-in, because it deliberately builds an image
+    # this project expects to panic.
+    if [ "$smbios" != "MacPro5,1" ]; then
+        judge CANNOT-SAY "$where, but this run used SMBIOS '${smbios:-the default}'. The entry is a claim about MacPro5,1 and nothing else tests it: re-run with --smbios MacPro5,1 (docs/test-hosts.md names the command)"
+        return
+    fi
+
+    case $install_ok in
+        yes)
+            if [ "$xeon" = yes ]; then
+                judge CONFIRM "$where, and a guest INSTALLED with SMBIOS MacPro5,1 and answered SSH. AppleTyMCEDriver did not panic on a machine that really is a Xeon, which is what the entry's 'on a non-Xeon CPU' qualifier predicted. The entry stands as host-specific: keep the default, and note that a Xeon host does not need it"
+            else
+                judge REFUTE "$where, and a guest INSTALLED with SMBIOS MacPro5,1 anyway and answered SSH. The entry says this cannot happen on a non-Xeon CPU. Something -- the OpenCore version, the firmware, the quirks, the -cpu line -- has changed what P1 saw, and the entry is stale. Say so in NOTES.md with this host's details before anything else is concluded"
+            fi
+            ;;
+        no)
+            case $failed_stage in
+                install|verify)
+                    judge CANNOT-SAY "$where, SMBIOS MacPro5,1 was asked for, and the ${failed_stage} stage failed${screen:+ with the last screen the pipeline reported: $screen}. That is CONSISTENT with the AppleTyMCEDriver panic and is NOT the same as having seen one -- a timeout, a wedged disk or slow hardware end that stage the same way. THE PANIC IS LEGIBLE ON SCREEN AND NOWHERE ELSE: look at the last screenshots under \$MQG_IMAGE_DIR/screenshots (remember 2 colours is white-on-black TEXT, not a blank screen). If a backtrace names AppleTyMCEDriver, then on a Xeon that REFUTES the entry's explanation and on a non-Xeon it CONFIRMS the observation; if it names anything else, this run says nothing about G14. Edit the ledger by hand either way"
+                    ;;
+                '')
+                    judge CANNOT-SAY "$where and SMBIOS MacPro5,1 was asked for, but no stage was recorded as failed and no install completed either. Nothing here speaks to the entry"
+                    ;;
+                *)
+                    judge CANNOT-SAY "$where and SMBIOS MacPro5,1 was asked for, but the run stopped in the '$failed_stage' stage, before any guest kernel ran. The experiment did not happen; fix that stage and run it again"
+                    ;;
+            esac
+            ;;
         *)
-            judge CANNOT-SAY "not a Xeon ('$brand'), so this host cannot tell a host-specific mask from a necessary one" ;;
+            judge CANNOT-SAY "$where and SMBIOS MacPro5,1 was asked for, but no install was attempted at this level. --full is the level that settles it"
+            ;;
     esac
 }
 

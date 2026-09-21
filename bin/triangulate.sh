@@ -50,6 +50,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$MQG_REPO_ROOT/lib/triangulate.sh"
 # shellcheck source=../lib/cpu.sh
 . "$MQG_REPO_ROOT/lib/cpu.sh"
+# shellcheck source=../lib/smbios.sh
+. "$MQG_REPO_ROOT/lib/smbios.sh"
 
 # shellcheck disable=SC2034  # read by log()/warn()/die() at call time
 MQG_LOG_PREFIX=triangulate
@@ -57,6 +59,7 @@ MQG_LOG_PREFIX=triangulate
 level=probe
 want_json=0
 cpu_choice=
+smbios_choice=
 json_out=
 keep=0
 keep_build=0
@@ -82,6 +85,11 @@ usage: $(basename "$0") [--probe|--build|--full] [options]
                    table. Needed on any host that cannot provide the
                    default: the probe's -cpu table says which rows this
                    machine accepts.
+  --smbios MODEL   SMBIOS SystemProductName for --build/--full. The
+                   default is what every image this project has shipped
+                   was built with; --smbios MacPro5,1 is the G14
+                   experiment, and it is opt-in because it deliberately
+                   builds an image we expect to panic (lib/smbios.sh).
   --name NAME      Name for the image --full builds.
   --qemu BINARY    QEMU to interrogate (default: $qemu_bin).
   -h, --help       This.
@@ -102,6 +110,7 @@ while [ $# -gt 0 ]; do
         --keep)  keep=1 ;;
         --keep-build) keep_build=1 ;;
         --cpu)   cpu_choice=$2; shift ;;
+        --smbios) smbios_choice=$2; shift ;;
         --name)  name=$2; shift ;;
         --qemu)  qemu_bin=$2; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -109,6 +118,17 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# Refused at the door, before any probe and long before any firmware.
+# image/build-image.sh refuses the same strings for the same reason, but a
+# triangulation run spends minutes probing before it ever calls the
+# pipeline, and a typo should not survive that long. An unknown MODEL is
+# fine and warns; a string that cannot go into a plist is not.
+if [ -n "$smbios_choice" ] && ! smbios_wellformed "$smbios_choice"; then
+    die "unusable --smbios '$smbios_choice': letters, digits, comma, dot," \
+        "dash and underscore only, 64 characters at most"
+fi
+smbios_used=${smbios_choice:-$MQG_SMBIOS_DEFAULT}
 
 name=${name:-triangulate-$(date -u +%Y%m%d-%H%M%S)}
 
@@ -776,6 +796,14 @@ failed_stage=
 boot_fresh=unknown
 install_ok=unknown
 guest_bus=""
+# The last thing the pipeline said was on the guest's screen, verbatim from
+# vm/screenshot.sh. Empty unless a boot was attempted and long enough for a
+# screenshot. A KERNEL PANIC IS ONLY EVER ON THE SCREEN -- it reaches no
+# log and no exit status -- so this is the only trace of one a report can
+# carry, and it is carried as a description and never as a verdict: "2
+# colours, text" is what a panic looks like AND what a boot picker looks
+# like. G14 is the entry that needs it.
+guest_screen=""
 ovmf_sha=""
 opencore_sha=""
 stage_report=""
@@ -806,6 +834,7 @@ note_preexisting() {
     done <<EOF
 $("$MQG_REPO_ROOT/image/build-image.sh" --name "$name" \
     --accel "$pipeline_accel" ${cpu_choice:+--cpu "$cpu_choice"} \
+    ${smbios_choice:+--smbios "$smbios_choice"} \
     --freshness 2>>"$scratch/pipeline.log" \
   | awk -F'\t' '$2 == "skip" { print $1 }' || true)
 EOF
@@ -822,6 +851,7 @@ run_stage() {
     log "stage $stage"
     if "$MQG_REPO_ROOT/image/build-image.sh" --name "$name" --accel "$pipeline_accel" \
             ${cpu_choice:+--cpu "$cpu_choice"} \
+            ${smbios_choice:+--smbios "$smbios_choice"} \
             --generate-ssh-key --stage "$stage" >> "$scratch/pipeline.log" 2>&1; then
         stage_was_preexisting "$stage" && result=reused
         stage_report="$stage_report$stage	$result	$((SECONDS - t0))s
@@ -936,6 +966,8 @@ if [ "$level" = full ] && [ "$build_ok" = yes ]; then
     # The verify stage asks the guest what it is, diskbus included (for
     # G16); its answer is in the log.
     guest_bus=$(sed -n 's/^ *diskbus=//p' "$scratch/pipeline.log" | first_line || true)
+    guest_screen=$(grep 'lit px' "$scratch/pipeline.log" 2>/dev/null \
+        | sed -e 's/^ *//' -e 's/  */ /g' | tail -1 || true)
     failed_stage=$(tri_failed_stage "$stage_report")
 fi
 
@@ -983,6 +1015,9 @@ tri_fact qemu_version "$qemu_version"
 tri_fact qemu_accels "$qemu_accels"
 tri_fact qemu_has_penryn "$qemu_has_penryn"
 tri_fact qemu_missing_devices "${missing_devices# }"
+tri_fact guest_screen "${guest_screen:-none}"
+tri_fact smbios "$smbios_used"
+tri_fact smbios_verdict "$(smbios_verdict "$smbios_used" | cut -f1)"
 tri_fact cpu_line "$CPU_LINE"
 tri_fact cpu_line_verdict "$qemu_cpu"
 tri_fact cpu_line_detail "$qemu_cpu_detail"
@@ -1043,7 +1078,7 @@ add G10 g10_verdict "$image_fs" "$reflink"
 add G11 g11_verdict "$image_fs" "$nocow"
 add G12 g12_verdict "$repo_fs" "$repo_ms" "$local_ms"
 add G13 g13_verdict "$devices_ok" "$install_ok"
-add G14 g14_verdict "$brand"
+add G14 g14_verdict "$brand" "$smbios_used" "$install_ok" "${failed_stage:-}" "$guest_screen"
 add G16 g16_verdict "$guest_bus"
 add G17 g17_verdict "$nested"
 add G18 g18_verdict "$have_ept"

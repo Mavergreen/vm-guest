@@ -145,11 +145,61 @@ setup() {
     [[ "$output" == *"Conroe"* ]]
 }
 
-@test "G14 notices a Xeon and says what settling it would still take" {
-    run g14_verdict "Intel(R) Xeon(R) CPU 5150 @ 2.66GHz"
+# --- G14, the entry the Mac Pro exists for ---------------------------------
+#
+# Every branch is exercised here, on a Coffee Lake, because the decisive
+# run costs a 30-minute round trip to another machine and a verdict
+# function nobody checked is how G21 sat unreported for a day and how
+# g26_verdict came to print something false.
+
+@test "G14 notices a Xeon but says nothing while the default SMBIOS is in use" {
+    run g14_verdict "Intel(R) Xeon(R) CPU 5150 @ 2.66GHz" "iMac14,2" "" ""
     [[ "$output" == CANNOT-SAY* ]]
     [[ "$output" == *"Xeon"* ]]
     [[ "$output" == *"MacPro5,1"* ]]
+}
+
+@test "G14 confirms when a Xeon INSTALLS with MacPro5,1" {
+    run g14_verdict "Intel(R) Xeon(R) CPU 5150 @ 2.66GHz" "MacPro5,1" yes ""
+    [[ "$output" == CONFIRM* ]]
+    [[ "$output" == *"did not panic"* ]]
+}
+
+@test "G14 refutes when a NON-Xeon installs with MacPro5,1: the entry would be stale" {
+    run g14_verdict "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz" "MacPro5,1" yes ""
+    [[ "$output" == REFUTE* ]]
+    [[ "$output" == *"stale"* ]]
+}
+
+# THE IMPORTANT ONE. A failed install is CONSISTENT with the panic and is
+# not a sighting of it: the backtrace is on the guest's screen and reaches
+# no log this script can read. Asserting the panic from a stage result is
+# precisely the mistake g26_verdict made.
+@test "G14 will not call a failed install a panic, and says where to look" {
+    run g14_verdict "Intel(R) Xeon(R) CPU 5150 @ 2.66GHz" "MacPro5,1" no install
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *"CONSISTENT"* ]]
+    [[ "$output" == *"screenshots"* ]]
+    [[ "$output" == *"AppleTyMCEDriver"* ]]
+}
+
+@test "G14 passes the guest's last screen through when the pipeline reported one" {
+    run g14_verdict "Intel(R) Xeon(R) CPU 5150" "MacPro5,1" no install \
+        "1280x800 2 colours 98764 lit px (9.64%) -- text (a menu or console)"
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *"9.64%"* ]]
+}
+
+@test "G14 blames the stage that failed when the guest never ran" {
+    run g14_verdict "Intel(R) Xeon(R) CPU 5150" "MacPro5,1" no media
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *"media"* ]]
+    [[ "$output" == *"before any guest kernel ran"* ]]
+}
+
+@test "G14 says CANNOT-SAY on a host that cannot even name its CPU" {
+    run g14_verdict "" "MacPro5,1" yes ""
+    [[ "$output" == CANNOT-SAY* ]]
 }
 
 # --- the EndeavourOS host --------------------------------------------------
@@ -381,7 +431,7 @@ tri_report() {
                 "$(g11_verdict btrfs yes)" \
                 "$(g12_verdict ext4 1 1)" \
                 "$(g13_verdict yes unknown)" \
-                "$(g14_verdict cpu)" \
+                "$(g14_verdict cpu iMac14,2 unknown '')" \
                 "$(g16_verdict '')" \
                 "$(g17_verdict Y)" \
                 "$(g18_verdict yes)" \
@@ -660,6 +710,32 @@ populate_image_dir() {
     # Both call sites, not just one.
     n=$(grep -c 'cpu_choice:+--cpu' "$REPO/bin/triangulate.sh")
     [ "$n" -eq 2 ]
+}
+
+@test "--smbios exists and is passed to both pipeline call sites" {
+    # The same shape as --cpu, and for the same reason: an experiment that
+    # needs a tracked file edited by hand is an experiment that does not
+    # get run. G14 waited three phases.
+    run "$REPO/bin/triangulate.sh" --help
+    [[ "$output" == *"--smbios MODEL"* ]]
+    grep -q '\-\-smbios) *smbios_choice=\$2' "$REPO/bin/triangulate.sh"
+    n=$(grep -c 'smbios_choice:+--smbios' "$REPO/bin/triangulate.sh")
+    [ "$n" -eq 2 ]
+}
+
+@test "an --smbios that cannot go in a plist is refused before any probe" {
+    # Not "before the firmware" -- before anything. A malformed value
+    # cannot become an untested SMBIOS, only a broken config, and a broken
+    # config fails in a way that looks like a result.
+    run "$REPO/bin/triangulate.sh" --probe --smbios "not a model"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unusable --smbios"* ]]
+}
+
+@test "an unknown --smbios is accepted, because the table is guidance" {
+    run "$REPO/bin/triangulate.sh" --probe --smbios MacBookPro11,3
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"MacBookPro11,3"* ]]
 }
 
 @test "a host that refuses the default CPU is told before the build starts" {
