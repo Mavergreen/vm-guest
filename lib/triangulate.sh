@@ -504,6 +504,23 @@ g21_verdict() {
     esac
 }
 
+# G26 -- the media build reaches the host's filesystems through udisks2,
+# whose polkit policy grants loop-setup to a user AT A SEAT. ap-juicer
+# 2026-09-21, over SSH to a headless server: NotAuthorizedCanObtain.
+# "CanObtain" means polkit would allow it after an interactive password
+# prompt, which is no use to an unattended pipeline.
+g26_verdict() {
+    local media_failure=$1 media_built=$2
+    case "$media_failure" in
+        *NotAuthorized*|*polkit*|*"loop-setup failed"*)
+            judge REFUTE "udisks2 refused loop-setup here: this host has no active local session for polkit to grant it to. The unprivileged path assumes a desktop seat, and a headless server does not have one. The fix is structural -- do the HFS+ work inside the privops microVM so no host loop device is needed at all" ;;
+    esac
+    case "$media_built" in
+        yes)  judge CONFIRM "udisks2 granted loop-setup here, so this host does have whatever polkit wants -- usually an active local session" ;;
+        *)    judge CANNOT-SAY "no media was built at this level, or it failed for an unrelated reason: nothing here speaks to whether udisks2 would authorize this user" ;;
+    esac
+}
+
 g19_verdict() {
     judge CANNOT-SAY "not tested: this script never runs two installs at once, which is the standing advice the entry gives. Settling it needs the deliberate experiment the entry describes"
 }

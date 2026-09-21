@@ -1050,6 +1050,7 @@ add G18 g18_verdict "$have_ept"
 add G19 g19_verdict
 add G20 g20_verdict "$media_built" "$failed_stage" "$media_failure_kind" "$media_failure"
 add G21 g21_verdict "$ignore_msrs" "$install_ok"
+add G26 g26_verdict "$media_failure" "$media_built"
 add G24 g24_verdict "$missing_devices" "$install_ok" "$qemu_version"
 add G25 g25_verdict "$qemu_version" "$accel" "${cpu_provided# }" "${cpu_refused# }" "${cpu_no_model# }" "${cpu_refused_why#; }"
 
