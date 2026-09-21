@@ -266,6 +266,11 @@ setup() {
     [ -n "$own" ]
     [ "$asm" -lt "$own" ]
     grep -q 'MQG_RAW3' "$REPO/media/privops/assemble.sh"
+    # And the injection's status is tar's, not a pipeline's. busybox ash
+    # has no pipefail, so `tar ... | sed` would report sed's success
+    # whatever tar did, and the media would ship without its install
+    # hooks. This project has written that lesson down twice already.
+    ! grep -qE 'tar x.*\|' "$REPO/media/privops/assemble.sh"
 }
 
 @test "--check-sums holds guest-computed digests to the same constant" {

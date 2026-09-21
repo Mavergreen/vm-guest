@@ -104,10 +104,21 @@ $B cp -a "$ESD/BaseSystem.dmg" "$ESD/BaseSystem.chunklist" \
 # would be the one uid-1000 file on otherwise root-owned media -- exactly
 # the state that made launchd say "Dubious ownership on file (skipping)"
 # and load nothing at all.
+#
+# NOT `tar ... | sed`, and that is not style. busybox ash has no
+# `pipefail`, so the status of a pipeline is the LAST command's -- sed's,
+# which succeeds whatever tar did. A tar failure would be swallowed and
+# the media would ship without its install hooks. This project has written
+# that lesson down twice already (`screenshot.sh | head -1`, and the
+# command substitution that ate a `die`), and it did not travel.
 if [ -n "${MQG_RAW3:-}" ]; then
     step "injecting the files the host staged"
-    $B tar xvf "$MQG_RAW3" -C "$MQG_MNT" 2>&1 | $B sed 's/^/  /' \
-        || { echo "extracting the injectables failed"; exit 1; }
+    if ! $B tar xvf "$MQG_RAW3" -C "$MQG_MNT" > /inject.log 2>&1; then
+        $B sed 's/^/  /' /inject.log
+        echo "extracting the injectables failed"
+        exit 1
+    fi
+    $B sed 's/^/  /' /inject.log
 fi
 
 # The ESD's Packages, checked where they are read rather than where they
