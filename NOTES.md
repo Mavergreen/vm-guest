@@ -4941,3 +4941,153 @@ new.
 **Still unknown:** the precise mechanism by which command substitution
 starves `-nographic` on that host and not this one. Recorded as unexplained
 rather than guessed at. The fix does not depend on knowing.
+
+## 2026-09-21 — Q2 — the NIC, measured: 140x, and a claim that held
+
+`usb-net` was never chosen. P1 read it out of the UTM bundle because the
+bundle demonstrably booted and the briefs' `e1000-82545em` was an undated
+guess, and that was the right call for P1. Nobody had run the experiment
+since. This is the experiment.
+
+Everything below is one host — `pet-power-plant`, i7-8700B, QEMU 8.2.2,
+`-accel kvm`, `-cpu Penryn,+ssse3,+sse4.1,+sse4.2`, 2 vCPU, 4096 MB — on
+`vm/clone.sh` overlays, one changed `-device` line, slirp user networking
+because that is what this project ships and a tap device would need root.
+
+### Not over SSH
+
+The first decision was what to measure with. OpenSSH 10.5p1 encrypting on
+an emulated Penryn is CPU-bound, and an `scp` number would have been a
+cipher benchmark with a NIC somewhere underneath it. So: a 40-line HTTP
+server on the host that generates zeros from memory on `GET /zeros/<n>`
+and drains a `PUT` to nothing, and `curl` in the guest reporting its own
+`%{speed_download}` and `%{speed_upload}`. No TLS, no disk on either side
+of the transfer, both directions named separately because they differ.
+200 MB per transfer, three each way.
+
+### The ordering trap, taken seriously and then failing to spring
+
+The brief said to check whether `pmj/virtio-net-osx` is still required
+before ranking anything, because four undated inherited claims have now
+been wrong here — the `usb-tablet` kext, DNS-needs-configuring, Security
+Update 2016-001, and `kvm.ignore_msrs`. The rule is right. This time the
+claim survived it.
+
+`-device virtio-net-pci` with no kext: no SSH after 420 s. The screenshot
+is a fully drawn 10.9 login window, so the guest is fine and only the
+network is absent — but a guest with no network cannot be asked why.
+
+So the next boot had **three** NICs: `usb-net` (to have SSH),
+`virtio-net-pci` and `e1000-82545em`, each on its own netdev. `ioreg`:
+
+```
++-o S08@1  <class IOPCIDevice, registered, matched, active>
+|     "name" = <"ethernet">
+|     "compatible" = <"pci1af4,1","pci1af4,1000","pciclass,020000","S08">
+                                            <- nothing below it
+
++-o S10@2  <class IOPCIDevice, registered, matched, active>
+|     "compatible" = <"pci1af4,1100","pci8086,100f","pciclass,020000","S10">
+| +-o AppleIntel8254XEthernet
+|   +-o en1  <class IOEthernetInterface, registered, matched, active>
+```
+
+The virtio device is *enumerated* and unclaimed; the Intel NIC beside it in
+the same boot is claimed and has an interface. `grep -rl 1af4` across every
+`Info.plist` in `/System/Library/Extensions` finds nothing. There is no
+virtio networking in 10.9 to re-test into existence. **The kext is still
+required**, and the way that was established — two NICs in one guest, so
+the failing device can be interrogated over the working one — is the part
+worth keeping.
+
+### The numbers
+
+```
+usb-net   down  1244668  1240753  1244742 B/s     168.5 s  169.0 s  168.5 s
+usb-net   up    1269114  1268936  1269202 B/s     165.2 s  165.3 s  165.2 s
+e1000     down  170921908  167376081  182956048   1.23 s   1.25 s   1.15 s
+e1000     up     23072433   22873157   23813123   9.09 s   9.17 s   8.81 s
+```
+
+1.24 MB/s against 174 MB/s: **140x receive, 18x send.** What varied:
+`usb-net` repeated to within 0.3%, `e1000` to 5%. The reason the CDC-ECM
+numbers are so stable is printed by the guest itself:
+
+```
+en0: media: autoselect (10baseT/UTP <full-duplex>)      usb-net
+en0: media: autoselect (1000baseT <full-duplex>)        e1000-82545em
+```
+
+1.24 MB/s is 9.9 Mbit/s. `usb-net` was running at exactly the speed it
+said it was, and had been for the whole project. There was nothing to tune.
+
+### The thing that is worth more than the benchmark
+
+**Swapping the NIC under an installed guest does not work, in either
+direction.** The e1000 run was supposed to be a clone of the same image
+with one line changed. It never answered SSH — 420 s, login window on
+screen. The two-NIC probe explains it: `en1` exists,
+`AppleIntel8254XEthernet` is loaded, and `networksetup -getinfo Ethernet`
+says *"Ethernet is not a recognized network service."* 10.9 writes the
+interfaces it has seen into `/Library/Preferences/SystemConfiguration` and
+creates *services* for them at that moment. A NIC it meets afterwards gets
+a driver and a BSD interface and no service, so no DHCP, no route, no SSH.
+
+A fresh `image/build-image.sh --nic e1000-82545em` — the flag added for
+this — installed and answered SSH in 680 s, `en0`, DHCP, DNS, a service
+called "Ethernet", `AppleIntel8254XEthernet 3.1.4b1` loaded. So the device
+is fine; what is not fine is treating a NIC as a runtime knob.
+
+Which reframes the whole question. **A NIC is a build-time input**, like
+`--updates`: it goes in the manifest (`nic e1000-82545em`), and changing
+the default migrates nothing. `vm/profiles/p4-approachb.args` and
+`p4-linuxmedia.args` keep `usb-net` because the target disk they name was
+installed with it, and they now carry the reason in a comment where
+somebody would otherwise "fix" them.
+
+### Reboot
+
+Both working NICs survive. `en0` keeps its name, MAC, lease, DNS and route,
+and throughput is unchanged afterwards, to within 0.02%:
+
+```
+                 before reboot            after reboot
+e1000     down   170921908 B/s            170407892 B/s
+e1000     up      23072433 B/s             22410107 B/s
+usb-net   down     1244628 B/s              1244455 B/s
+usb-net   up       1269186 B/s              1269195 B/s
+```
+
+Getting a reboot at all took three tries, and two of them went nowhere:
+
+- `sudo shutdown -r now` — the account has **no password** by design
+  (`firstboot.sh`: "the account is reached by SSH key"), so `sudo` refuses
+  and an empty password does not satisfy it. The first e1000 run reported
+  "sudo reboot refused" and then measured a *second* boot that was the same
+  boot, which `uptime` would have caught and the harness did not ask. It
+  asks now.
+- `osascript ... to restart` — needs the GUI session, and `who` in the
+  guest is empty over SSH.
+- Monitor `system_reset` after an explicit `sync` — works, guest back in
+  ~48 s. It is a power cycle rather than a shutdown, which is the same
+  event `power_down_vm` already inflicts on every build, and the volume is
+  journalled HFS+.
+
+### Measurements that went nowhere, recorded because they were made
+
+- **`e1000-82545em` on the `usb-net` image, 420 s, no SSH.** Read as "e1000
+  does not work" for about ten minutes. It was the swap, not the device.
+- **The first `usb-net` run's second boot.** Not a reboot. Discarded.
+- **`virtio-net-pci` fresh install** was not attempted. The install stage
+  waits for SSH, which needs a network the guest cannot have; it would have
+  bought a 30-minute timeout and no new information.
+- **`e1000e`, `vmxnet3`, the 82540em `e1000` alias** — not tested. Q2 named
+  three candidates and one of them is 140x the incumbent.
+
+### What would change the answer
+
+A different QEMU. All of this is 8.2.2, and `squirrel-zapper` has 11.1.1 —
+three major versions across all three device models. **G24** is that
+hypothesis, and `bin/triangulate.sh` has a verdict function for it, added
+in the same commit as the entry, because G21 sat in the ledger for a day
+without one and the run that settled it printed nothing about it.
