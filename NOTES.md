@@ -5380,3 +5380,183 @@ separately and a test says so.
 
 Test count 470 → 497, across the three changes in this session: the stage
 input stamps, ccache, and `--keep-build`.
+
+## 2026-09-21 — P4 — the media build moves inside the microVM
+
+`ap-juicer`, over SSH to a headless server:
+
+```
+loop-setup failed: org.freedesktop.UDisks2.Error.NotAuthorizedCanObtain
+```
+
+Every firmware stage had passed there. Only the media stage was blocked,
+and it was blocked on udisks2's polkit policy, which grants `loop-setup`
+to a user **at a seat**. `CanObtain` means polkit would allow it after an
+interactive password prompt, which is no use to an unattended pipeline.
+
+That is a property of the policy, not of that machine, so **every headless
+host has it — including any CI runner P6 needs.** Two hosts never saw it
+because both were desktops with someone logged in locally. A polkit rule
+would fix it and is rejected: it needs root and is a permanent host
+change, where the entire point of this path is needing neither.
+
+### The data path, and why it costs nothing
+
+The microVM already mounted HFS+ read-write and did privileged work
+without host root; `privops_run` had been doing the ownership pass that
+way since P4 began. The only thing it could not do was see more than one
+disk.
+
+So: `privops_run <target> <script> [ro:<img> | raw:<img>]...`. Extra
+images are attached after the target as `/dev/vdb` onwards, `ro:` mounted
+read-only and handed to the payload as `$MQG_SRC1`, `$MQG_SRC2`, `raw:`
+handed over untouched as `$MQG_RAW<n>`.
+
+**The source images are already files on this host, so QEMU maps them in
+as more virtio disks. Nothing is copied in and nothing is copied out.**
+That was the reason to prefer this over the alternatives considered:
+
+* **9p or virtiofs.** Both need something the host may not have — `-virtfs`
+  compiled in, or a `virtiofsd` binary and a daemon to run — and 9p needs
+  guest kernel modules to stage. The whole task was removing host
+  requirements.
+* **Assembling into an image the host then never mounts.** That is what
+  this is; the question was only how the guest reaches the sources.
+* A second virtio disk carrying the source was the answer, and it is the
+  cheapest one: the sources ARE disks already.
+
+Roles are written into the initramfs rather than passed on the kernel
+command line, for the same reason the module load order already was: order
+is the point, a path with a space in it does not survive a cmdline, and
+what the guest needs is the answer rather than the request.
+
+### The one thing that could not move, and the way out
+
+`BaseSystem.dmg` lives *inside* the ESD volume and is UDIF-compressed.
+Only `dmg2img` can decode it, `dmg2img` runs on the host, and the host can
+no longer read the ESD volume. Circular.
+
+The way out is the only channel that exists between a guest and a host
+that mounts nothing: **a raw disk.** The host creates a sparse file, the
+guest `dd`s the one file onto it and prints the byte count and a SHA-256,
+the host truncates to that length and checks its own read against the
+digest before handing it to `dmg2img`. A short or torn write would
+otherwise surface as a `dmg2img` failure that says nothing about where the
+bytes went.
+
+The same channel runs the other way for injection: the autoinstall hooks
+and any `--firstboot-pkg`/`--extra-pkg` are staged into a directory, tarred
+with the paths and modes they are to have, and extracted by the guest
+straight onto the media. Straight onto the media, not into the initramfs
+first, because the initramfs is RAM and the OpenSSH packages alone are
+12 MB.
+
+### The measurement, which is the part that decides it
+
+Four runs on `pet-power-plant`, same InstallESD.dmg, warm cache, 6.4 GB
+across 52,292 files:
+
+| | before (udisks) | after (microVM) |
+|---|---|---|
+| total | **78 s, 79 s** | **112 s, 117 s** |
+
+**+38 s, 1.5x. Not twenty minutes.** And the whole of the difference is in
+one place:
+
+```
+              host (rsync/coreutils)   guest (busybox)
+BaseSystem     10 s                     15 s
+Packages        5 s                      5 s
+ESD check       9 s                     25 s
+media check    11 s                     28 s
+```
+
+The copying is a wash — `cp -a` through virtio moves 4.83 GB of packages
+in the same five seconds `rsync` did. **What costs the 38 s is busybox's
+`sha256sum`, about 2.7x slower than coreutils' on this CPU** (193 MB/s
+against 536 MB/s), run twice over Apple's packages. Worth knowing before
+anyone optimises the copy, which is not the problem.
+
+There is an obvious 25 s available — the ESD check only ever *attributes*
+a failure the media check would find, so it could run only when the media
+check fails — and it is deliberately not taken. G20 is why both checks
+exist, and a check that runs only after something has already gone wrong
+is a check nobody has evidence for on the runs that went right.
+
+### The verification got stronger, not weaker
+
+G20: three media builds in six wrote a corrupt `Essentials.pkg` while
+`rsync` reported success, and the first version of the check passed on
+that media because it read back through the mount that had just written
+it — the page cache, not the disk.
+
+The old check was a fresh *mount* on the same host. The new one is a
+**fresh microVM**, booted after the writing guest has exited: a new
+kernel, no page cache at all, every byte pulled through virtio off this
+host's file. The guest prints `MQG-SUM-MEDIA <sha256>  <name>` and
+`media/verify-installer-img.sh --check-sums` compares them against
+`media/apple-packages.sha256` — still a constant, still Apple's own
+values, still the one implementation in the script whose job that is.
+
+All sixteen matched on all three runs of the new path, and the finished
+media passes `verify-installer-img.sh` against the Mac-produced reference:
+*"every path in the reference is in the build, and every required file is
+present at the reference's size."*
+
+The six setuid and setgid files survive. `cp -a` as uid 0 carries them
+across, and `fix-ownership.sh` is unchanged: it still records the modes
+before the chown that strips them and restores them after. One pleasant
+side effect — the guest reads the ESD without udisks' `uid=`/`gid=`
+overrides, so `ownership before: 0:0` now, where it used to say
+`1000:1000`. The chown is no less necessary; the injected files still
+arrive owned by the building user.
+
+### What the reference comparison caught, which nothing else would have
+
+The first assembled build was right in every file and wrong in five
+directories: `System`, `System/Installation`, `System/Installation/Packages`,
+`private` and `private/etc` came out `drwxrwxr-x` where Apple's are
+`drwxr-xr-x`.
+
+Cause: the injection tar carried **directory entries**, and a directory
+entry in a tar sets the mode of the directory it lands on. Those five
+already exist on the media; the tar had been built in a staging directory
+created under this host's umask of 002, so extracting it carried 775 onto
+Apple's 755. The fix is to archive files only (`find . ! -type d`), so tar
+creates what is genuinely missing and leaves the rest alone.
+
+Worth writing down because of *how* it was found: not by any test, and not
+by the package checksums, which were perfect. `verify-installer-img.sh`
+against the Mac-produced reference is the only thing in this project that
+would have noticed, and it noticed on the first try.
+
+### What this removes from a host, and what it adds
+
+Adds: **nothing.** The microVM was already required and its requirements
+are unchanged — QEMU, a static busybox, cpio, a readable kernel, and the
+`hfsplus`/`nls_utf8` modules.
+
+Removes: `udisks2`, `losetup`, `findmnt`, `lsblk`, **a desktop seat**, and
+`rsync` — which nothing in the repository invokes any more, so
+`boot/prereqs.sh`, `bin/triangulate.sh` and `bin/preconditions.sh` no
+longer name it. It also removes the desktop-popup complaint at the root:
+udisks mounted under `/run/media/$USER`, which is exactly where the
+file-browser and notification handlers look, and nothing goes there now.
+
+### What is untested
+
+* **Every host that matters.** This ran on `pet-power-plant`, which is the
+  one host that never had the problem. `ap-juicer` is where it should be
+  tried next, and until it has been, G26 is resolved by construction
+  rather than by measurement.
+* **`media/content-digest.sh` still mounts through udisks** and so still
+  needs a seat. It is a by-hand comparison tool, no stage calls it, and
+  moving it would mean pushing 39,000 checksums through a serial console.
+  Recorded rather than smoothed over.
+* **The guest reads Apple partition maps by assuming the host kernel can.**
+  `CONFIG_MAC_PARTITION=y` here; a kernel without it would see no
+  partitions on the dmg2img output and the source mount would fail. It
+  fails by name (`MQG-PRIVOPS-SOURCE-MOUNT-FAILED`) rather than as a
+  target problem, which is the most that can be arranged from here.
+
+Test count 505 → 519.
