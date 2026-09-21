@@ -226,3 +226,124 @@ setup() {
     # And a module we cannot decompress is fatal, not skipped.
     grep -q 'cannot decompress' "$REPO/lib/privops-qemu-linux.sh"
 }
+
+# --- extra disks: the data path that replaces the host's loop device ------
+#
+# G26: udisks2 grants loop-setup to a user AT A SEAT, so the old
+# loop-and-mount path could not run over SSH -- on any headless host,
+# including a CI runner. The fix is to hand the microVM the source images
+# as further virtio disks and let it do the whole HFS+ assembly. These
+# guard the seam that makes that possible.
+
+@test "an unknown disk role is refused rather than quietly attached" {
+    : > "$BOOT/vmlinuz-$KVER"
+    : > "$BATS_TEST_TMPDIR/img"
+    : > "$BATS_TEST_TMPDIR/src"
+    run privops_run_qemu_linux "$BATS_TEST_TMPDIR/img" /dev/null \
+        "rw:$BATS_TEST_TMPDIR/src"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"unknown disk role"* ]]
+}
+
+@test "an extra image that is not there is named before anything boots" {
+    : > "$BOOT/vmlinuz-$KVER"
+    : > "$BATS_TEST_TMPDIR/img"
+    run privops_run_qemu_linux "$BATS_TEST_TMPDIR/img" /dev/null \
+        "ro:$BATS_TEST_TMPDIR/absent"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no such image"* ]]
+}
+
+@test "the roles the host chose are written into the initramfs" {
+    # Not passed on the kernel command line: order is the point, a path
+    # with a space in it does not survive a cmdline, and the guest needs
+    # the answer rather than the request -- the same reasoning as the
+    # module load order.
+    command -v cpio >/dev/null 2>&1 || skip "no cpio on this host"
+    command -v busybox >/dev/null 2>&1 || skip "no busybox on this host"
+    printf 'echo hi\n' > "$BATS_TEST_TMPDIR/payload.sh"
+    export MQG_PRIVOPS_PAYLOAD="$BATS_TEST_TMPDIR/payload.sh"
+    export MQG_PRIVOPS_DISK_ROLES='ro
+raw
+'
+    privops_qemu_linux_build_initramfs "$BATS_TEST_TMPDIR/initramfs.cpio.gz"
+    run bash -c "gzip -dc '$BATS_TEST_TMPDIR/initramfs.cpio.gz' |
+                 cpio -i --to-stdout disk-roles 2>/dev/null"
+    [ "$status" -eq 0 ]
+    [ "$output" = 'ro
+raw' ]
+}
+
+@test "source images are mounted read-only, and the target is not" {
+    # A payload bug must not be able to corrupt a five-gigabyte conversion
+    # that took minutes to produce. Belt (QEMU's readonly=on) and braces
+    # (the guest's own mount -o ro).
+    grep -q 'readonly=on' "$REPO/lib/privops-qemu-linux.sh"
+    grep -q 'mount -t hfsplus -o ro' "$REPO/lib/privops-qemu-linux.sh"
+}
+
+@test "a source that will not mount is not reported as a target failure" {
+    # The two have nothing to do with each other and their remedies are
+    # unrelated: one is a bad conversion, the other a missing virtio or a
+    # broken volume. The target's own bare "mount failed" cost five remote
+    # runs before it was made to say what was actually there.
+    grep -q 'MQG-PRIVOPS-SOURCE-MOUNT-FAILED' "$REPO/lib/privops-qemu-linux.sh"
+    grep -q 'not the target image, which was not written to' \
+        "$REPO/lib/privops-qemu-linux.sh"
+}
+
+@test "the microVM copies HFS+ to HFS+, keeping hardlinks, setuid and root" {
+    # The whole G26 fix in one boot: a read-only source volume, a
+    # read-write target, and a raw disk the guest hands a file back on.
+    #
+    # This is the one test here that actually boots the backend. It costs
+    # about fifteen seconds and it is the only thing that can answer
+    # whether busybox `cp -a` preserves what Apple's media needs -- the six
+    # setuid files above all, which a chown would otherwise strip.
+    # setup() points kernel discovery at a fixture directory so the other
+    # tests can pose as Arch or Gentoo. This one needs the real host.
+    unset MQG_PRIVOPS_BOOT_DIR MQG_PRIVOPS_MODULES_DIR MQG_PRIVOPS_KVER
+    # shellcheck source=/dev/null
+    source "$REPO/lib/privops-qemu-linux.sh"
+    privops_backend_available qemu-linux || skip "backend not available here"
+    [ -w /dev/kvm ] || skip "no writable /dev/kvm"
+    command -v mkfs.hfsplus >/dev/null 2>&1 || skip "no mkfs.hfsplus"
+    # shellcheck source=/dev/null
+    source "$REPO/lib/hfs.sh"
+    W=$BATS_TEST_TMPDIR
+    hfs_create "$W/src.img" 32 "SRC VOL"
+    hfs_create_gpt "$W/dst.img" 32 "DST VOL"
+    truncate -s 8M "$W/scratch.raw"
+
+    cat > "$W/populate.sh" <<'PAYLOAD'
+$B mkdir -p "$MQG_MNT/dir"
+echo payload > "$MQG_MNT/dir/a"
+$B ln "$MQG_MNT/dir/a" "$MQG_MNT/dir/hardlink"
+$B ln -s a "$MQG_MNT/dir/sym"
+$B chmod 4755 "$MQG_MNT/dir/a"
+$B dd if=/dev/urandom of="$MQG_MNT/big" bs=1M count=2 2>/dev/null
+PAYLOAD
+    run privops_run_qemu_linux "$W/src.img" "$W/populate.sh"
+    [ "$status" -eq 0 ]
+
+    cat > "$W/copy.sh" <<'PAYLOAD'
+$B cp -a "$MQG_SRC1/." "$MQG_MNT/"
+echo "MQG-TEST links=$($B stat -c %h "$MQG_MNT/dir/a")"
+echo "MQG-TEST mode=$($B stat -c %a "$MQG_MNT/dir/a")"
+echo "MQG-TEST owner=$($B stat -c %u:%g "$MQG_MNT/dir/a")"
+echo "MQG-TEST sym=$($B readlink "$MQG_MNT/dir/sym")"
+$B dd if="$MQG_SRC1/big" of="$MQG_RAW2" 2>/dev/null
+PAYLOAD
+    MQG_PRIVOPS_CONSOLE=$W/console.txt \
+        run privops_run_qemu_linux "$W/dst.img" "$W/copy.sh" \
+            "ro:$W/src.img" "raw:$W/scratch.raw"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"MQG-TEST links=2"* ]]
+    [[ "$output" == *"MQG-TEST mode=4755"* ]]
+    [[ "$output" == *"MQG-TEST owner=0:0"* ]]
+    [[ "$output" == *"MQG-TEST sym=a"* ]]
+    # And the raw disk really did come back out of the guest: the first
+    # two megabytes of it are the file the guest wrote there.
+    [ "$(head -c 2097152 "$W/scratch.raw" | sha256sum | cut -d' ' -f1)" \
+      != "$(head -c 2097152 /dev/zero | sha256sum | cut -d' ' -f1)" ]
+}

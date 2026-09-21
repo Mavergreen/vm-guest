@@ -5,6 +5,14 @@
 # the host's own kernel, attaches the target image as /dev/vda, and runs the
 # caller's script as uid 0.
 #
+# Extra images can be attached after it -- `ro:<path>` to be mounted
+# read-only, `raw:<path>` to be handed over as a block device and not
+# mounted at all. That is the whole data path for building HFS+ media
+# without host privilege: the source images are already files on this host,
+# so QEMU maps them in as more virtio disks and NOTHING IS COPIED IN OR OUT.
+# The guest does the reading and the writing; the host attaches no loop
+# device and mounts nothing.
+#
 # Four things here are load-bearing and each cost a failed attempt to find:
 #
 #   1. Applets are invoked as `busybox <applet>`, never through the symlinks
@@ -37,6 +45,13 @@ MQG_PRIVOPS_MODULES=${MQG_PRIVOPS_MODULES:-nls_base nls_utf8 hfsplus virtio virt
 # testable only on a host that already names its kernel the way the test
 # expects -- which is the assumption that broke here in the first place.
 # Same reasoning as MQG_PKG_MANAGER in boot/prereqs.sh.
+# How much memory the microVM gets. 512 MB was enough when the payload only
+# chowned inodes; it is still enough now that the payload copies six
+# gigabytes, because a copy streams and the guest writes back as it goes.
+# A variable rather than a constant so a host that wants to trade RAM for
+# fewer writeback stalls can, without editing this file.
+MQG_PRIVOPS_MEM=${MQG_PRIVOPS_MEM:-512}
+
 MQG_PRIVOPS_BOOT_DIR=${MQG_PRIVOPS_BOOT_DIR:-/boot}
 MQG_PRIVOPS_MODULES_DIR=${MQG_PRIVOPS_MODULES_DIR:-/lib/modules}
 MQG_PRIVOPS_KVER=${MQG_PRIVOPS_KVER:-$(uname -r)}
@@ -244,6 +259,17 @@ privops_qemu_linux_build_initramfs() {
         done
     done
 
+    # The role of each extra disk, one per line, in the order the host
+    # attached them: /dev/vdb is line 1, /dev/vdc line 2, and so on.
+    #
+    # Written into the initramfs rather than passed on the kernel command
+    # line for the same reason the module order is: a path with a space in
+    # it does not survive a cmdline, and what the guest needs is the answer
+    # rather than the request. An initramfs with no roles file is one built
+    # before this existed and attaches nothing extra, which is why the
+    # guest treats a missing file as "no extra disks" rather than an error.
+    printf '%s' "${MQG_PRIVOPS_DISK_ROLES:-}" > "$root/disk-roles"
+
     cat > "$root/init" <<'INIT'
 #!/bin/busybox sh
 B=/bin/busybox
@@ -309,7 +335,74 @@ for d in /dev/vda1 /dev/vda2 /dev/vda; do
     fi
     $B umount /mnt 2>/dev/null
 done
-if [ -n "$MQG_DEV" ]; then
+# The extra disks the host attached, in order, with the role it gave each.
+#
+# "ro" is mounted read-only and handed to the payload as $MQG_SRC<n>; "raw"
+# is handed over as $MQG_RAW<n> and not touched. The roles come from the
+# host because only the host knows them: a scratch disk a payload is about
+# to dd onto holds no filesystem, and "we tried to mount it and could not"
+# must not be how that is discovered -- it is indistinguishable from a
+# source image whose filesystem is broken, which is a real failure.
+#
+# Candidates are tried LARGEST FIRST. dmg2img output carries an Apple
+# partition map with small driver partitions around the volume, and which
+# number the volume lands on is not ours to predict -- the host's old
+# udisks path picked the largest hfsplus partition for exactly this reason.
+mqg_sources=0
+mqg_bad=
+if [ -s /disk-roles ]; then
+    while read -r mqg_role; do
+        [ -n "$mqg_role" ] || continue
+        mqg_sources=$((mqg_sources + 1))
+        mqg_letter=$($B echo bcdefghijkl | $B cut -c$mqg_sources)
+        mqg_dev=/dev/vd$mqg_letter
+        if [ ! -b "$mqg_dev" ]; then
+            echo "MQG-PRIVOPS-DISK $mqg_sources $mqg_dev MISSING ($mqg_role)"
+            continue
+        fi
+        if [ "$mqg_role" = raw ]; then
+            eval "MQG_RAW$mqg_sources=\$mqg_dev; export MQG_RAW$mqg_sources"
+            echo "MQG-PRIVOPS-DISK $mqg_sources $mqg_dev raw"
+            continue
+        fi
+        mqg_mnt=/src$mqg_sources
+        $B mkdir -p "$mqg_mnt"
+        mqg_base=${mqg_dev##*/}
+        mqg_got=
+        for mqg_part in $(
+            for s in /sys/class/block/$mqg_base /sys/class/block/$mqg_base*; do
+                [ -f "$s/size" ] || continue
+                echo "$($B cat "$s/size") ${s##*/}"
+            done | $B sort -rn -u | $B awk '{print "/dev/" $2}'
+        ); do
+            [ -b "$mqg_part" ] || continue
+            $B mount -t hfsplus -o ro "$mqg_part" "$mqg_mnt" 2>/dev/null \
+                || continue
+            mqg_got=$mqg_part
+            break
+        done
+        if [ -z "$mqg_got" ]; then
+            # Named as its own failure, not folded into the target's. A
+            # source image that will not mount and a target that will not
+            # mount have nothing to do with each other, and the first
+            # version of the target's own diagnostic exists because a bare
+            # "mount failed" cost five remote runs.
+            echo "MQG-PRIVOPS-SOURCE-MOUNT-FAILED $mqg_sources $mqg_dev"
+            $B cat /proc/partitions | $B sed 's/^/  /'
+            mqg_bad=1
+            break
+        fi
+        eval "MQG_SRC$mqg_sources=\$mqg_mnt; export MQG_SRC$mqg_sources"
+        echo "MQG-PRIVOPS-DISK $mqg_sources $mqg_got ro $mqg_mnt"
+    done < /disk-roles
+fi
+
+if [ -n "$mqg_bad" ] && [ -n "$MQG_DEV" ]; then
+    # The target mounted and a source did not: unmount cleanly anyway, so
+    # the image is not left marked dirty for the next attempt, and say
+    # nothing that looks like success.
+    $B umount /mnt 2>/dev/null
+elif [ -n "$MQG_DEV" ]; then
     echo "MQG-PRIVOPS-MOUNTED $MQG_DEV"
     MQG_MNT=/mnt; export MQG_MNT B
     $B sh /payload.sh
@@ -346,7 +439,28 @@ INIT
 }
 
 privops_run_qemu_linux() {
-    local img=$1 script=$2 initramfs out mods kernel rc console
+    local img=$1 script=$2
+    shift 2
+    local initramfs out mods kernel rc console spec role path
+    local -a drives=()
+    # Extra disks become /dev/vdb onwards, in the order given, and the
+    # roles file tells the guest what to do with each. `readonly=on` is
+    # belt and braces over the guest's own `mount -o ro`: a source image
+    # the guest cannot write to is one a bug in the payload cannot corrupt,
+    # and these are the only copies of a five-gigabyte conversion.
+    MQG_PRIVOPS_DISK_ROLES=
+    for spec in ${@+"$@"}; do
+        role=${spec%%:*}
+        path=${spec#*:}
+        case $role in
+            ro)  drives+=( -drive "file=$path,format=raw,if=virtio,readonly=on" ) ;;
+            raw) drives+=( -drive "file=$path,format=raw,if=virtio" ) ;;
+            *)   die "privops: unknown disk role '$role' in '$spec'" ;;
+        esac
+        [ -f "$path" ] || die "privops: no such image: $path"
+        MQG_PRIVOPS_DISK_ROLES="$MQG_PRIVOPS_DISK_ROLES$role
+"
+    done
     kernel=$(privops_qemu_linux_kernel) || die \
         "no readable kernel image for $MQG_PRIVOPS_KVER (looked for: $(
             privops_qemu_linux_kernel_candidates | tr '\n' ' '))"
@@ -394,13 +508,25 @@ privops_run_qemu_linux() {
     # </dev/null for the same reason: -nographic takes stdin, and a step
     # that competes with its caller for the terminal is its own bug.
     console=$(mktemp)
+    # `${drives[@]+...}`: before bash 4.4, expanding an empty array under
+    # `set -u` is an error rather than nothing. See bin/bash32-check.sh.
     timeout "$MQG_PRIVOPS_TIMEOUT" qemu-system-x86_64 \
-        -enable-kvm -m 512 -nographic -no-reboot \
+        -enable-kvm -m "$MQG_PRIVOPS_MEM" -nographic -no-reboot \
         -kernel "$kernel" -initrd "$initramfs" \
         -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=$mods" \
         -drive file="$img",format=raw,if=virtio \
+        ${drives[@]+"${drives[@]}"} \
         </dev/null > "$console" 2>&1 && rc=0 || rc=$?
     out=$(cat "$console")
+    # The console is the only channel out of the microVM: the guest can
+    # write to a disk the host will read, or it can print. A caller that
+    # needs an answer back -- a checksum, a byte count -- sets
+    # MQG_PRIVOPS_CONSOLE to a path and reads its marker lines from there.
+    # Copied rather than moved so the cleanup below stays unconditional.
+    if [ -n "${MQG_PRIVOPS_CONSOLE:-}" ]; then
+        cat "$console" > "$MQG_PRIVOPS_CONSOLE" \
+            || die "cannot write the console to $MQG_PRIVOPS_CONSOLE"
+    fi
     rm -f "$console" "$initramfs"
 
     # 124 is timeout(1)'s own "I killed it". Distinguished from a guest
@@ -422,6 +548,15 @@ privops_run_qemu_linux() {
         | grep -vE '^\[[ 0-9.]+\]|^MQG-PRIVOPS-|^$' \
         | sed 's/^/    /'
 
+    # A source image that would not mount is its own failure with its own
+    # remedy, and saying so beats making a reader guess which of several
+    # disks the microVM was unhappy about.
+    if printf '%s\n' "$out" | grep -q 'MQG-PRIVOPS-SOURCE-MOUNT-FAILED'; then
+        printf '%s\n' "$out" | grep 'MQG-PRIVOPS-SOURCE-MOUNT-FAILED' >&2
+        die "a source image the microVM was given holds no mountable HFS+" \
+            "volume -- the conversion that produced it is the suspect," \
+            "not the target image, which was not written to"
+    fi
     printf '%s\n' "$out" | grep -q 'MQG-PRIVOPS-OK' \
         || { printf '%s\n' "$out" | tail -20 >&2
              die "privileged operations failed inside the microVM"; }

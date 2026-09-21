@@ -104,10 +104,22 @@ privops_describe() {
     fi
 }
 
-# privops_run <image> <script-file>
-# Runs <script-file> as root with <image> attached, via the selected backend.
+# privops_run <image> <script-file> [ro:<image> | raw:<image>]...
+#
+# Runs <script-file> as root with <image> attached read-write, via the
+# selected backend. Any further images are attached after it: `ro:` ones
+# are mounted read-only and handed to the script as $MQG_SRC1, $MQG_SRC2,
+# ...; `raw:` ones are handed over as block devices ($MQG_RAW1, ...) and
+# not mounted, which is how a payload hands a file back to the host.
+#
+# That is what lets the WHOLE of the HFS+ assembly happen in here rather
+# than only the ownership pass: see the G26 row in docs/host-profile.md,
+# and media/build-installer-img.sh, which no longer attaches a loop device
+# or mounts anything on the host.
 privops_run() {
-    local img=$1 script=$2 missing m n
+    local img=$1 script=$2
+    shift 2
+    local missing m n
     [ -f "$img" ] || die "no such image: $img"
     [ -f "$script" ] || die "no such script: $script"
     # Report every unmet requirement before dying, so that one run of the
@@ -125,5 +137,5 @@ privops_run() {
     fi
     # Backend names are hyphenated for readability; shell function names
     # cannot be, so translate on dispatch.
-    "privops_run_${MQG_PRIVOPS_BACKEND//-/_}" "$img" "$script"
+    "privops_run_${MQG_PRIVOPS_BACKEND//-/_}" "$img" "$script" ${@+"$@"}
 }
