@@ -430,3 +430,15 @@ bump_pin() {
         [[ "$output" == *"$s"* ]] || { echo "no such stage: $s"; return 1; }
     done
 }
+
+@test "--freshness touches nothing, not even with --generate-ssh-key" {
+    # It is a question about the build, and a question must not invent a
+    # secret to answer it. HOME is redirected so a key the host already has
+    # cannot make this pass by accident.
+    export HOME="$BATS_TEST_TMPDIR/home"
+    mkdir -p "$HOME"
+    run "$BUILD" --freshness --generate-ssh-key
+    [ "$status" -eq 0 ]
+    [ ! -d "$MQG_IMAGE_DIR/keys" ]
+    [[ "$output" == *"esd"* ]]
+}

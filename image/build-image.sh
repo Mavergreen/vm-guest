@@ -731,7 +731,9 @@ resolve_ssh_key() {
             break
         done
     fi
-    if [ -z "$ssh_key" ] && [ "$generate_key" -eq 1 ]; then
+    # `soft` never generates, even with --generate-ssh-key: --freshness
+    # says it touches nothing, and inventing a secret is not nothing.
+    if [ -z "$ssh_key" ] && [ "$generate_key" -eq 1 ] && [ "$mode" != soft ]; then
         # Opt-in only. A pipeline that quietly invents a key produces images
         # whose access is controlled by a file nobody knows exists.
         mkdir -p "$MQG_IMAGE_DIR/keys"

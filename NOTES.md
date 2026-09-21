@@ -5378,5 +5378,5 @@ got onto it. Taking it off that list would have quietly undone the
 evidence of the failure — so the build tree is passed to `salvage_logs`
 separately and a test says so.
 
-Test count 470 → 496, across the three changes in this session: the stage
+Test count 470 → 497, across the three changes in this session: the stage
 input stamps, ccache, and `--keep-build`.
