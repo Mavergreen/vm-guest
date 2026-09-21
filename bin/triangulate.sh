@@ -676,35 +676,34 @@ ovmf_sha=""
 opencore_sha=""
 stage_report=""
 
-# The principal output of each pipeline stage, so a stage that found its
-# work already done can be reported as "reused" rather than "ok".
+# WHICH STAGES WILL SKIP, ASKED OF THE PIPELINE RATHER THAN OF THE DISK.
+#
+# A stage that found its work already done is reported as "reused" rather
+# than "ok".
 #
 # THE DIFFERENCE MATTERS MORE HERE THAN IN THE PIPELINE. build-image.sh is
 # resumable on purpose and "already there" is a success for it. For a
 # triangulation run it is the opposite: a host that reused media somebody
 # else built has not tested that it can build media, and a report that
 # said "ok" would be claiming evidence this run does not have.
-stage_output() {
-    case $1 in
-        esd)      printf '%s\n' "$image_dir/media/InstallESD.dmg" ;;
-        opencore) printf '%s\n' "${MQG_BUILD_DIR:-$image_dir/build}/artifacts/SHA256SUMS" ;;
-        ovmf)     printf '%s\n' "${MQG_BUILD_DIR:-$image_dir/build}/firmware/OVMF_CODE.fd" ;;
-        efi)      printf '%s\n' "$image_dir/work/opencore-p3.img" ;;
-        media)    printf '%s\n' "$image_dir/media/installer-linux.img" ;;
-        *)        printf '\n' ;;
-    esac
-}
-
-# Stages whose output was already on this host when the run started.
+#
+# This used to look for the output FILE, which was the same question
+# build-image.sh asked. It no longer is: a stage now reruns when the inputs
+# it recorded stop matching, so an output that is present but stale gets
+# rebuilt -- and a report that called that "reused" would be crediting this
+# host with work it did do. So ask build-image.sh itself, once, before any
+# stage runs. --freshness touches nothing.
 preexisting=""
 note_preexisting() {
-    local s out
-    for s in $1; do
-        out=$(stage_output "$s")
-        [ -n "$out" ] || continue
-        [ -s "$out" ] || continue
+    local s
+    while IFS= read -r s; do
+        [ -n "$s" ] || continue
         preexisting="$preexisting $s"
-    done
+    done <<EOF
+$("$MQG_REPO_ROOT/image/build-image.sh" --name "$name" \
+    --accel "$pipeline_accel" --freshness 2>>"$scratch/pipeline.log" \
+  | awk -F'\t' '$2 == "skip" { print $1 }' || true)
+EOF
 }
 
 stage_was_preexisting() {
@@ -749,9 +748,10 @@ if [ "$level" != probe ]; then
         track_created "$image_dir/work/build-$name"
     fi
     build_ok=yes
-    # payload is not on this list: stage_payload has no "already done"
-    # check and rebuilds every time, so it is never reused.
-    note_preexisting "esd opencore ovmf efi media"
+    # Every stage at once, and payload included: it used to rebuild on
+    # every run because it had no "already done" check at all, and now it
+    # records its inputs like the rest.
+    note_preexisting
     for s in esd opencore ovmf efi openssh payload media target; do
         run_stage "$s" || build_ok=no
         [ "$build_ok" = yes ] || break

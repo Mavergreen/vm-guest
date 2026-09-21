@@ -282,6 +282,24 @@ if [ "${1:-}" = "--compiler" ]; then
     exit 0
 fi
 
+# The flags this script injects into every compile, on one line.
+#
+# Two inputs that are ours and are not pinned anywhere else: the C dialect
+# (OC_STD) and whether upstream's -Werror is inherited (OC_NO_WERROR).
+# Both change the bytes -- -std=c2x produced a different OVMF_CODE.fd on
+# this host -- so image/build-image.sh's stage freshness check counts them
+# as inputs to the firmware stages, through bin/ingredient-fingerprint.sh
+# --stage. It asks here rather than keeping its own copy, because two
+# copies of a build flag is one copy too many.
+#
+# The tab that keeps the pair together through efibuild.sh's IFS (see
+# OC_BUILD_OPTIONS above) is normalised to a space here: this is a report,
+# not something to pass on.
+if [ "${1:-}" = "--build-options" ]; then
+    printf '%s\n' "$OC_BUILD_OPTIONS" | tr '\t' ' '
+    exit 0
+fi
+
 # The same compiler, judged against the range this project declares it has
 # a reason to believe in (lib/compiler.sh). Separate from --compiler on
 # purpose: that one reports what is there and is never influenced by

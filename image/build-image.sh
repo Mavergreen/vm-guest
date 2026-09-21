@@ -16,12 +16,16 @@
 # something retrofitted when the second consumer appears, because a second
 # pipeline would be a second thing to keep correct.
 #
-# WHY IT IS RESUMABLE
+# WHY IT IS RESUMABLE, AND WHAT "ALREADY DONE" MEANS
 #
-# Each stage asks whether its output already exists and is valid before
-# doing the work again. The install alone is a quarter of an hour and the
-# OpenCore build is longer; a pipeline that cannot resume gets debugged an
-# hour at a time, which is how a two-hour session becomes a two-day one.
+# Each stage records what it consumed and reruns when that record stops
+# matching -- NOT when its output file is missing, which is what this used
+# to check. The install alone is a quarter of an hour and the OpenCore
+# build is longer; a pipeline that cannot resume gets debugged an hour at a
+# time, which is how a two-hour session becomes a two-day one. But a
+# pipeline that resumes past a moved pin builds an image out of stale
+# firmware and says nothing, which is worse. See "stage freshness" below,
+# and `--freshness` for the answer without the build.
 #
 # WHERE THINGS GO
 #
@@ -141,6 +145,7 @@ NIC_CHOICES="usb-net e1000-82545em virtio-net-pci"
 openssh=1
 describe=0
 dry_run=0
+freshness=0
 force=0
 from_stage=
 only_stage=
@@ -184,6 +189,10 @@ usage: $(basename "$0") [options]
   --keep-running       Leave the VM running after the install stage
   --install-timeout S  Give up on the install after S seconds (default: $install_timeout)
   --describe           Print the plan and exit. Touches nothing.
+  --freshness          Say, for each stage, whether it would run and why,
+                       and exit. Touches nothing. This is the question
+                       "will my next build rebuild the firmware, and what
+                       moved?" asked in a second rather than in 14 minutes.
   --dry-run            Print the QEMU command line and exit. Starts nothing.
   --manifest-fields    List what the manifest records, and exit.
   --cpu-models         List the guest CPU lines this project has tried, the
@@ -226,6 +235,7 @@ while [ $# -gt 0 ]; do
         --keep-running) keep_running=1 ;;
         --install-timeout) install_timeout=$2; shift ;;
         --describe) describe=1 ;;
+        --freshness) freshness=1 ;;
         --dry-run) dry_run=1 ;;
         --cpu-models)
             cpu_models | while IFS='	' read -r m st ev; do
@@ -384,7 +394,8 @@ image pipeline
                       docs/open-questions.md Q1 is not answered here; the
                       switch is what keeps it answerable.
 
-  stages, in order (each skipped when its output is already there)
+  stages, in order (each skipped when the inputs it recorded still match --
+  ask --freshness which ones those are today)
 EOF
     printf '%s\n' "$STAGES" | while IFS='|' read -r s d; do
         printf '    %-9s %s\n' "$s" "$d"
@@ -454,10 +465,204 @@ run_stage() {
     log "=== stage $s done in $((SECONDS - t0))s ==="
 }
 
-# "Already done" is a file that exists and is not empty. Deliberately not a
-# checksum of the world: the manifest is where provenance is recorded, and a
-# stage that re-verified everything it depends on would re-do the pipeline.
+# "There is a file there." Used only by the target stage, whose outputs are
+# an empty qcow2 and a copy of a variable-store template: neither has
+# inputs worth hashing, and both are recreated in a second when absent.
+# Every other stage asks stage_freshness below.
 have() { [ -s "$1" ] && [ "$force" -eq 0 ]; }
+
+# --- stage freshness -------------------------------------------------------
+#
+# A STAGE IS STALE WHEN ITS INPUTS MOVED, NOT WHEN ITS OUTPUT IS MISSING.
+#
+# This pipeline used to skip a stage whenever its output file was present.
+# That is wrong in exactly the case this project built machinery to
+# prevent: Renovate bumps the OpenCore or EDK II pin in vendor/sources.tsv,
+# the opencore stage sees its .efi sitting there, skips, and we ship an
+# image built from stale firmware without a word. bin/image-staleness.sh
+# catches that afterwards, per image, from the manifest -- the pipeline
+# itself never asked. ADR 0007 named this as the reason to wire
+# INGREDIENTS.md up early.
+#
+# So each stage records what it consumed, in a `<output>.inputs` file
+# beside its output, and reruns when that record stops matching. The
+# listing comes from bin/ingredient-fingerprint.sh --stage: the repository
+# half from the script, the pipeline half (checksums of earlier stages'
+# outputs, the parameters of this run) passed in as key=value. One hashing
+# scheme, one place to read what a stage depends on.
+#
+# WHY THE STAMP HOLDS THE LIST AND NOT THE DIGEST. Same reason the manifest
+# holds both: a digest answers "did anything move", a list answers "what
+# moved". A rebuild nobody can explain is barely better than a skip nobody
+# can see -- build-image.sh's own comment about silent skips applies in
+# both directions.
+
+# The principal output of each stage: the file whose presence used to be
+# the whole check, and the file the .inputs stamp sits beside.
+stage_output_file() {
+    case $1 in
+        esd)      printf '%s\n' "$esd_dmg" ;;
+        opencore) printf '%s\n' "$MQG_BUILD_DIR/artifacts/SHA256SUMS" ;;
+        ovmf)     printf '%s\n' "$firmware_dir/OVMF_CODE.fd" ;;
+        efi)      printf '%s\n' "$efi_img" ;;
+        payload)  printf '%s\n' "$payload_pkg" ;;
+        media)    printf '%s\n' "$media_img" ;;
+        install)  printf '%s\n' "$installed_stamp" ;;
+        *)        printf '\n' ;;
+    esac
+}
+
+# sha256_or <file> <fallback> -- the checksum of an artifact an earlier
+# stage produced, or a word saying it is not there. "absent" is a value
+# like any other: a stage whose input disappeared has had an input change.
+sha256_or() {
+    if [ -s "$1" ]; then sha256_file "$1"; else printf '%s\n' "${2:-absent}"; fi
+}
+
+# The EFI image's checksum AS BUILT, not as it is now. The guest writes to
+# that image and QEMU's snapshot=on throws the writes away, but the file
+# has been rewritten in the past (see the snapshot=on comment above), so
+# boot/build-efi-image.sh records the real one beside it.
+efi_built_sha() {
+    if [ -s "$efi_img.sha256" ]; then
+        cut -d' ' -f1 < "$efi_img.sha256"
+    else
+        sha256_or "$efi_img"
+    fi
+}
+
+ssh_key_fingerprint() {
+    if [ -n "$ssh_key" ] && [ -f "$ssh_key" ] \
+       && command -v ssh-keygen >/dev/null 2>&1; then
+        ssh-keygen -lf "$ssh_key" | awk '{print $2}'
+    else
+        printf 'none\n'
+    fi
+}
+
+# The half of a stage's inputs that only this pipeline knows: what earlier
+# stages actually produced, and the parameters of this run.
+stage_extra_inputs() {
+    case $1 in
+        efi)
+            printf '%s\n' \
+                "opencore-artifacts=$(sha256_or "$MQG_BUILD_DIR/artifacts/SHA256SUMS")"
+            ;;
+        payload)
+            printf '%s\n' \
+                "sshkey=$(ssh_key_fingerprint)" \
+                "openssh-enabled=$openssh"
+            ;;
+        media)
+            printf '%s\n' \
+                "payload=$(sha256_or "$payload_pkg")" \
+                "openssh-enabled=$openssh"
+            ;;
+        install)
+            # media is named by the digest of ITS inputs, not by the
+            # checksum of the media file. Two builds from one ESD never
+            # produce the same file -- mkfs.hfsplus stamps the clock into
+            # the volume header (see the `mediacontent` note in the
+            # manifest) -- so hashing the file here would reinstall a
+            # guest every time the media was rebuilt from inputs that had
+            # not changed. The firmware and the EFI image ARE byte-stable
+            # and are named by their checksums.
+            printf '%s\n' \
+                "media=$(stage_digest media)" \
+                "efi=$(efi_built_sha)" \
+                "firmware=$(sha256_or "$firmware_dir/OVMF_CODE.fd")" \
+                "accel=$accel" "machine=$machine" "cpu=$cpu" \
+                "ram=$ram" "smp=$smp" "disk=${disk_gb}G" "nic=$nic"
+            ;;
+        *) : ;;
+    esac
+}
+
+# stage_inputs <stage> [--digest] -- the whole listing, or a digest of it.
+stage_inputs() {
+    local s=$1 arg
+    local -a extra=() listflag=(--list)
+    [ "${2:-}" != --digest ] || listflag=()
+    while IFS= read -r arg; do
+        [ -n "$arg" ] || continue
+        extra+=("$arg")
+    done < <(stage_extra_inputs "$s")
+    "$MQG_REPO_ROOT/bin/ingredient-fingerprint.sh" --stage "$s" \
+        ${listflag[@]+"${listflag[@]}"} ${extra[@]+"${extra[@]}"}
+}
+
+stage_digest() { stage_inputs "$1" --digest; }
+
+# stage_freshness <stage> -- "skip\t<reason>" or "run\t<reason>".
+#
+# Every branch returns a reason. A stage that reran without saying why is
+# the same class of bug as a stage that skipped without saying why.
+stage_freshness() {
+    local s=$1 out moved
+    out=$(stage_output_file "$s")
+    [ -n "$out" ] || { printf 'run\tthis stage records no inputs\n'; return 0; }
+    if [ "$force" -eq 1 ]; then
+        printf 'run\t--force\n'
+        return 0
+    fi
+    if [ ! -s "$out" ]; then
+        printf 'run\tno output at %s yet\n' "$out"
+        return 0
+    fi
+    if [ ! -s "$out.inputs" ]; then
+        # "I cannot tell" is a different answer from "it is fine", and
+        # conflating them is how a stale artifact gets trusted -- the same
+        # distinction bin/image-staleness.sh makes about a manifest with no
+        # ingredient lines. An output whose inputs were never recorded is
+        # rebuilt once, and then it has a record.
+        printf 'run\tno input record beside %s (built before stages recorded their inputs)\n' \
+            "$(basename "$out")"
+        return 0
+    fi
+    moved=$(LC_ALL=C comm -3 <(LC_ALL=C sort "$out.inputs") \
+                             <(stage_inputs "$s") \
+            | awk -F'\t' '{ print ($1 == "" ? $2 : $1) }' \
+            | LC_ALL=C sort -u | tr '\n' ' ')
+    moved=${moved% }
+    if [ -z "$moved" ]; then
+        printf 'skip\tinputs unchanged\n'
+    else
+        printf 'run\tinputs changed (%s)\n' "$moved"
+    fi
+}
+
+# Ask, report, and answer "may I skip this stage?".
+stage_is_fresh() {
+    local s=$1 v tab verdict reason
+    tab=$(printf '\t')
+    v=$(stage_freshness "$s")
+    verdict=${v%%"$tab"*}
+    reason=${v#*"$tab"}
+    if [ "$verdict" = skip ]; then
+        log "$s: up to date ($reason)"
+        return 0
+    fi
+    log "$s: $reason"
+    return 1
+}
+
+# Write the stamp, after the stage has succeeded. Recomputed rather than
+# reused from the freshness check: a stage that reran may have changed the
+# very things a later stage reads, and the record has to describe what was
+# actually consumed.
+stage_record() {
+    local s=$1 out
+    out=$(stage_output_file "$s")
+    [ -n "$out" ] || return 0
+    if [ ! -s "$out" ]; then
+        warn "$s: no output at $out; not recording its inputs"
+        return 0
+    fi
+    mkdir -p "$(dirname "$out")"
+    stage_inputs "$s" > "$out.inputs"
+    log "$s: recorded $(wc -l < "$out.inputs" | tr -d ' ') inputs in" \
+        "$(basename "$out").inputs"
+}
 
 qemu_monitor() {
     [ -S "$monitor" ] || return 1
@@ -482,45 +687,42 @@ PY
 # --- stages ----------------------------------------------------------------
 
 stage_esd() {
-    if have "$esd_dmg"; then
-        log "InstallESD.dmg is already here ($(stat -c %s "$esd_dmg") bytes)"
-        return 0
-    fi
+    stage_is_fresh esd && return 0
     "$MQG_REPO_ROOT/media/fetch-installesd.sh"
+    stage_record esd
 }
 
 stage_opencore() {
-    if have "$MQG_BUILD_DIR/artifacts/SHA256SUMS"; then
-        log "OpenCore artifacts are already built"
-        return 0
-    fi
+    stage_is_fresh opencore && return 0
     "$MQG_REPO_ROOT/boot/fetch-edk2.sh"
     "$MQG_REPO_ROOT/boot/fetch-opencorepkg.sh"
     "$MQG_REPO_ROOT/boot/fetch-kexts.sh"
     "$MQG_REPO_ROOT/boot/build-opencore.sh"
+    stage_record opencore
 }
 
 stage_ovmf() {
-    if have "$firmware_dir/OVMF_CODE.fd"; then
-        log "firmware is already built"
-        return 0
-    fi
+    stage_is_fresh ovmf && return 0
     "$MQG_REPO_ROOT/boot/build-ovmf.sh"
+    stage_record ovmf
 }
 
 stage_efi() {
-    if have "$efi_img"; then
-        log "OpenCore EFI image is already here"
-        return 0
-    fi
+    stage_is_fresh efi && return 0
     "$MQG_REPO_ROOT/boot/build-efi-image.sh"
+    stage_record efi
 }
 
 # Resolved once, before any stage runs, because the verify stage needs it
 # too -- and --from install or --stage verify does not run the payload
 # stage. Finding the key only where it is first used is how "no key" turns
 # into a confusing SSH failure twenty minutes later.
+#
+# `resolve_ssh_key soft` warns instead of dying. --freshness needs the
+# fingerprint to report the payload stage honestly, and it must not refuse
+# to answer a question about the build on a host that has no key yet.
 resolve_ssh_key() {
+    local mode=${1:-strict}
     if [ -z "$ssh_key" ]; then
         for candidate in "$HOME"/.ssh/id_*.pub "$MQG_IMAGE_DIR"/keys/*.pub; do
             [ -f "$candidate" ] || continue
@@ -543,10 +745,15 @@ resolve_ssh_key() {
         ssh_key=$MQG_IMAGE_DIR/keys/mqg_rsa.pub
         log "generated $ssh_key (private half beside it; never in the repo)"
     fi
-    [ -n "$ssh_key" ] || die "no SSH public key found. Pass --ssh-key PATH," \
-        "or --generate-ssh-key to create one under $MQG_IMAGE_DIR/keys." \
-        "This pipeline will not put a key it invented into an image without" \
-        "being asked."
+    if [ -z "$ssh_key" ]; then
+        [ "$mode" = soft ] || die "no SSH public key found. Pass --ssh-key PATH," \
+            "or --generate-ssh-key to create one under $MQG_IMAGE_DIR/keys." \
+            "This pipeline will not put a key it invented into an image without" \
+            "being asked."
+        warn "no SSH public key found; reporting the payload stage as if" \
+            "there were none"
+        return 0
+    fi
     log "authorizing $ssh_key"
 }
 
@@ -596,6 +803,11 @@ openssh_args() {
 stage_payload() {
     local arg
     local -a extra=()
+    # Until stages recorded their inputs this one had no "already done"
+    # check at all and rebuilt on every run -- which bin/triangulate.sh
+    # had to know about and say so in a comment. It costs a second, so the
+    # rebuild was never the problem; the missing answer to "why" was.
+    stage_is_fresh payload && return 0
     # Called here, in this shell, and not left to openssh_args below.
     # openssh_args runs inside `< <(...)`, which is a subshell, so every
     # variable resolve_openssh sets there -- openssh_tag included -- is
@@ -613,13 +825,11 @@ stage_payload() {
     "$MQG_REPO_ROOT/image/payload/build-firstboot-pkg.sh" \
         --ssh-key "$ssh_key" --out "$payload_pkg" \
         ${extra[@]+"${extra[@]}"} >/dev/null
+    stage_record payload
 }
 
 stage_media() {
-    if have "$media_img"; then
-        log "installer media is already here ($(stat -c %s "$media_img") bytes)"
-        return 0
-    fi
+    stage_is_fresh media && return 0
     local arg
     local -a extra=()
     # Same reason as stage_payload: openssh_args resolves inside a
@@ -631,6 +841,7 @@ stage_media() {
     done < <(openssh_args --extra-pkg)
     "$MQG_REPO_ROOT/media/build-installer-img.sh" --force --autoinstall \
         --firstboot-pkg "$payload_pkg" ${extra[@]+"${extra[@]}"} >/dev/null
+    stage_record media
 }
 
 stage_target() {
@@ -767,7 +978,7 @@ power_down_vm() {
 # The guest is LEFT RUNNING. The verify stage needs it, and booting it twice
 # costs a minute for nothing. Whoever finishes with it calls power_down_vm.
 stage_install() {
-    if have "$installed_stamp"; then
+    if stage_is_fresh install; then
         log "already installed on $(cat "$installed_stamp")"
         return 0
     fi
@@ -775,6 +986,7 @@ stage_install() {
     boot_vm with-media "$install_timeout"
     wait_for_firstboot
     date -u +%Y-%m-%dT%H:%M:%SZ > "$installed_stamp"
+    stage_record install
 }
 
 # SSH ANSWERING IS NOT THE SAME AS THE FIRST BOOT BEING FINISHED.
@@ -1050,6 +1262,24 @@ stage_manifest() {
 }
 
 # --- run -------------------------------------------------------------------
+
+# WOULD THE NEXT BUILD REBUILD ANYTHING, AND WHY?
+#
+# Asked in a second instead of in fourteen minutes. This is also how the
+# freshness rules are tested: every branch of stage_freshness is reachable
+# from here without building anything (tests/image.bats).
+if [ "$freshness" -eq 1 ]; then
+    resolve_ssh_key soft
+    for s in $(stage_names); do
+        out=$(stage_output_file "$s")
+        if [ -z "$out" ]; then
+            printf '%s\t-\tno recorded inputs (it runs whenever it is reached)\n' "$s"
+            continue
+        fi
+        printf '%s\t%s\n' "$s" "$(stage_freshness "$s")"
+    done
+    exit 0
+fi
 
 require_cmd qemu-img ssh ssh-keygen python3 sha256sum
 command -v "$qemu_bin" >/dev/null 2>&1 || die "no such QEMU: $qemu_bin"

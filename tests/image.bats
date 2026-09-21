@@ -296,3 +296,137 @@ setup() {
     [ "$(nic_device_for "$S/b.manifest")" = "usb-net,bus=usb.0,netdev=net0" ]
     [ "$(nic_device_for "$S/nosuch.manifest")" = "usb-net,bus=usb.0,netdev=net0" ]
 }
+
+# --- stage freshness -------------------------------------------------------
+#
+# The pipeline used to skip a stage whenever its output file was present.
+# The failure that motivated all of this: Renovate bumps the OpenCore pin
+# in vendor/sources.tsv, the opencore stage sees its .efi sitting there,
+# skips, and we build an image from stale firmware without a word. Each
+# stage now records what it consumed beside its output, and `--freshness`
+# answers "would this run, and why" without building anything -- which is
+# what makes every branch below testable in milliseconds.
+
+# The decision and the reason for one stage, out of --freshness's output.
+freshness_row() {
+    printf '%s\n' "$output" | awk -F'\t' -v s="$1" '$1 == s { print $2 "\t" $3 }'
+}
+
+# A sandbox with a private sources registry, so a pin can be bumped without
+# touching the checkout. MQG_SOURCES is the seam boot/build-opencore.sh
+# already uses.
+freshness_sandbox() {
+    export MQG_SOURCES="$BATS_TEST_TMPDIR/sources.tsv"
+    cp "$REPO/vendor/sources.tsv" "$MQG_SOURCES"
+    mkdir -p "$MQG_IMAGE_DIR/media" "$MQG_IMAGE_DIR/build/artifacts"
+}
+
+# Plant an output and the record of the inputs that produced it.
+plant_stage() {
+    local stage=$1 out=$2
+    shift 2
+    mkdir -p "$(dirname "$out")"
+    printf 'stand-in for the real artifact\n' > "$out"
+    "$REPO/bin/ingredient-fingerprint.sh" --stage "$stage" --list "$@" \
+        > "$out.inputs"
+}
+
+bump_pin() {
+    local name=$1
+    awk -F'\t' -v OFS='\t' -v n="$name" \
+        '$0 !~ /^#/ && $1 == n { $3 = "0000000000000000000000000000000000000000000000000000000000000000" } { print }' \
+        "$MQG_SOURCES" > "$MQG_SOURCES.new"
+    mv "$MQG_SOURCES.new" "$MQG_SOURCES"
+}
+
+@test "a stage whose recorded inputs still match is skipped, and says so" {
+    freshness_sandbox
+    plant_stage esd "$MQG_IMAGE_DIR/media/InstallESD.dmg"
+    run "$BUILD" --freshness
+    [ "$status" -eq 0 ]
+    [ "$(freshness_row esd)" = "$(printf 'skip\tinputs unchanged')" ]
+}
+
+@test "an output whose inputs were never recorded is rebuilt, not trusted" {
+    # "I cannot tell" and "it is fine" must not be the same answer -- the
+    # distinction bin/image-staleness.sh makes about a manifest with no
+    # ingredient lines, made here about an artifact with no stamp.
+    freshness_sandbox
+    printf 'an artifact from before this existed\n' \
+        > "$MQG_IMAGE_DIR/media/InstallESD.dmg"
+    run "$BUILD" --freshness
+    [ "$status" -eq 0 ]
+    [[ "$(freshness_row esd)" == run* ]]
+    [[ "$(freshness_row esd)" == *"no input record"* ]]
+}
+
+@test "a bumped pin in vendor/sources.tsv reruns the stage that consumes it" {
+    # THE SCENARIO THIS EXISTS FOR.
+    freshness_sandbox
+    plant_stage esd "$MQG_IMAGE_DIR/media/InstallESD.dmg"
+    plant_stage opencore "$MQG_IMAGE_DIR/build/artifacts/SHA256SUMS"
+    plant_stage ovmf "$MQG_IMAGE_DIR/build/firmware/OVMF_CODE.fd"
+
+    run "$BUILD" --freshness
+    [ "$(freshness_row opencore)" = "$(printf 'skip\tinputs unchanged')" ]
+
+    bump_pin opencorepkg-src
+    run "$BUILD" --freshness
+    [ "$status" -eq 0 ]
+    # The firmware stages rerun, and the reason names the pin that moved.
+    [[ "$(freshness_row opencore)" == *"inputs changed (source:opencorepkg-src)"* ]]
+    [[ "$(freshness_row ovmf)" == *"inputs changed (source:opencorepkg-src)"* ]]
+    # And nothing else does. A bump that rebuilt the world would be as
+    # uninformative as one that rebuilt nothing.
+    [ "$(freshness_row esd)" = "$(printf 'skip\tinputs unchanged')" ]
+}
+
+@test "bumping the ESD pin reruns the esd stage and not the firmware" {
+    freshness_sandbox
+    plant_stage esd "$MQG_IMAGE_DIR/media/InstallESD.dmg"
+    plant_stage opencore "$MQG_IMAGE_DIR/build/artifacts/SHA256SUMS"
+    bump_pin apple-installesd-10.9.5
+    run "$BUILD" --freshness
+    [ "$status" -eq 0 ]
+    [[ "$(freshness_row esd)" == *"inputs changed (source:apple-installesd-10.9.5)"* ]]
+    [ "$(freshness_row opencore)" = "$(printf 'skip\tinputs unchanged')" ]
+}
+
+@test "a stage reruns when an earlier stage's output changed, not only its pins" {
+    # The efi stage consumes OpenCore's BINARIES. Naming them by the
+    # checksum of what was built -- rather than by the pins that were
+    # supposed to produce it -- is what catches a compiler that emitted
+    # different bytes from identical sources, which is the exact failure
+    # docs/decisions/0004 says is the silent one.
+    freshness_sandbox
+    local sums="$MQG_IMAGE_DIR/build/artifacts/SHA256SUMS"
+    printf 'aaaa  OpenCore.efi\n' > "$sums"
+    plant_stage efi "$MQG_IMAGE_DIR/work/opencore-p3.img" \
+        "opencore-artifacts=$(sha256sum "$sums" | cut -d' ' -f1)"
+    run "$BUILD" --freshness
+    [ "$(freshness_row efi)" = "$(printf 'skip\tinputs unchanged')" ]
+
+    printf 'bbbb  OpenCore.efi\n' > "$sums"
+    run "$BUILD" --freshness
+    [ "$status" -eq 0 ]
+    [[ "$(freshness_row efi)" == *"inputs changed (opencore-artifacts)"* ]]
+}
+
+@test "--force reruns everything, and says that is why" {
+    freshness_sandbox
+    plant_stage esd "$MQG_IMAGE_DIR/media/InstallESD.dmg"
+    run "$BUILD" --freshness --force
+    [ "$status" -eq 0 ]
+    [ "$(freshness_row esd)" = "$(printf 'run\t--force')" ]
+}
+
+@test "every stage that records inputs is one ingredient-fingerprint.sh knows" {
+    # Two lists that must agree: the stages build-image.sh stamps, and the
+    # stages the fingerprint script can describe. A stage in one and not
+    # the other is a silent skip waiting to happen.
+    run "$REPO/bin/ingredient-fingerprint.sh" --stages
+    [ "$status" -eq 0 ]
+    for s in esd opencore ovmf efi payload media install; do
+        [[ "$output" == *"$s"* ]] || { echo "no such stage: $s"; return 1; }
+    done
+}

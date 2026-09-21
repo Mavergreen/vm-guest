@@ -51,6 +51,21 @@ were supposed to be the same.
    repository is made of?* It prints each pin that moved, on both sides.
    A manifest written before this existed reports "cannot be determined",
    which is deliberately a different answer from "fine".
+4. **The pipeline asks the same question of itself, per stage.** (1)–(3)
+   all judge a *finished* image; they cannot stop one being made wrong.
+   `image/build-image.sh` used to skip a stage whenever its output file
+   was present — so a bumped OpenCore pin left the built `.efi` sitting
+   there, the stage skipped, and the image came out of stale firmware
+   without a word. Each stage now records the inputs it consumed in an
+   `<output>.inputs` file beside its output and reruns when that record
+   stops matching, **naming what moved**: `opencore: inputs changed
+   (source:opencorepkg-src)`. The listing comes from
+   `bin/ingredient-fingerprint.sh --stage <name>` — the same
+   list-and-digest scheme one level down, not a second one — with the
+   half only the pipeline knows (checksums of earlier stages' outputs, the
+   accelerator, the SSH key) passed in as `key=value`.
+   `image/build-image.sh --freshness` answers "would my next build rebuild
+   the firmware, and why" in a second instead of in fourteen minutes.
 
 Chosen over a staleness **warning on `run`** — which was the other
 candidate — because `run` is the hot path and the check needs the image's
