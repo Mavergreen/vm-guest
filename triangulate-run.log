@@ -1,154 +1,20 @@
-triangulate: level build on squirrel-zapper (Linux 7.2.6-arch2-1 x86_64)
-triangulate: stage esd
-triangulate: stage opencore
-triangulate: stage ovmf
-triangulate: stage efi
-triangulate: stage openssh
-triangulate: stage payload
-triangulate: stage media
-triangulate: stage target
-mavericks-qemu-guest triangulation report
-=========================================
-level:     build
-generated: 2026-09-21T01:32:47Z
-host:      squirrel-zapper -- EndeavourOS (Linux 7.2.6-arch2-1 x86_64), bash 5.3.20(1)-release
+usage: triangulate.sh [--probe|--build|--full] [options]
 
-## Host
+  --probe          Report what this host can do. Touches nothing. (default)
+  --build          Probe, then build the boot stack and the installer media.
+  --full           Build, then install a guest unattended and check SSH.
 
-  host                   squirrel-zapper
-  os                     Linux
-  os_name                EndeavourOS
-  kernel                 7.2.6-arch2-1
-  arch                   x86_64
-  bash                   5.3.20(1)-release
-  system_vendor          Apple Inc.
-  cpu_brand              Intel(R) Core(TM) i7-5650U CPU @ 2.20GHz
-  cpu_vendor             GenuineIntel
-  cpu_cores              2
-  cpu_logical            4
-  cpu_threads_per_core   2
-  flag_ssse3             yes
-  flag_sse4_1            yes
-  flag_sse4_2            yes
-  flag_vmx               yes
-  flag_svm               no
-  flag_ept               yes
-  accel_kvm              yes
-  kvm_note               
-  accel_hvf              no
-  accel_nvmm             no
-  accel_chosen           kvm
-  kvm_nested             Y
-  kvm_ignore_msrs        N
-  ram_mib                7835
-  image_dir              /home/schmonz/.local/share/mavericks-qemu-guest
-  image_dir_exists       no
-  image_fs               btrfs
-  image_free_mib         441025
-  repo_root              /home/schmonz/trees/mavericks-qemu-guest
-  repo_fs                nfs
-  repo_create_ms         8.83
-  image_create_ms        0.03
-  reflink                yes
-  chattr_nocow           yes
-  qemu                   /usr/bin/qemu-system-x86_64
-  qemu_version           11.1.1
-  qemu_accels            tcg mshv nitro kvm 
-  qemu_has_penryn        yes
-  qemu_missing_devices   
-  cpu_line               Penryn,+ssse3,+sse4.1,+sse4.2
-  cpu_line_verdict       accepted
-  cpu_line_detail        
-  tools_missing          
-  package_manager        pacman
-  level                  build
-  build_ok               yes
-  failed_stage           none
-  media_built            yes
-  media_failure          none
-  install_ok             unknown
-  ovmf_sha256            e3d0c6f57c49af6a770ef40eb5f6ea75c1027bb80048532bd4f7c00bc6d5b7b7
-  opencore_sha256        badddb587f08bd4ced460e8b1087983999adeaf8c74d202caff54b9b8dfd8244
+  --json           Write the JSON report to stdout, the human one to stderr.
+  --json-out FILE  Write the JSON report to FILE, the human one to stdout.
+  --keep           Leave behind whatever --build/--full created.
+  --keep-build     Leave the BUILD TREE behind, and remove the rest. The
+                   boot stack is ~14 minutes of compiling and this script
+                   exists to be run again; the images and target disks,
+                   which are the gigabytes, still go.
+  --name NAME      Name for the image --full builds.
+  --qemu BINARY    QEMU to interrogate (default: qemu-system-x86_64).
+  -h, --help       This.
 
-## The -cpu line
-
-  asked for:   Penryn,+ssse3,+sse4.1,+sse4.2
-  accelerator: kvm
-  ssse3 yes, sse4.1 yes, sse4.2 yes
-  QEMU verdict (with 'enforce'): accepted
-
-## Tools -- by tool, never by package name
-
-  qemu-system-x86_64   /usr/bin/qemu-system-x86_64
-  qemu-img             /usr/bin/qemu-img
-  dmg2img              /usr/bin/dmg2img
-  kpartx               /usr/bin/kpartx
-  sgdisk               /usr/bin/sgdisk
-  rsync                /usr/bin/rsync
-  xxd                  /usr/bin/xxd
-  openssl              /usr/bin/openssl
-  curl                 /usr/bin/curl
-  unzip                /usr/bin/unzip
-  python3              /usr/bin/python3
-  mkfs.hfsplus         /usr/bin/mkfs.hfsplus
-  bats                 /usr/bin/bats
-  gcc                  /usr/bin/gcc
-  make                 /usr/bin/make
-  git                  /usr/bin/git
-  nasm                 /usr/bin/nasm
-  iasl                 /usr/bin/iasl
-  mcopy                /usr/bin/mcopy
-  mformat              /usr/bin/mformat
-
-  package manager present: pacman (reported as a fact; this
-  script maps no tool to any package and prints no install command)
-
-## Pipeline stages
-
-  esd        ok      256s
-  opencore   ok      395s
-  ovmf       ok      228s
-  efi        ok      2s
-  openssh    ok      2s
-  payload    ok      0s
-  media      ok      115s
-  target     ok      0s
-
-## Ledger -- paste these rows into docs/host-profile.md section 4
-
-| Entry | Verdict | Host | Observation |
-|---|---|---|---|
-| G1 | CONFIRM | squirrel-zapper | system vendor is 'Apple Inc.': Apple's EULA covers this host |
-| G2 | CONFIRM | squirrel-zapper | GenuineIntel with vmx present |
-| G3 | CONFIRM | squirrel-zapper | host CPU ('Intel(R) Core(TM) i7-5650U CPU @ 2.20GHz') provides every flag the -cpu line asks for, so it is being masked down, as on the primary host |
-| G4 | REFUTE | squirrel-zapper | 2 cores x 2 threads: P5's pinning choices are topology-specific and do not transfer unchanged |
-| G5 | CANNOT-SAY | squirrel-zapper | built here by this host's toolchain: OVMF_CODE.fd e3d0c6f57c49af6a770ef40eb5f6ea75c1027bb80048532bd4f7c00bc6d5b7b7, OpenCore EFI image badddb587f08bd4ced460e8b1087983999adeaf8c74d202caff54b9b8dfd8244. One host cannot tell a reproducible build from a lucky one -- diff these against another host's JSON |
-| G6 | REFUTE | squirrel-zapper | QEMU 11.1.1, not 8.2.2: whatever this run observes is also evidence about this QEMU |
-| G7 | REFUTE | squirrel-zapper | kernel '7.2.6-arch2-1' is not t2-patched, so any KVM or IOMMU oddity seen on the primary host and not here was plausibly caused there |
-| G8 | CONFIRM | squirrel-zapper | 7835 MiB RAM, 441025 MiB free: room for a 4 GB guest and a 60 GB sparse target |
-| G9 | CONFIRM | squirrel-zapper | repo on nfs, images on btrfs: the split is doing the same work here |
-| G10 | CONFIRM | squirrel-zapper | btrfs supports reflinks: golden promotion is near-free here too |
-| G11 | CONFIRM | squirrel-zapper | btrfs, and chattr +C works here |
-| G12 | CONFIRM | squirrel-zapper | repo is on nfs (remote): 8.83 ms per file create against 0.03 ms locally. Both the images and the vendor quarantine have to stay off it |
-| G13 | CANNOT-SAY | squirrel-zapper | this QEMU has ich9-usb-ehci1 and the UHCI companions, but no guest was booted: the entry is a claim about 10.9's AppleUSBXHCI, and only an install speaks to it |
-| G14 | CANNOT-SAY | squirrel-zapper | not a Xeon ('Intel(R) Core(TM) i7-5650U CPU @ 2.20GHz'), so this host cannot tell a host-specific mask from a necessary one |
-| G16 | CANNOT-SAY | squirrel-zapper | no guest was booted, and this is a claim about what the guest sees |
-| G17 | CONFIRM | squirrel-zapper | nested virtualization is on |
-| G18 | CONFIRM | squirrel-zapper | host has EPT, so a Nehalem-or-newer guest model is available if VMware Fusion turns out to need one |
-| G19 | CANNOT-SAY | squirrel-zapper | not tested: this script never runs two installs at once, which is the standing advice the entry gives. Settling it needs the deliberate experiment the entry describes |
-| G20 | CONFIRM | squirrel-zapper | media built here and verified against media/apple-packages.sha256 from a fresh mount: the verification the entry asks for ran, and passed |
-
-  CONFIRM = true here too. REFUTE = the opposite here, so the entry is
-  host-specific and whatever depends on it needs a parameter.
-  CANNOT-SAY = this host, at this level, cannot settle it -- which is a
-  result, not a gap: an entry nobody has tried to falsify is not knowledge.
-
-## Where this script had to know what kind of host it was on
-
-  Each line is portability work this project still owes.
-
-  - CPU brand, vendor and feature flags come from three different places -- /proc/cpuinfo on Linux, sysctl on macOS, cpuctl on NetBSD -- because there is no portable way to ask
-  - filesystem type uses GNU 'stat -f -c %T' on Linux and parses mount(8) output in two different shapes elsewhere
-  - free space and mount points come from 'df -P', which is POSIX, and that is the only part of this that needed no special case
-
-triangulate: removed /home/schmonz/.local/share/mavericks-qemu-guest
+The levels are cumulative and the cheap one is the default, because a user
+with five machines runs --probe on all of them and --full on the two that
+look promising.

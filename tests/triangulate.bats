@@ -647,3 +647,28 @@ populate_image_dir() {
     [ -n "$t" ]
     [ "$t" != 0 ]
 }
+
+@test "--cpu exists and is passed to the pipeline" {
+    # ap-juicer 2026-09-21: the Mac Pro rejects the default -cpu line, and
+    # triangulate.sh had no way to choose another -- it called
+    # build-image.sh with no --cpu at all, so --full there would compile
+    # firmware for fourteen minutes and then fail at the install for a
+    # reason the probe already knew.
+    run "$REPO/bin/triangulate.sh" --help
+    [[ "$output" == *"--cpu MODEL"* ]]
+    grep -q '\-\-cpu) *cpu_choice=\$2' "$REPO/bin/triangulate.sh"
+    # Both call sites, not just one.
+    n=$(grep -c 'cpu_choice:+--cpu' "$REPO/bin/triangulate.sh")
+    [ "$n" -eq 2 ]
+}
+
+@test "a host that refuses the default CPU is told before the build starts" {
+    # The remedy is named, not applied: choosing a row is the user's call,
+    # and picking one silently would bury the finding.
+    grep -q 'refusing to build for an hour' "$REPO/bin/triangulate.sh"
+    grep -q 'rows of lib/cpu.sh' "$REPO/bin/triangulate.sh"
+    # And the check sits before the stage loop, not after it.
+    gate=$(grep -n 'refusing to build for an hour' "$REPO/bin/triangulate.sh" | cut -d: -f1)
+    loop=$(grep -n 'for s in esd opencore ovmf' "$REPO/bin/triangulate.sh" | cut -d: -f1)
+    [ "$gate" -lt "$loop" ]
+}

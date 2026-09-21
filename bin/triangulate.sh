@@ -56,6 +56,7 @@ MQG_LOG_PREFIX=triangulate
 
 level=probe
 want_json=0
+cpu_choice=
 json_out=
 keep=0
 keep_build=0
@@ -77,6 +78,10 @@ usage: $(basename "$0") [--probe|--build|--full] [options]
                    boot stack is ~14 minutes of compiling and this script
                    exists to be run again; the images and target disks,
                    which are the gigabytes, still go.
+  --cpu MODEL      Guest CPU line for --build/--full, from lib/cpu.sh's
+                   table. Needed on any host that cannot provide the
+                   default: the probe's -cpu table says which rows this
+                   machine accepts.
   --name NAME      Name for the image --full builds.
   --qemu BINARY    QEMU to interrogate (default: $qemu_bin).
   -h, --help       This.
@@ -96,6 +101,7 @@ while [ $# -gt 0 ]; do
         --json-out) want_json=1; json_out=$2; shift ;;
         --keep)  keep=1 ;;
         --keep-build) keep_build=1 ;;
+        --cpu)   cpu_choice=$2; shift ;;
         --name)  name=$2; shift ;;
         --qemu)  qemu_bin=$2; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -799,7 +805,8 @@ note_preexisting() {
         preexisting="$preexisting $s"
     done <<EOF
 $("$MQG_REPO_ROOT/image/build-image.sh" --name "$name" \
-    --accel "$pipeline_accel" --freshness 2>>"$scratch/pipeline.log" \
+    --accel "$pipeline_accel" ${cpu_choice:+--cpu "$cpu_choice"} \
+    --freshness 2>>"$scratch/pipeline.log" \
   | awk -F'\t' '$2 == "skip" { print $1 }' || true)
 EOF
 }
@@ -814,6 +821,7 @@ run_stage() {
     t0=$SECONDS
     log "stage $stage"
     if "$MQG_REPO_ROOT/image/build-image.sh" --name "$name" --accel "$pipeline_accel" \
+            ${cpu_choice:+--cpu "$cpu_choice"} \
             --generate-ssh-key --stage "$stage" >> "$scratch/pipeline.log" 2>&1; then
         stage_was_preexisting "$stage" && result=reused
         stage_report="$stage_report$stage	$result	$((SECONDS - t0))s
@@ -850,6 +858,34 @@ if [ "$level" != probe ]; then
     # failure. It is no longer in $created_list, so salvage_logs is told
     # about it separately.
     salvage_extra=$build_dir
+
+    # Refuse before the firmware, not after it.
+    #
+    # ap-juicer 2026-09-21: a Woodcrest Xeon that rejects the default
+    # -cpu line for want of SSE4.1. Without this check, --full there
+    # compiles OpenCore and OVMF for about fourteen minutes and only
+    # then fails at the install, on the slowest host in the fleet, for a
+    # reason the probe already knew before it started.
+    #
+    # The remedy is named rather than applied. Choosing a row of
+    # lib/cpu.sh's table is the user's decision -- picking one silently
+    # would bury the fact that this host cannot run what the others do,
+    # which is precisely the finding triangulation exists to surface.
+    if [ -z "$cpu_choice" ] && [ "$qemu_cpu" = rejected ]; then
+        warn "this host refuses the default -cpu line:"
+        warn "  $MQG_CPU_DEFAULT"
+        if [ -n "${cpu_provided# }" ]; then
+            warn "rows of lib/cpu.sh's table this host DOES accept:"
+            for m in ${cpu_provided# }; do warn "  $m"; done
+            warn "re-run with --cpu <one of those>. 10.9 does not need"
+            warn "SSE4.1 -- see docs/decisions/0009 -- so a refused"
+            warn "default is a parameter to change, not a dead host."
+        else
+            warn "and no row of the table either -- see the -cpu section above"
+        fi
+        die "refusing to build for an hour and fail at the install stage"
+    fi
+
     build_ok=yes
     # Every stage at once, and payload included: it used to rebuild on
     # every run because it had no "already done" check at all, and now it
