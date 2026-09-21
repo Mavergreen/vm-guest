@@ -5199,8 +5199,68 @@ settled it printed nothing about it.
 
 ---
 
-## 2026-09-21 — P4 — ccache for the firmware builds, and two things the
-## comparison found
+## 2026-09-21 — P4 — a stage is stale when its inputs moved
+
+`image/build-image.sh` skipped a stage whenever its output file was
+present. The failure that makes that wrong is the one this repository built
+`bin/ingredient-fingerprint.sh` and `bin/image-staleness.sh` to prevent:
+Renovate bumps the OpenCore pin in `vendor/sources.tsv`, the `opencore`
+stage sees its `.efi` sitting there, skips, and the pipeline builds an image
+out of stale firmware **without a word**. The staleness check answers that
+question afterwards, per image, from the manifest; nothing asked it before
+the image existed.
+
+Each stage now writes what it consumed to `<output>.inputs` beside its
+output and reruns when that record stops matching, naming what moved:
+
+```
+$ ./image/build-image.sh --freshness
+esd       skip  inputs unchanged
+opencore  run   inputs changed (source:opencorepkg-src)
+ovmf      run   inputs changed (source:opencorepkg-src)
+```
+
+Not a second hashing scheme: `bin/ingredient-fingerprint.sh --stage <name>`
+is the same list-and-digest one level down, and the half only the pipeline
+knows — the checksum of what an earlier stage actually produced, the
+accelerator, the SSH key fingerprint — is passed in as `key=value` and
+folded into the same sorted list. The stamp holds the LIST rather than the
+digest for the reason the manifest holds both: a digest says something
+moved, a list says what.
+
+Two decisions worth reading twice.
+
+**`efi` and `install` name what they consume by its OUTPUT checksum**, not
+by the pins that were supposed to produce it. `decisions/0004` says the
+silent failure is a green build that emits different bytes; naming the pins
+would miss exactly that.
+
+**The installer media is the exception.** It is not byte-stable —
+`mkfs.hfsplus` stamps the clock into the volume header, which is why the
+manifest carries `mediacontent` separately — so `install` names it by the
+digest of `media`'s *inputs*. Naming the file would reinstall a guest every
+time the media was rebuilt from inputs that had not changed.
+
+An output with no stamp is rebuilt rather than trusted: "I cannot tell" and
+"it is fine" are different answers, the same distinction
+`bin/image-staleness.sh` makes about a manifest with no ingredient lines.
+That costs one rebuild per artifact that predates this, once.
+
+`--freshness` is how every branch of the decision is tested in
+milliseconds, including the one this exists for — a bumped pin in
+`vendor/sources.tsv` reruns the firmware stages, names the pin, and leaves
+`esd` alone.
+
+Two knock-on fixes. `bin/triangulate.sh` asked the same question the
+pipeline used to ask — is the output file there — and now asks
+`--freshness` instead, because an output that is present but stale gets
+rebuilt and reporting that as "reused" would credit a host with work it did
+do. And `stage_payload` had no "already done" check at all; it has one now,
+which is why the comment in `triangulate.sh` saying it never reuses is gone.
+
+---
+
+## 2026-09-21 — P4 — ccache for the firmware builds, and what the comparison found
 
 `bin/triangulate.sh` exists to be run again, and the OpenCore and OVMF
 builds are the expensive part of every run. EDK II shells out to the
@@ -5292,4 +5352,31 @@ claim that leaves no trace is an unverifiable one. The stage input stamps
 deliberately do **not** include it — installing ccache must not rebuild the
 firmware, which would be the opposite of the point.
 
-Test count 470 → 495.
+---
+
+## 2026-09-21 — P4 — `triangulate.sh --keep-build`
+
+`bin/triangulate.sh` tracked `$MQG_IMAGE_DIR` itself as created whenever
+the run made it, so cleanup deleted the whole thing — the build tree with
+it. That is a boot-stack rebuild on every run of a script whose entire
+purpose is repeated runs on new hosts, and it is the same directory the
+2026-09-20 log-salvage wound was about.
+
+Leaving a host as it was found stays the default; this runs on other
+people's machines and one of them is a Mac Pro serving files. `--keep-build`
+is the middle setting: the build tree stays, everything else this run
+created goes — so the gigabytes (images, target disks, installer media)
+still leave, and a second run skips `opencore` and `ovmf`. The report now
+has a "What stays on this host" section saying which of those happened and
+what the next run will therefore skip, because a cleanup line that scrolls
+past is not a report.
+
+One trap on the way: `salvage_logs` found `build.log` and `ovmf-build.log`
+by walking the created list, and `$MQG_IMAGE_DIR` was how the build tree
+got onto it. Taking it off that list would have quietly undone the
+2026-09-20 fix — a cleanup that runs on failure must not remove the
+evidence of the failure — so the build tree is passed to `salvage_logs`
+separately and a test says so.
+
+Test count 470 → 496, across the three changes in this session: the stage
+input stamps, ccache, and `--keep-build`.
