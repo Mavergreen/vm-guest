@@ -35,7 +35,7 @@ our assumptions are least tested.
 
 | Ledger | Claim | What this host tests |
 |---|---|---|
-| **G14** | SMBIOS must not be `MacPro5,1`, because `AppleTyMCEDriver` panics on a non-Xeon CPU | This *is* a Xeon. If `MacPro5,1` works here, G14 is confirmed host-specific. **If it panics anyway, my explanation of P1's panic was wrong** and the real cause is something else. |
+| **G14** | SMBIOS must not be `MacPro5,1`, because `AppleTyMCEDriver` panics on a non-Xeon CPU | This *is* a Xeon, and it is now the ONLY thing still missing. The observation was re-run on the primary host on 2026-09-21 and **it reproduces** on our own boot stack (`decisions/0010`), so there is nothing stale to rule out. If `MacPro5,1` installs here, G14 is confirmed host-specific. **If it panics anyway, my explanation of P1's panic was wrong** and the real cause is something else. One command: `bin/triangulate.sh --full --cpu Conroe --smbios MacPro5,1`. |
 | **G3** | The guest CPU model must be masked down from the host's | Inverts the problem: this host is *older* than the model we ask for — and as of 2026-09-21 we know how far down the mask can go. |
 | **G25** | This host can provide every `-cpu` line in `lib/cpu.sh`'s table | Answered in about a second per row by `bin/triangulate.sh --probe`, with nothing installed. Woodcrest should refuse the `Penryn` rows and accept `Conroe`. |
 | **G2** | Intel with VT-x | Worth confirming VT-x is present and enabled; some early Mac Pros shipped without it. |
@@ -70,7 +70,39 @@ What to run here, in order:
    the `Conroe` row in `lib/cpu.sh` moves from BOOTED to VERIFIED and
    becomes the sensible default for a project whose portability story is
    "hosts older than ours".
-3. G14, which is why this machine was wanted in the first place.
+3. **G14, which is why this machine was wanted in the first place**, and
+   which is now one command:
+
+   ```
+   bin/triangulate.sh --full --cpu Conroe --smbios MacPro5,1
+   ```
+
+   `--smbios` exists as of `decisions/0010`; before that the model was
+   hardcoded in `boot/config/config.plist` and the experiment needed a
+   tracked file edited by hand, which is why it waited three phases.
+
+   **The control has already been run**, on the primary host, on
+   2026-09-21: `MacPro5,1` panics there on our own OpenCore 1.0.7 and our
+   own OVMF, with P1's backtrace, on an already-installed guest. So the
+   entry is not stale and this run is worth the trip.
+
+   What the outcomes mean:
+
+   - **Installs and answers SSH** → `AppleTyMCEDriver` was fine on a real
+     Xeon. The explanation survives, G14 is host-specific, and the report
+     says CONFIRM by itself.
+   - **Panics** → **my explanation was wrong.** The advice (do not ship
+     `MacPro5,1`) keeps its evidence and loses its reason. The report says
+     CANNOT-SAY here on purpose, because the backtrace is on the guest's
+     screen and reaches no log: read the last screenshots under
+     `$MQG_IMAGE_DIR/screenshots` — **2 colours is white-on-black text, not
+     a blank screen** — and if `AppleTyMCEDriver` is in the backtrace, edit
+     the ledger by hand.
+   - **Stops in an earlier stage** → nothing about G14 either way, and the
+     report names the stage.
+
+   Either result also wants a `NOTES.md` entry, including "it panicked and
+   I could not read why".
 
 **The lesson is not about SSE4.1.** A prediction from first principles sat
 in this file as though it were a result, and the machine it was about was

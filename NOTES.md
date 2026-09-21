@@ -5562,3 +5562,114 @@ file-browser and notification handlers look, and nothing goes there now.
   target problem, which is the most that can be arranged from here.
 
 Test count 505 → 517.
+
+## 2026-09-21 — P4 — `--smbios`, and the G14 control that had never been run
+
+`docs/host-profile.md` G14 has said since P1 that SMBIOS must not be
+`MacPro5,1` **because** `AppleTyMCEDriver` panics on a non-Xeon CPU. The
+"because" is mine, it is from P1, and it had never been tested. What was
+actually observed was a panic on this host and its disappearance after the
+SMBIOS changed; the causal story was reasoning.
+
+The value lived at `boot/config/config.plist:367`, so asking the question
+meant editing a tracked file and putting it back afterwards. Three phases
+went by without anyone asking it.
+
+### The parameter
+
+`image/build-image.sh --smbios MODEL`, default unchanged, `lib/smbios.sh`
+in `lib/cpu.sh`'s shape (VERIFIED / BOOTED / PANICKED / NOT-TESTED, with
+the evidence for each, an unlisted value warned about rather than
+refused), a manifest row beside `cpuline` and `compiler`, and
+`bin/triangulate.sh --smbios` through to both pipeline call sites.
+`docs/decisions/0010` has the reasoning and the table of what the flag
+touches.
+
+**It changes one field, `SystemProductName`, and leaves the serial, board
+serial, ROM and UUID alone.** That is coherent because `PlatformInfo >
+Automatic` is true: OpenCore derives the board id from the product name
+out of its own Apple model database. The evidence is in P1's own panic
+screen — it printed `Mac-F221BEC8`, a board id nobody in this project has
+ever typed. The serials are deliberate placeholders and are not valid for
+any Mac; minting realistic ones would be both pointless and wrong.
+
+### Boot 1 — `MacPro5,1` on this non-Xeon host: it panics, exactly as in P1
+
+An overlay on the `p2-manual-install` golden (`vm/clone.sh`, golden never
+written), our own OVMF and our own OpenCore 1.0.7, no installer media, one
+changed string. Panic on screen by 40 s and frozen there through 300 s:
+
+```
+AppleTyMCEDriver::start coreVIDPID = 0xffffffff Number of packages = 1 ...
+panic(cpu 0 caller 0xffffff800032dc43e): Kernel trap at 0xffffff7f849116b7,
+  type 13=general protection
+  com.apple.driver.AppleTyMCEDriver :
+  __ZN16AppleTyMCEDriver47enableInterruptForCorrectableMemoryCoreRegisterEPv
+Mac OS version: 13F34
+System model name: MacPro5,1 (Mac-F221BEC8)
+```
+
+`vm/screenshot.sh` verdict: `1280x800  2 colours  98764 lit px (9.64%) --
+text (a menu or console)`. **Two colours is white-on-black TEXT**, which is
+what a panic looks like; reading a low colour count as "blank screen" cost
+an hour in P3 and would have cost this experiment its result.
+
+This is P1's backtrace kext for kext, under a bootloader P1 never had, a
+firmware P1 never had, and an **already-installed** guest rather than the
+installer. So it is not stale, not an artifact of the reference OpenCore,
+and not a property of Apple's installer.
+
+### Boot 2 — the same overlay recipe with the default: Finder in 60 s
+
+`185799 colours, 99.78% lit -- graphical`, the Mavericks desktop, dock and
+all. Worth running and worth recording even though it proves nothing new:
+without it, "the screen has text on it" would have been a claim about the
+rig as much as about the SMBIOS. The only difference between the two boots
+is one string in one plist.
+
+### What this settles and what it does not
+
+Settled: the observation. It survives three phases, two OpenCore versions,
+two firmwares and installed-vs-installer, on a Coffee Lake i7.
+
+**Not settled: why.** Every observation is still from one machine with one
+non-Xeon CPU. The explanation — `AppleTyMCEDriver` loads because the model
+names a Xeon machine and faults because the CPU is not one — is exactly as
+untested as it was in P1. It is now labelled as untested in `lib/smbios.sh`,
+in the ledger and in the ADR, which is the only thing that changed about
+it.
+
+The machine that can settle it is `ap-juicer`, and it is one command:
+
+```
+bin/triangulate.sh --full --cpu Conroe --smbios MacPro5,1
+```
+
+Installs and answers SSH → the explanation survives and G14 is
+host-specific. Panics → the explanation is wrong and G14 keeps its advice
+while losing its reason.
+
+### `g14_verdict` says CANNOT-SAY for the interesting outcome, on purpose
+
+A kernel panic is on the guest's SCREEN. It is not in the pipeline log,
+not in QEMU's output and not in any exit status the harness can read — an
+install that ends in a panic and one that ends in a timeout, a wedged disk
+or a media problem are indistinguishable from there. So the verdict
+function CONFIRMs or REFUTEs only when a guest actually INSTALLED with
+`MacPro5,1`, and otherwise says CANNOT-SAY while naming the screenshots to
+read and what each reading would mean. G21 sat a day with no verdict
+function at all; `g26_verdict` printed a confident falsehood the day
+before this. A misattributed verdict is worse than no verdict.
+
+A new `guest_screen` fact carries `vm/screenshot.sh`'s own description of
+the last thing the guest showed, so the CANNOT-SAY is at least concrete.
+
+### Housekeeping
+
+Both overlays, both NVRAM copies, the experimental EFI image and the
+monitor sockets were removed afterwards; `/proc/*/exe` shows no QEMU left;
+the golden still hashes to `05bce6f1…36f1`. The two QEMU logs and the
+screenshots stay under `$MQG_IMAGE_DIR`, which is where the evidence for
+the ADR came from.
+
+Test count 517 → 545.
