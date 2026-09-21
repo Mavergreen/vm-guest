@@ -40,6 +40,8 @@ export MQG_REPO_ROOT
 . "$MQG_REPO_ROOT/lib/common.sh"
 # shellcheck source=../lib/cpu.sh
 . "$MQG_REPO_ROOT/lib/cpu.sh"
+# shellcheck source=../lib/smbios.sh
+. "$MQG_REPO_ROOT/lib/smbios.sh"
 
 # Used by log()/warn()/die() in lib/common.sh, which read it at call time.
 # shellcheck disable=SC2034
@@ -78,6 +80,7 @@ updates|which post-10.9.5 updates the image carries
 nic|the network device the guest was installed and verified with
 accel|accelerator, machine, cpu, memory and disk size
 cpuline|whether that -cpu line was one this project had evidence for, as judged when this image was built (lib/cpu.sh)
+smbios|the SMBIOS model OpenCore told the guest it was, and whether this project had evidence for it when this image was built (lib/smbios.sh)
 qemu|the QEMU this was built with
 compiler|the C compiler the boot stack was built with, and the dialect it was asked for -- NOT a pin, see docs/decisions/0004
 compilerrange|whether that compiler was inside the range this project declares it supports, as judged when this image was built (lib/compiler.sh)
@@ -106,6 +109,15 @@ machine=q35
 # earns a warning. A host this project has never seen must not be blocked
 # by our ignorance.
 cpu=$MQG_CPU_DEFAULT
+# THE GUEST'S SMBIOS MODEL IS A PARAMETER, AND WHY IT IS NOT MacPro5,1 IS
+# AN OBSERVATION WITH AN UNTESTED EXPLANATION ATTACHED.
+#
+# See lib/smbios.sh for the table and docs/decisions/0010 for the reasoning.
+# Like --cpu and unlike --nic and --updates, an unlisted value WARNS rather
+# than being refused -- only a string that cannot be written into a plist
+# is refused, because that produces a failure about our edit rather than
+# about the guest.
+smbios=$MQG_SMBIOS_DEFAULT
 ram=4096
 smp=2
 disk_gb=60
@@ -165,6 +177,11 @@ usage: $(basename "$0") [options]
                        Any QEMU -cpu string works. --cpu-models lists the
                        ones this project has evidence for, and an unlisted
                        one warns rather than refuses (lib/cpu.sh).
+  --smbios MODEL       SMBIOS SystemProductName OpenCore gives the guest
+                       (default: $smbios). Changes that ONE field; the
+                       serial, board serial, ROM and UUID are left alone
+                       and OpenCore derives the board id from the model.
+                       --smbios-models lists what has been tried.
   --ram MB             Guest memory (default: $ram)
   --smp N              Guest CPUs (default: $smp). Not 1: 10.9's first boot
                        after install is reported to fail without SMP.
@@ -198,6 +215,8 @@ usage: $(basename "$0") [options]
   --manifest-fields    List what the manifest records, and exit.
   --cpu-models         List the guest CPU lines this project has tried, the
                        status of each and the evidence behind it, and exit.
+  --smbios-models      List the SMBIOS models this project has tried, the
+                       status of each and the evidence behind it, and exit.
 
 Stages, in order:
 $(printf '%s\n' "$STAGES" | while IFS='|' read -r s d; do printf '  %-9s %s\n' "$s" "$d"; done)
@@ -218,6 +237,7 @@ while [ $# -gt 0 ]; do
         --accel) accel=$2; shift ;;
         --machine) machine=$2; shift ;;
         --cpu) cpu=$2; shift ;;
+        --smbios) smbios=$2; shift ;;
         --ram) ram=$2; shift ;;
         --smp) smp=$2; shift ;;
         --disk-gb) disk_gb=$2; shift ;;
@@ -244,6 +264,13 @@ while [ $# -gt 0 ]; do
                 printf '%s\n' "$ev" | fold -s -w 68 | sed 's/^/    /'
             done
             printf '\ndefault: %s\n' "$(cpu_default_text)"
+            exit 0 ;;
+        --smbios-models)
+            smbios_models | while IFS='	' read -r m st ev; do
+                printf '%-32s %s\n' "$m" "$st"
+                printf '%s\n' "$ev" | fold -s -w 68 | sed 's/^/    /'
+            done
+            printf '\ndefault: %s\n' "$(smbios_default_text)"
             exit 0 ;;
         --manifest-fields)
             printf '%s\n' "$MANIFEST_FIELDS" \
@@ -272,6 +299,18 @@ case " $NIC_CHOICES " in
     *) die "unknown --nic '$nic': choose one of $NIC_CHOICES." \
            "See docs/open-questions.md Q2 for what each one measured." ;;
 esac
+# REFUSED HERE, AND ONLY FOR THIS REASON. An UNKNOWN model is allowed
+# through with a warning further down (lib/smbios.sh) -- a user on hardware
+# this project has never met must not be blocked by our ignorance. A string
+# that cannot be written into a plist is a different thing: it would build
+# firmware for fourteen minutes and then fail in a way that is about our
+# edit rather than about the guest, which is the most expensive kind of
+# failure because it looks like a result.
+smbios_wellformed "$smbios" \
+    || die "unusable --smbios '$smbios': letters, digits, comma, dot, dash" \
+           "and underscore only, 64 characters at most. The value becomes" \
+           "PlatformInfo > Generic > SystemProductName in the guest's" \
+           "config.plist. --smbios-models lists the ones with evidence."
 [ -z "$from_stage" ] || is_stage "$from_stage" \
     || die "no such stage '$from_stage'; stages are: $(stage_names | tr '\n' ' ')"
 [ -z "$only_stage" ] || is_stage "$only_stage" \
@@ -384,6 +423,10 @@ image pipeline
                       $(cpu_line_manifest "$cpu")
                       (--cpu-models lists the table; an unlisted line warns
                       rather than refuses -- docs/decisions/0009)
+  smbios              $smbios
+                      $(smbios_manifest "$smbios")
+                      (--smbios-models lists the table; an unlisted model
+                      warns rather than refuses -- docs/decisions/0010)
   memory              $ram MB, $smp vCPUs
   target disk         $disk_gb GB
   qemu                $qemu_bin
@@ -546,8 +589,15 @@ ssh_key_fingerprint() {
 stage_extra_inputs() {
     case $1 in
         efi)
+            # The SMBIOS model belongs here and not only in the manifest:
+            # it changes the config.plist that goes ONTO the image, and a
+            # stage that skipped because its artifacts had not moved would
+            # otherwise hand the next run somebody else's SMBIOS. The
+            # install stage inherits the change through `efi=`, which is
+            # the checksum of the image this produces.
             printf '%s\n' \
-                "opencore-artifacts=$(sha256_or "$MQG_BUILD_DIR/artifacts/SHA256SUMS")"
+                "opencore-artifacts=$(sha256_or "$MQG_BUILD_DIR/artifacts/SHA256SUMS")" \
+                "smbios=$smbios"
             ;;
         payload)
             printf '%s\n' \
@@ -710,7 +760,7 @@ stage_ovmf() {
 
 stage_efi() {
     stage_is_fresh efi && return 0
-    "$MQG_REPO_ROOT/boot/build-efi-image.sh"
+    MQG_SMBIOS=$smbios "$MQG_REPO_ROOT/boot/build-efi-image.sh"
     stage_record efi
 }
 
@@ -1215,6 +1265,12 @@ stage_manifest() {
         # carry its own "this was untested" or it silently becomes a
         # supported build the day somebody else tests that model.
         printf 'cpuline\t%s\n' "$(cpu_line_manifest "$cpu")"
+        # WHICH SMBIOS the guest was told it was, and whether the project
+        # had evidence for it at the time. Beside the -cpu line because it
+        # is the same kind of claim: an image built on an untested model
+        # must still say so in a year, when the table has moved and the
+        # image has not.
+        printf 'smbios\t%s -- %s\n' "$smbios" "$(smbios_manifest "$smbios")"
         printf 'qemu\t%s\n' "$("$qemu_bin" --version | head -1)"
         # THE ONE INPUT THAT IS RECORDED BUT NOT PINNED.
         #
@@ -1320,7 +1376,10 @@ fi
 resolve_ssh_key
 # Warns, never refuses -- see lib/cpu.sh for why this one is not a gate.
 cpu_line_check "$cpu"
-log "building $name (accel $accel, machine $machine, cpu $cpu, ${ram}MB)"
+# Warns, never refuses -- see lib/smbios.sh. The refusal for this parameter
+# already happened, above, and it was about the string and not the model.
+smbios_check "$smbios"
+log "building $name (accel $accel, machine $machine, cpu $cpu, smbios $smbios, ${ram}MB)"
 mkdir -p "$images_dir" "$work_dir" "$(dirname "$payload_pkg")"
 
 run_stage esd stage_esd

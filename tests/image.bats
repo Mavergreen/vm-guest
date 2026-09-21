@@ -402,7 +402,8 @@ bump_pin() {
     local sums="$MQG_IMAGE_DIR/build/artifacts/SHA256SUMS"
     printf 'aaaa  OpenCore.efi\n' > "$sums"
     plant_stage efi "$MQG_IMAGE_DIR/work/opencore-p3.img" \
-        "opencore-artifacts=$(sha256sum "$sums" | cut -d' ' -f1)"
+        "opencore-artifacts=$(sha256sum "$sums" | cut -d' ' -f1)" \
+        "smbios=iMac14,2"
     run "$BUILD" --freshness
     [ "$(freshness_row efi)" = "$(printf 'skip\tinputs unchanged')" ]
 
@@ -410,6 +411,26 @@ bump_pin() {
     run "$BUILD" --freshness
     [ "$status" -eq 0 ]
     [[ "$(freshness_row efi)" == *"inputs changed (opencore-artifacts)"* ]]
+}
+
+@test "the efi stage reruns when --smbios changes, because the config goes ON the image" {
+    # The SMBIOS model is not only a manifest note: it changes the
+    # config.plist boot/build-efi-image.sh copies onto the EFI image. A
+    # stage that skipped because the OpenCore artifacts had not moved would
+    # hand the next run somebody else's SMBIOS -- and the G14 experiment
+    # would silently test the default. See docs/decisions/0010.
+    freshness_sandbox
+    local sums="$MQG_IMAGE_DIR/build/artifacts/SHA256SUMS"
+    printf 'aaaa  OpenCore.efi\n' > "$sums"
+    plant_stage efi "$MQG_IMAGE_DIR/work/opencore-p3.img" \
+        "opencore-artifacts=$(sha256sum "$sums" | cut -d' ' -f1)" \
+        "smbios=iMac14,2"
+    run "$BUILD" --freshness
+    [ "$(freshness_row efi)" = "$(printf 'skip\tinputs unchanged')" ]
+
+    run "$BUILD" --freshness --smbios MacPro5,1
+    [ "$status" -eq 0 ]
+    [[ "$(freshness_row efi)" == *"inputs changed (smbios)"* ]]
 }
 
 @test "--force reruns everything, and says that is why" {

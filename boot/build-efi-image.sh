@@ -12,6 +12,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$MQG_REPO_ROOT/lib/common.sh"
 # shellcheck source=../lib/efi.sh
 . "$MQG_REPO_ROOT/lib/efi.sh"
+# shellcheck source=../lib/smbios.sh
+. "$MQG_REPO_ROOT/lib/smbios.sh"
 
 # The image size. The reference image is a 191 MiB one, and this is the
 # same class of thing, so the number is not arbitrary -- but nothing here
@@ -43,6 +45,49 @@ require_cmd sgdisk mformat mmd mcopy mdir truncate
 
 [ -d "$ART" ] || die "no artifacts at $ART -- run boot/build-opencore.sh first"
 [ -f "$CONFIG" ] || die "no boot/config/config.plist"
+
+# --- the SMBIOS model ------------------------------------------------------
+#
+# The image ships boot/config/config.plist verbatim UNLESS a different
+# SMBIOS model was asked for, in which case it ships a derived copy with
+# one value changed. Verbatim by default on purpose: the repo config's
+# checksum is the `config` row of every manifest this project has ever
+# written, and a default build must keep producing the same bytes it did
+# yesterday. See lib/smbios.sh and docs/decisions/0010.
+MQG_SMBIOS=${MQG_SMBIOS:-$MQG_SMBIOS_DEFAULT}
+smbios_wellformed "$MQG_SMBIOS" \
+    || die "MQG_SMBIOS='$MQG_SMBIOS' is not a usable SMBIOS model identifier" \
+           "(letters, digits, comma, dot, dash, underscore; 64 max)"
+config_smbios=$(smbios_plist_product_name "$CONFIG")
+if [ "$MQG_SMBIOS" != "$config_smbios" ]; then
+    derived="$MQG_BUILD_DIR/config/config-$MQG_SMBIOS.plist"
+    mkdir -p "$(dirname "$derived")"
+    smbios_plist_set "$CONFIG" "$MQG_SMBIOS" > "$derived.tmp" \
+        || die "could not set SystemProductName to $MQG_SMBIOS"
+    mv -f "$derived.tmp" "$derived"
+    # Checked by the schema of the exact OpenCore we built, not by whatever
+    # ocvalidate is lying around -- the same argument boot/build-opencore.sh
+    # makes about it. A config this script generated is one more thing that
+    # can be wrong in a way that looks like a guest problem, so it is worth
+    # the 0 ms.
+    ocv=$(command -v ocvalidate || true)
+    for candidate in "$MQG_BUILD_DIR"/OpenCorePkg-*/Utilities/ocvalidate/ocvalidate; do
+        [ -x "$candidate" ] && ocv=$candidate
+    done
+    if [ -n "$ocv" ] && [ -x "$ocv" ]; then
+        "$ocv" "$derived" >/dev/null \
+            || die "ocvalidate rejected the derived config at $derived"
+        log "ocvalidate accepts the derived config"
+    else
+        warn "no ocvalidate found; shipping the derived config unvalidated"
+    fi
+    CONFIG=$derived
+    log "smbios: SystemProductName $config_smbios -> $MQG_SMBIOS ($CONFIG)"
+    log "smbios: serial, board serial, ROM and UUID are unchanged --" \
+        "OpenCore derives the board id from the product name (Automatic=true)"
+else
+    log "smbios: $MQG_SMBIOS, as boot/config/config.plist has it"
+fi
 
 # Verify what we are about to ship still matches what was built.
 ( cd "$ART" && sha256sum -c SHA256SUMS >/dev/null ) \
