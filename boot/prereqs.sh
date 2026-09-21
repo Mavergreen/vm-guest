@@ -132,6 +132,40 @@ unzip|unzip|unzip|-|unzip
 # must do -- silently changes which package names come out. That made the
 # behaviour untestable and the failure look like a bug in the assertion
 # rather than in the design.
+# Development headers, which `command -v` cannot see at all.
+#
+# ap-juicer 2026-09-21 got past every tool check and then died in EDK II's
+# BaseTools with `fatal error: uuid/uuid.h: No such file or directory`.
+# This script had answered "all present" truthfully and uselessly: it
+# knows about executables, and a header is not one. The other two hosts
+# happened to have libuuid's headers already, so four earlier runs never
+# noticed the requirement existed.
+#
+# Asked of the COMPILER, not of a list of directories: where a header
+# lives varies by distribution and by multiarch layout, and the compiler
+# is the only thing that knows its own search path.
+#
+# header|debian|arch|homebrew|pkgsrc
+# Overridable for the same reason MQG_PKG_MANAGER is: a test that cannot
+# name a header nobody has cannot prove the MISS path works at all.
+REQUIRED_HEADERS=${MQG_REQUIRED_HEADERS:-'
+uuid/uuid.h|uuid-dev|util-linux-libs|-|?
+'}
+
+# yes | no | unknown. "unknown" is its own answer and is NOT reported as
+# a pass: with no compiler we cannot tell, and this project's whole habit
+# is keeping "cannot tell" distinct from "fine" -- see lib/compiler.sh and
+# bin/image-staleness.sh.
+header_status() {
+    command -v "${CC:-gcc}" >/dev/null 2>&1 || { printf 'unknown\n'; return; }
+    if printf '#include <%s>\nint main(void){return 0;}\n' "$1" \
+        | "${CC:-gcc}" -fsyntax-only -x c - 2>/dev/null; then
+        printf 'yes\n'
+    else
+        printf 'no\n'
+    fi
+}
+
 mgr=${MQG_PKG_MANAGER:-}
 if [ -z "$mgr" ]; then
     case "$(uname -s)" in
@@ -197,6 +231,38 @@ while IFS='|' read -r tool deb arch brew pkgsrc; do
     esac
 done <<EOF
 $REQUIRED
+EOF
+
+while IFS='|' read -r hdr hdeb harch hbrew hpkgsrc; do
+    [ -n "$hdr" ] || continue
+    case "$(header_status "$hdr")" in
+        yes)
+            printf 'PASS  %-13s <%s>\n' header "$hdr"
+            continue ;;
+        unknown)
+            printf '????  %-13s <%s> (no compiler to ask)\n' header "$hdr"
+            unknown_any=1
+            continue ;;
+    esac
+    missing_any=1
+    case "$native_col" in
+        2) pkg=$hdeb ;; 3) pkg=$harch ;; 4) pkg=$hbrew ;; 5) pkg=$hpkgsrc ;;
+        *) pkg='?' ;;
+    esac
+    case "$pkg" in
+        '?'|''|'-')
+            printf 'MISS  %-13s <%s> (no package name confirmed for %s)\n' \
+                header "$hdr" "$mgr_name"
+            unknown_any=1 ;;
+        *)
+            printf 'MISS  %-13s <%s> (%s: %s)\n' header "$hdr" "$mgr_name" "$pkg"
+            case " $missing_pkgs " in
+                *" $pkg "*) ;;
+                *) missing_pkgs="$missing_pkgs $pkg" ;;
+            esac ;;
+    esac
+done <<EOF
+$REQUIRED_HEADERS
 EOF
 
 echo

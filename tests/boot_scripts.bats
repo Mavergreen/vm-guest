@@ -774,3 +774,25 @@ _fake_firmware() {
     done
     [ -z "$missing" ] || { echo "require_cmd names these; prereqs.sh does not:$missing"; false; }
 }
+
+@test "prereqs.sh detects a missing development header and names its package" {
+    # ap-juicer 2026-09-21 passed every tool check and then died in EDK
+    # II's BaseTools with "fatal error: uuid/uuid.h: No such file or
+    # directory". This script knew about executables; a header is not
+    # one, so it answered "all present" truthfully and uselessly.
+    run env MQG_PKG_MANAGER=apt \
+        MQG_REQUIRED_HEADERS='
+definitely/not/here.h|some-dev-pkg|x|-|?
+' "$REPO/boot/prereqs.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"definitely/not/here.h"* ]]
+    [[ "$output" == *"some-dev-pkg"* ]]
+}
+
+@test "prereqs.sh says it cannot tell about headers with no compiler" {
+    # "cannot tell" is its own answer and is not a pass -- the same
+    # discipline as lib/compiler.sh and bin/image-staleness.sh.
+    run env CC=/nonexistent/cc "$REPO/boot/prereqs.sh"
+    [[ "$output" == *"no compiler to ask"* ]]
+    [[ "$output" != *"PASS  header"* ]]
+}
