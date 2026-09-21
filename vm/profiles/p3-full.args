@@ -112,10 +112,22 @@ id=target,if=none,format=qcow2,file=%IMAGES%/work/p3-full.qcow2
 -device
 ide-hd,bus=ide.0,drive=target
 
+# e1000-82545em, not usb-net. Measured 2026-09-21 (docs/open-questions.md
+# Q2, docs/decisions/0008): usb-net is CDC-ECM and negotiates 10baseT, at
+# 1.24 MB/s down and 1.27 MB/s up; this device negotiates 1000baseT and
+# measured 174 MB/s down and 23 MB/s up on the same host, same image, one
+# changed line. 10.9 drives it with its own AppleIntel8254XEthernet.
+#
+# A NIC IS BUILD-TIME STATE IN 10.9. The OS records which interfaces it has
+# seen in /Library/Preferences/SystemConfiguration and does not configure a
+# NIC it meets for the first time on an already-installed system -- also
+# measured, in both directions. So this line must match the NIC the disk
+# below was installed with. This profile's disk carries no OS, so it is
+# free to change; the p4-* profiles are not.
 -netdev
 user,id=net0
 -device
-usb-net,bus=usb.0,netdev=net0
+e1000-82545em,netdev=net0
 
 -device
 usb-kbd,bus=usb.0

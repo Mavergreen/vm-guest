@@ -133,6 +133,15 @@ ide-hd,bus=ide.0,drive=target
 # image/build-image.sh builds its own command line and does not read this
 # profile -- the port is a parameter there. This is here so the manual,
 # one-variable-at-a-time profile can be poked at the same way.
+# usb-net, deliberately, even though e1000-82545em is now the default
+# everywhere else (docs/open-questions.md Q2, docs/decisions/0008).
+#
+# A NIC IS BUILD-TIME STATE IN 10.9: the OS records the interfaces it has
+# seen in /Library/Preferences/SystemConfiguration, and an already-installed
+# system meeting a different NIC brings up no interface for it at all --
+# measured 2026-09-21, both directions. The target disk this profile names
+# was installed with usb-net, so usb-net is what it can use. Changing this
+# line without rebuilding that disk produces a guest with no network.
 -netdev
 user,id=net0,hostfwd=tcp::2223-:22
 -device

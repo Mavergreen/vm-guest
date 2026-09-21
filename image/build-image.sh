@@ -69,6 +69,7 @@ payload|sha256 of the first-boot payload package
 sshkey|fingerprint of the public key authorized in the image
 openssh|the ModernMavericks/openssh release the guest got, or none
 updates|which post-10.9.5 updates the image carries
+nic|the network device the guest was installed and verified with
 accel|accelerator, machine, cpu, memory and disk size
 qemu|the QEMU this was built with
 compiler|the C compiler the boot stack was built with, and the dialect it was asked for -- NOT a pin, see docs/decisions/0004
@@ -96,6 +97,22 @@ ssh_user=mavsuser
 # one value implemented, rather than the absence of a switch.
 updates=none
 UPDATES_CHOICES="none"
+# THE NETWORK DEVICE IS A PARAMETER, AND WHICH ONE IS DEFAULT IS A
+# MEASUREMENT.
+#
+# See docs/open-questions.md Q2 and docs/decisions/0008. `usb-net` was
+# inherited from the UTM bundle in P1 because it demonstrably booted; it
+# was measured on 2026-09-21 and it is CDC-ECM at 10 Mbit/s. The default
+# below is the one the measurement chose; the others stay reachable
+# because an image is not only built here.
+#
+# A NIC is not a runtime knob. 10.9 records the interfaces it has seen in
+# /Library/Preferences/SystemConfiguration, and an image installed with
+# one NIC does not configure a different one when it is swapped in later
+# -- measured, both directions. So the device belongs to the build, and
+# the manifest records which one the image was made with.
+nic=e1000-82545em
+NIC_CHOICES="usb-net e1000-82545em virtio-net-pci"
 # THE GUEST'S OWN OPENSSH, ON BY DEFAULT.
 #
 # Goal #1 is a guest that is usable for development work, and SSH is the
@@ -137,6 +154,10 @@ usage: $(basename "$0") [options]
                        is then refused at build time, and reaching the guest
                        needs a client that still speaks ssh-rsa.
   --updates WHICH      Post-10.9.5 updates to include ($UPDATES_CHOICES)
+  --nic DEVICE         Guest network device (default: $nic)
+                       Choices: $NIC_CHOICES
+                       virtio-net-pci has no driver in 10.9 and produces an
+                       image with no network -- see docs/open-questions.md Q2.
   --from STAGE         Start at this stage, skipping earlier ones
   --stage STAGE        Run only this stage
   --force              Redo stages whose outputs already exist
@@ -176,6 +197,7 @@ while [ $# -gt 0 ]; do
         --openssh) openssh=1 ;;
         --no-openssh) openssh=0 ;;
         --updates) updates=$2; shift ;;
+        --nic) nic=$2; shift ;;
         --from) from_stage=$2; shift ;;
         --stage) only_stage=$2; shift ;;
         --force) force=1 ;;
@@ -204,6 +226,11 @@ case " $UPDATES_CHOICES " in
     *) die "unknown --updates '$updates': choose one of $UPDATES_CHOICES." \
            "See docs/open-questions.md Q1 -- the switch exists so that" \
            "question stays answerable without rewriting this pipeline." ;;
+esac
+case " $NIC_CHOICES " in
+    *" $nic "*) : ;;
+    *) die "unknown --nic '$nic': choose one of $NIC_CHOICES." \
+           "See docs/open-questions.md Q2 for what each one measured." ;;
 esac
 [ -z "$from_stage" ] || is_stage "$from_stage" \
     || die "no such stage '$from_stage'; stages are: $(stage_names | tr '\n' ' ')"
@@ -239,6 +266,16 @@ installed_stamp=$work_dir/installed
 # are for: one-variable-at-a-time experiments, where the diff IS the
 # experiment. This is the other kind of thing, and it references nothing in
 # the Tier 2 quarantine -- every path below is built from pinned source.
+# The one line that differs between the NIC choices. usb-net is a USB
+# device and hangs off the EHCI controller; everything else is PCI and
+# QEMU places it itself.
+nic_device() {
+    case $nic in
+        usb-net) printf '%s\n' "usb-net,bus=usb.0,netdev=net0" ;;
+        *)       printf '%s\n' "$nic,netdev=net0" ;;
+    esac
+}
+
 # qemu_args <with-media|without-media>
 #
 # The installer media is attached only while installing. The verify stage
@@ -273,7 +310,7 @@ qemu_args() {
         -drive "id=target,if=none,format=qcow2,file=$out_qcow2" \
         -device "ide-hd,bus=ide.0,drive=target" \
         -netdev "user,id=net0,hostfwd=tcp::$ssh_port-:22" \
-        -device "usb-net,bus=usb.0,netdev=net0" \
+        -device "$(nic_device)" \
         -device "usb-kbd,bus=usb.0" \
         -device "usb-mouse,bus=usb.0" \
         -device "VGA,vgamem_mb=64" \
@@ -309,6 +346,8 @@ image pipeline
   qemu                $qemu_bin
   ssh                 localhost:$ssh_port -> guest 22, user $ssh_user
   openssh             $([ "$openssh" -eq 1 ] && cat "$MQG_REPO_ROOT/components/openssh/version" || echo "none (stock OpenSSH 6.2)")
+  nic                 $nic -> -device $(nic_device)
+                      (choices: $NIC_CHOICES; docs/open-questions.md Q2)
   --updates           $updates (choices: $UPDATES_CHOICES)
                       docs/open-questions.md Q1 is not answered here; the
                       switch is what keeps it answerable.
@@ -897,6 +936,7 @@ stage_manifest() {
         printf 'openssh\t%s\n' \
             "$([ "$openssh" -eq 1 ] && echo "${openssh_tag:-$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$MQG_REPO_ROOT/components/openssh/version" | grep -v '^$' | head -1)}" || echo none)"
         printf 'updates\t%s\n' "$updates"
+        printf 'nic\t%s\n' "$nic"
         printf 'accel\t%s machine=%s cpu=%s ram=%s smp=%s disk=%sG\n' \
             "$accel" "$machine" "$cpu" "$ram" "$smp" "$disk_gb"
         printf 'qemu\t%s\n' "$("$qemu_bin" --version | head -1)"

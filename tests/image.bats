@@ -238,3 +238,46 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"diskbus="* ]]
 }
+
+@test "the NIC is a build-time choice, and the default is the measured one" {
+    # docs/open-questions.md Q2, answered 2026-09-21: usb-net is CDC-ECM at
+    # 10baseT and measured 1.24 MB/s; e1000-82545em measured 174 MB/s on the
+    # same host with one changed line. See docs/decisions/0008.
+    # --dry-run prints a shell-quoted command line, so the commas inside a
+    # -device value arrive backslash-escaped. Match on that spelling rather
+    # than on the one the script writes.
+    run "$BUILD" --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'e1000-82545em\,netdev=net0'* ]]
+    [[ "$output" != *"usb-net"* ]]
+}
+
+@test "the NIC the image was built with stays available by flag" {
+    # Changing the default migrates no existing image: 10.9 records the
+    # interfaces it has seen and gives a NIC it meets later no network
+    # service at all. An image built with usb-net still needs usb-net.
+    run "$BUILD" --nic usb-net --dry-run
+    [ "$status" -eq 0 ]
+    # usb-net is a USB device and must hang off the EHCI controller; the
+    # PCI ones must not carry a bus= at all.
+    [[ "$output" == *'usb-net\,bus=usb.0\,netdev=net0'* ]]
+    run "$BUILD" --nic virtio-net-pci --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'virtio-net-pci\,netdev=net0'* ]]
+    [[ "$output" != *'virtio-net-pci\,bus='* ]]
+}
+
+@test "build-image.sh rejects a NIC it has not measured" {
+    run "$BUILD" --nic nonsense --describe
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nic"* ]]
+}
+
+@test "the manifest records which NIC produced the image" {
+    # It is an input that changes what is in the image, like --updates:
+    # the network services 10.9 creates during installation are built from
+    # the hardware it saw then.
+    run "$BUILD" --manifest-fields
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"nic"* ]]
+}
