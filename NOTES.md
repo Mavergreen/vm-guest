@@ -5673,3 +5673,56 @@ screenshots stay under `$MQG_IMAGE_DIR`, which is where the evidence for
 the ADR came from.
 
 Test count 517 → 545.
+
+### G14: the observation was right and my explanation was wrong
+
+`ap-juicer`, 2026-09-21, `--full --cpu Conroe --smbios MacPro5,1`:
+
+```
+install  FAILED  5496s
+  840s:  1280x800  2 colours  86603 lit px (8.46%) -- text
+  960s:  1280x800  2 colours  86603 lit px (8.46%) -- text
+ 3600s:  1280x800  2 colours  86603 lit px (8.46%) -- text
+```
+
+The same pixel count for forty-six minutes is a stopped machine, not a
+slow one. That host is a **Xeon 5150**, and it had installed cleanly with
+the default SMBIOS an hour earlier.
+
+**What I wrote in P1** was that `MacPro5,1` panics because
+`AppleTyMCEDriver` wants a Xeon. That sentence had two halves: an
+observation and a cause. The observation has now survived three phases,
+two OpenCore versions, two firmwares, installed-versus-installer, and two
+CPU families. **The cause was mine, and it is wrong.**
+
+`docs/test-hosts.md` had said so in advance -- *"if it panics anyway, my
+explanation of P1's panic was wrong"* -- which is the only reason this
+run was worth an evening: the entry named its own falsifier before the
+hardware existed to run it.
+
+**The better hypothesis, and it is still a hypothesis.** The P1 panic was
+a **type 13 general protection fault** in
+`enableInterruptForCorrectableMemoryCoreRegister`. Type 13 is what a
+guest gets for touching an MSR the hypervisor does not emulate.
+`AppleTyMCEDriver` reads machine-check registers; QEMU does not provide
+them. That is a property of the **virtual platform**, which is identical
+on both hosts -- and it predicts exactly what we observed, where "wants a
+Xeon" predicted the opposite.
+
+**It would also explain G21, which we refuted this morning.**
+`kvm.ignore_msrs=1` makes KVM return zero rather than faulting on an
+unhandled MSR read. Every test that refuted G21 used `iMac14,2`, which
+never loads the driver that reads those registers. So `MacPro5,1` may be
+precisely the configuration the prior art wanted `ignore_msrs` for, and
+Somlo and OSX-KVM were plausibly using `MacPro5,1` SMBIOS when they
+recommended it.
+
+Two entries, one mechanism, and a single command to test it:
+`--smbios MacPro5,1` on a host with `ignore_msrs=1`.
+
+**A process note.** The verdict line above reads "text (a console, a
+menu, or a panic)" -- wording committed *while that run was in flight*,
+because the two machines share this working tree over NFS. It helped
+this time: the old code printed a PIL warning instead of a verdict. It
+could as easily have swapped code under a running experiment. The shared
+tree is a hazard that has now cut both ways.

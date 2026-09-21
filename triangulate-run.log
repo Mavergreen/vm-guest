@@ -8,3 +8,229 @@ triangulate: stage payload
 triangulate: stage media
 triangulate: stage target
 triangulate: stage install
+mavericks-qemu-guest triangulation report
+=========================================
+level:     full
+generated: 2026-09-21T20:39:58Z
+host:      ap-juicer -- Debian GNU/Linux 13 (trixie) (Linux 7.1.8+deb13-amd64 x86_64), bash 5.2.37(1)-release
+
+## Host
+
+  host                   ap-juicer
+  os                     Linux
+  os_name                Debian GNU/Linux 13 (trixie)
+  kernel                 7.1.8+deb13-amd64
+  arch                   x86_64
+  bash                   5.2.37(1)-release
+  system_vendor          Apple Computer, Inc.
+  cpu_brand              Intel(R) Xeon(R) CPU            5150  @ 2.66GHz
+  cpu_vendor             GenuineIntel
+  cpu_cores              4
+  cpu_logical            3
+  cpu_offline            1
+  cpu_threads_per_core   1
+  flag_ssse3             yes
+  flag_sse4_1            no
+  flag_sse4_2            no
+  flag_vmx               yes
+  flag_svm               no
+  flag_ept               no
+  accel_kvm              yes
+  kvm_note               
+  accel_hvf              no
+  accel_nvmm             no
+  accel_chosen           kvm
+  kvm_nested             Y
+  kvm_ignore_msrs        N
+  ram_mib                9940
+  image_dir              /home/schmonz/.local/share/mavericks-qemu-guest
+  image_dir_exists       yes
+  image_fs               ext2/ext3
+  image_free_mib         189547
+  repo_root              /persistent/code/trees/mavericks-qemu-guest
+  repo_fs                zfs
+  repo_create_ms         0.08
+  image_create_ms        0.08
+  reflink                no
+  chattr_nocow           no
+  qemu                   /usr/bin/qemu-system-x86_64
+  qemu_version           11.0.2
+  qemu_accels            tcg mshv nitro kvm 
+  qemu_has_penryn        yes
+  qemu_missing_devices   
+  guest_screen           build-image: 3600s: 1280x800 2 colours 86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+  smbios                 MacPro5,1
+  smbios_verdict         PANICKED
+  cpu_line               Penryn,+ssse3,+sse4.1,+sse4.2
+  cpu_line_verdict       rejected
+  cpu_line_detail        qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.sse4.1 [bit 19];qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.sse4.2 [bit 20];qemu-system-x86_64: Host doesn't support requested features;
+  cpu_models_provided    Conroe host qemu64
+  cpu_models_refused     Penryn Penryn,+ssse3,+sse4.1,+sse4.2 Nehalem Westmere SandyBridge IvyBridge Haswell-noTSX
+  cpu_models_absent      
+  tools_missing          kpartx bats
+  package_manager        apt-get
+  level                  full
+  build_ok               yes
+  failed_stage           install
+  media_built            reused
+  media_failure          none
+  install_ok             no
+  build_tree_kept        yes
+  ovmf_sha256            86c15317568027fec58c510f66a75c8dca34d4b19d1e403c9ab12bfa4ab84719
+  opencore_sha256        6607bb234301fa4c705dd8a62312b6edd10371e3def9c1608d34dad5053da5b9
+
+## The -cpu line
+
+  asked for:   Penryn,+ssse3,+sse4.1,+sse4.2
+  accelerator: kvm
+  ssse3 yes, sse4.1 no, sse4.2 no
+  QEMU verdict (with 'enforce'): rejected
+  qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.sse4.1 [bit 19];qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.sse4.2 [bit 20];qemu-system-x86_64: Host doesn't support requested features;
+
+## Which of the tested -cpu lines this host can provide
+
+  lib/cpu.sh lists the lines this project has evidence for. This is
+  the other half: which of them THIS host and THIS QEMU can hand to a
+  guest, asked with 'enforce' against a paused diskless VM.
+
+  Mavericks does not need SSE4.1 -- '-cpu Conroe' boots it to SSH
+  (docs/decisions/0009) -- so a refused line is not a refused host.
+  It says which row of the table this machine should use.
+
+  Conroe                           accepted  
+  Penryn                           rejected  missing: CPUID[eax=01h].ECX.sse4.1
+  Penryn,+ssse3,+sse4.1,+sse4.2    rejected  missing: CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2
+  Nehalem                          rejected  missing: CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt
+  Westmere                         rejected  missing: CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes
+  SandyBridge                      rejected  missing: CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX
+  IvyBridge                        rejected  missing: CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=01h].ECX.f16c,CPUID[eax=01h].ECX.rdrand,CPUID[eax=07h,ecx=00h].EBX.fsgsbase,CPUID[eax=07h,ecx=00h].EBX.smep,CPUID[eax=07h,ecx=00h].EBX.erms,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX
+  Haswell-noTSX                    rejected  missing: CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.fma,CPUID[eax=01h].ECX.pcid,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.movbe,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=01h].ECX.f16c,CPUID[eax=01h].ECX.rdrand,CPUID[eax=07h,ecx=00h].EBX.fsgsbase,CPUID[eax=07h,ecx=00h].EBX.bmi1,CPUID[eax=07h,ecx=00h].EBX.avx2,CPUID[eax=07h,ecx=00h].EBX.smep,CPUID[eax=07h,ecx=00h].EBX.bmi2,CPUID[eax=07h,ecx=00h].EBX.erms,CPUID[eax=07h,ecx=00h].EBX.invpcid,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=80000001h].ECX.abm,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX
+  host                             accepted  
+  qemu64                           accepted  
+
+  accelerator: kvm
+  no-model = this QEMU has no such CPU model at all, which is a
+  statement about the QEMU and not about the hardware.
+
+## Tools -- by tool, never by package name
+
+  qemu-system-x86_64   /usr/bin/qemu-system-x86_64
+  qemu-img             /usr/bin/qemu-img
+  dmg2img              /usr/bin/dmg2img
+  kpartx               MISSING
+  sgdisk               /usr/sbin/sgdisk
+  xxd                  /usr/bin/xxd
+  openssl              /usr/bin/openssl
+  curl                 /usr/bin/curl
+  unzip                /usr/bin/unzip
+  python3              /usr/bin/python3
+  mkfs.hfsplus         /usr/sbin/mkfs.hfsplus
+  bats                 MISSING
+  gcc                  /usr/bin/gcc
+  make                 /usr/bin/make
+  git                  /usr/bin/git
+  nasm                 /usr/bin/nasm
+  iasl                 /usr/bin/iasl
+  mcopy                /usr/bin/mcopy
+  mformat              /usr/bin/mformat
+
+  package manager present: apt-get (reported as a fact; this
+  script maps no tool to any package and prints no install command)
+
+## Pipeline stages
+
+  esd        reused  0s
+  opencore   reused  0s
+  ovmf       reused  0s
+  efi        ok      3s
+  openssh    ok      0s
+  payload    reused  0s
+  media      reused  1s
+  target     ok      0s
+  install    FAILED  5496s
+
+  The last 25 lines before it stopped:
+
+    build-image:   840s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   960s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   1080s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   1200s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   1320s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   1440s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   1560s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   1680s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   1800s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   1920s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   2040s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   2160s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   2280s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   2400s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   2520s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   2640s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   2760s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   2880s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   3000s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   3120s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   3240s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   3360s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   3480s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image:   3600s:   1280x800  2 colours  86603 lit px (8.46%) -- text (a console, a menu, or a panic)
+    build-image: error: no SSH after 3600s. The VM is still running as pid 86298; look at /home/schmonz/.local/share/mavericks-qemu-guest/work/build-triangulate-20260921-203958 and at the screenshots before killing it.
+
+## What stays on this host
+
+  /home/schmonz/.local/share/mavericks-qemu-guest was already here and is not this run's to remove.
+  Going: this run's image, its manifest and its work directory.
+  Staying: /home/schmonz/.local/share/mavericks-qemu-guest/build, which was not ours either.
+  A second run skips the opencore and ovmf stages if that tree
+  still matches the pins -- build-image.sh --freshness says.
+
+## Ledger -- paste these rows into docs/host-profile.md section 4
+
+| Entry | Verdict | Host | Observation |
+|---|---|---|---|
+| G1 | CONFIRM | ap-juicer | system vendor is 'Apple Computer, Inc.': Apple's EULA covers this host |
+| G2 | CONFIRM | ap-juicer | GenuineIntel with vmx present |
+| G3 | REFUTE | ap-juicer | host CPU ('Intel(R) Xeon(R) CPU            5150  @ 2.66GHz') lacks SSE4.1, which the DEFAULT -cpu line asks for. Masking DOWN is not the problem here; the default asks for more than the host has, and no mask fixes that. It is NOT a stopper: 10.9 does not need SSE4.1 -- '-cpu Conroe' boots this guest to SSH (docs/decisions/0009) -- so the CPU line is a parameter and this host should take the Conroe row of lib/cpu.sh's table. See the -cpu table above for which rows this host can actually provide |
+| G4 | REFUTE | ap-juicer | 4 cores x 1 threads: P5's pinning choices are topology-specific and do not transfer unchanged |
+| G5 | CANNOT-SAY | ap-juicer | built here by this host's toolchain: OVMF_CODE.fd 86c15317568027fec58c510f66a75c8dca34d4b19d1e403c9ab12bfa4ab84719, OpenCore EFI image 6607bb234301fa4c705dd8a62312b6edd10371e3def9c1608d34dad5053da5b9. One host cannot tell a reproducible build from a lucky one -- diff these against another host's JSON |
+| G6 | REFUTE | ap-juicer | QEMU 11.0.2, not 8.2.2: whatever this run observes is also evidence about this QEMU |
+| G7 | REFUTE | ap-juicer | kernel '7.1.8+deb13-amd64' is not t2-patched, so any KVM or IOMMU oddity seen on the primary host and not here was plausibly caused there |
+| G8 | CONFIRM | ap-juicer | 9940 MiB RAM, 189547 MiB free: room for a 4 GB guest and a 60 GB sparse target |
+| G9 | CONFIRM | ap-juicer | repo on zfs, which is local: the split is unnecessary here, which is the portable half of the entry |
+| G10 | REFUTE | ap-juicer | ext2/ext3 has no reflinks: golden promotion is a full copy. Budget the time and the space |
+| G11 | CONFIRM | ap-juicer | image directory is ext2/ext3, not btrfs: the chore does not apply, which is what the entry predicted |
+| G12 | REFUTE | ap-juicer | repo is on zfs (local): 0.08 ms per file create against 0.08 ms in the image directory. A host whose repo is already local needs no split at all |
+| G13 | CANNOT-SAY | ap-juicer | this QEMU has ich9-usb-ehci1 and the UHCI companions, but no guest was booted: the entry is a claim about 10.9's AppleUSBXHCI, and only an install speaks to it |
+| G14 | CANNOT-SAY | ap-juicer | this IS a Xeon ('Intel(R) Xeon(R) CPU            5150  @ 2.66GHz') -- the host the entry has been waiting for, SMBIOS MacPro5,1 was asked for, and the install stage failed with the last screen the pipeline reported: build-image: 3600s: 1280x800 2 colours 86603 lit px (8.46%) -- text (a console, a menu, or a panic). That is CONSISTENT with the AppleTyMCEDriver panic and is NOT the same as having seen one -- a timeout, a wedged disk or slow hardware end that stage the same way. THE PANIC IS LEGIBLE ON SCREEN AND NOWHERE ELSE: look at the last screenshots under $MQG_IMAGE_DIR/screenshots (remember 2 colours is white-on-black TEXT, not a blank screen). If a backtrace names AppleTyMCEDriver, then on a Xeon that REFUTES the entry's explanation and on a non-Xeon it CONFIRMS the observation; if it names anything else, this run says nothing about G14. Edit the ledger by hand either way |
+| G16 | CANNOT-SAY | ap-juicer | no guest was booted, and this is a claim about what the guest sees |
+| G17 | CONFIRM | ap-juicer | nested virtualization is on |
+| G18 | REFUTE | ap-juicer | host has no EPT: VMware Fusion in the guest is out of reach here whatever CPU model we pick, and this host cannot evaluate decisions/0005 |
+| G19 | CANNOT-SAY | ap-juicer | not tested: this script never runs two installs at once, which is the standing advice the entry gives. Settling it needs the deliberate experiment the entry describes |
+| G20 | CANNOT-SAY | ap-juicer | media was already on this host and was reused, not rebuilt: this run is no evidence either way |
+| G21 | CANNOT-SAY | ap-juicer | ignore_msrs is off here and the install did not complete -- but it failed for a named reason unrelated to MSRs, so this says nothing either way. See the stage table |
+| G26 | CANNOT-SAY | ap-juicer | no media was built at this level, so nothing here speaks to whether the seat requirement is really gone |
+| G24 | CANNOT-SAY | ap-juicer | QEMU 11.0.2 offers e1000-82545em but the install did not finish, and it stopped for a named reason of its own: see the stage table before blaming the NIC |
+| G25 | REFUTE | ap-juicer | QEMU 11.0.2 under KVM refused Penryn Penryn,+ssse3,+sse4.1,+sse4.2 Nehalem Westmere SandyBridge IvyBridge Haswell-noTSX and accepted Conroe host qemu64 (Penryn needs CPUID[eax=01h].ECX.sse4.1 this host does not have; Penryn,+ssse3,+sse4.1,+sse4.2 needs CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2 this host does not have; Nehalem needs CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt this host does not have; Westmere needs CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes this host does not have; SandyBridge needs CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX this host does not have; IvyBridge needs CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=01h].ECX.f16c,CPUID[eax=01h].ECX.rdrand,CPUID[eax=07h,ecx=00h].EBX.fsgsbase,CPUID[eax=07h,ecx=00h].EBX.smep,CPUID[eax=07h,ecx=00h].EBX.erms,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX this host does not have; Haswell-noTSX needs CPUID[eax=01h].ECX.pclmulqdq,CPUID[eax=01h].ECX.fma,CPUID[eax=01h].ECX.pcid,CPUID[eax=01h].ECX.sse4.1,CPUID[eax=01h].ECX.sse4.2,CPUID[eax=01h].ECX.movbe,CPUID[eax=01h].ECX.popcnt,CPUID[eax=01h].ECX.aes,CPUID[eax=01h].ECX.xsave,CPUID[eax=01h].ECX.avx,CPUID[eax=01h].ECX.f16c,CPUID[eax=01h].ECX.rdrand,CPUID[eax=07h,ecx=00h].EBX.fsgsbase,CPUID[eax=07h,ecx=00h].EBX.bmi1,CPUID[eax=07h,ecx=00h].EBX.avx2,CPUID[eax=07h,ecx=00h].EBX.smep,CPUID[eax=07h,ecx=00h].EBX.bmi2,CPUID[eax=07h,ecx=00h].EBX.erms,CPUID[eax=07h,ecx=00h].EBX.invpcid,CPUID[eax=80000001h].EDX.rdtscp,CPUID[eax=80000001h].ECX.abm,CPUID[eax=0Dh,ecx=01h].EAX.xsaveopt,CPUID[eax=0Dh,ecx=00h].EAX,CPUID[eax=0Dh,ecx=00h].EAX this host does not have). This host cannot provide every row of lib/cpu.sh's table. Read WHICH row before concluding anything: the table is a ladder, a refused row near the top means the host is older than the default and should use a row below it, and a refused row that names a feature 10.9 never needed (qemu64 asks for AMD's svm) means nothing at all. Picking an accepted row with --cpu is a supported outcome, not a broken host |
+
+  CONFIRM = true here too. REFUTE = the opposite here, so the entry is
+  host-specific and whatever depends on it needs a parameter.
+  CANNOT-SAY = this host, at this level, cannot settle it -- which is a
+  result, not a gap: an entry nobody has tried to falsify is not knowledge.
+
+## Where this script had to know what kind of host it was on
+
+  Each line is portability work this project still owes.
+
+  - CPU brand, vendor and feature flags come from three different places -- /proc/cpuinfo on Linux, sysctl on macOS, cpuctl on NetBSD -- because there is no portable way to ask
+  - filesystem type uses GNU 'stat -f -c %T' on Linux and parses mount(8) output in two different shapes elsewhere
+  - free space and mount points come from 'df -P', which is POSIX, and that is the only part of this that needed no special case
+  - this host has 4 processors but only 3 are online: 1 offline. Check 'lscpu' and dmesg for why -- a core that failed to start makes every timing here slower than the hardware implies
+
+triangulate: saved 6 file(s) to /persistent/code/trees/mavericks-qemu-guest/triangulate-logs-ap-juicer-20260921-221141
+triangulate: these survive the cleanup below. report.txt has the
+triangulate: stage table; the .log files have the compiler output.
+triangulate: send the directory, not a summary of it.
+triangulate: error: full stopped at the 'install' stage on this host -- see the stage table above. Every stage after it never ran, and the ledger rows say CANNOT-SAY rather than blaming them
+triangulate: removed /home/schmonz/.local/share/mavericks-qemu-guest/images/triangulate-20260921-203958.qcow2
+triangulate: removed /home/schmonz/.local/share/mavericks-qemu-guest/work/build-triangulate-20260921-203958
