@@ -240,6 +240,43 @@ done <<EOF
 $REQUIRED
 EOF
 
+# busybox is the one tool whose PRESENCE is not the question.
+#
+# ap-juicer 2026-09-21 had /usr/bin/busybox and this script said PASS,
+# because command -v found it. It is Debian's dynamically linked build,
+# and the privops initramfs holds one binary with no loader and no
+# libraries -- so it builds a perfectly good archive that then cannot
+# exec, and the microVM panics with "No working init found". Debian ships
+# the two variants as separate packages; the other two hosts were static
+# by luck of packaging, not because anything checked.
+#
+# The check itself lives in lib/privops-qemu-linux.sh, which is where the
+# requirement is. This script is where someone reads it first.
+if command -v busybox >/dev/null 2>&1; then
+    # shellcheck source=../lib/privops-qemu-linux.sh
+    . "$MQG_REPO_ROOT/lib/privops-qemu-linux.sh" 2>/dev/null || true
+    if command -v privops_qemu_linux_busybox_linkage >/dev/null 2>&1; then
+        case "$(privops_qemu_linux_busybox_linkage "$(command -v busybox)")" in
+            dynamic)
+                printf 'MISS  %-13s %s is dynamically linked (%s: %s)\n' \
+                    busybox "$(command -v busybox)" "$mgr_name" \
+                    "$([ "$native_col" = 2 ] && echo busybox-static || echo '?')"
+                printf '      the initramfs has no loader or libraries for it\n'
+                missing_any=1
+                case "$native_col" in
+                    2) case " $missing_pkgs " in
+                           *" busybox-static "*) ;;
+                           *) missing_pkgs="$missing_pkgs busybox-static" ;;
+                       esac ;;
+                    *) unknown_any=1 ;;
+                esac ;;
+            unknown)
+                printf '????  %-13s linkage unknown (no ldd to ask)\n' busybox
+                unknown_any=1 ;;
+        esac
+    fi
+fi
+
 while IFS='|' read -r hdr hdeb harch hbrew hpkgsrc; do
     [ -n "$hdr" ] || continue
     case "$(header_status "$hdr")" in

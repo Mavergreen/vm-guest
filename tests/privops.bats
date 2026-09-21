@@ -361,3 +361,18 @@ PAYLOAD
     # And it still streams the console to a file rather than capturing it.
     grep -q '> "\$console" 2>&1' "$REPO/bin/privops-selftest.sh"
 }
+
+@test "privops-selftest refuses to boot when a requirement is missing" {
+    # It used to report "busybox is dynamically linked" and then boot
+    # anyway, panicking with "No working init found" -- the exact failure
+    # the check exists to prevent, twenty lines below the sentence
+    # explaining it. A diagnostic that demonstrates the problem it just
+    # diagnosed teaches a reader to distrust the diagnosis.
+    grep -q 'Not booting: the backend would refuse this host' \
+        "$REPO/bin/privops-selftest.sh"
+    # And the exit sits inside the missing-requirements branch, before the
+    # QEMU invocation.
+    stop=$(grep -n 'Not booting: the backend would refuse' "$REPO/bin/privops-selftest.sh" | cut -d: -f1)
+    boot=$(grep -n 'timeout "\$timeout_s" qemu-system' "$REPO/bin/privops-selftest.sh" | cut -d: -f1)
+    [ "$stop" -lt "$boot" ]
+}

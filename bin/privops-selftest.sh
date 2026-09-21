@@ -42,6 +42,22 @@ printf '\n== requirements the backend reports missing ==\n'
 missing=$(privops_qemu_linux_missing || true)
 if [ -n "$missing" ]; then
     printf '%s\n' "$missing"
+    # Stop here rather than boot anyway.
+    #
+    # ap-juicer 2026-09-21: this script reported "busybox is dynamically
+    # linked" and then booted the microVM regardless, which panicked with
+    # "No working init found" -- exactly the confusing failure the
+    # requirement check exists to prevent, printed twenty lines below the
+    # sentence explaining it. A diagnostic that demonstrates the problem it
+    # just diagnosed teaches a reader to distrust the diagnosis.
+    #
+    # privops_run refuses in this situation, so booting here was also not
+    # showing what the pipeline would do.
+    printf '\nNot booting: the backend would refuse this host, and so does\n'
+    printf 'this script. Install what is named above and run it again.\n'
+    printf 'Booting anyway produces a kernel panic ("No working init\n'
+    printf 'found") that looks like a kernel problem and is not one.\n'
+    exit 1
 else
     printf '(none)\n'
 fi

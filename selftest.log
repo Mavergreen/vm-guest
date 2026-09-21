@@ -1,66 +1,63 @@
 == host ==
-uname     Linux 7.2.6-arch2-1 x86_64
-qemu      QEMU emulator version 11.1.1
+uname     Linux 7.1.8+deb13-amd64 x86_64
+qemu      QEMU emulator version 11.0.2 (Debian 1:11.0.2+ds-2~bpo13+1)
 busybox   /usr/bin/busybox
-linkage   static
+linkage   dynamic
 cpio      /usr/bin/cpio
 kvm       writable
 
 == requirements the backend reports missing ==
-(none)
+a statically linked busybox: /usr/bin/busybox is dynamically linked, and the initramfs has no loader or libraries for it (Debian: busybox-static)
 
 == kernel ==
-chosen    /lib/modules/7.2.6-arch2-1/vmlinuz
-size      17240576 bytes
+chosen    /boot/vmlinuz-7.1.8+deb13-amd64
+size      14182336 bytes
 readable  yes
 magic     0000000   M   Z
 
 == initramfs ==
-mqg: warning: no nls_base module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
-mqg: warning: no virtio module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
-mqg: warning: no virtio_ring module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
-mqg: warning: no virtio_pci module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
-mqg: warning: no virtio_blk module under /lib/modules/7.2.6-arch2-1 -- assuming it is built into the kernel
-built     /tmp/tmp.LFaoRXJlgI/initramfs.cpio.gz (922719 bytes)
+mqg: warning: no nls_base module under /lib/modules/7.1.8+deb13-amd64 -- assuming it is built into the kernel
+mqg: warning: no virtio module under /lib/modules/7.1.8+deb13-amd64 -- assuming it is built into the kernel
+mqg: warning: no virtio_ring module under /lib/modules/7.1.8+deb13-amd64 -- assuming it is built into the kernel
+mqg: warning: no virtio_pci module under /lib/modules/7.1.8+deb13-amd64 -- assuming it is built into the kernel
+built     /tmp/tmp.lRWXtgIr1M/initramfs.cpio.gz (728338 bytes)
 
 == command ==
-timeout 60 qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-reboot \
-  -kernel /lib/modules/7.2.6-arch2-1/vmlinuz \
-  -initrd /tmp/tmp.LFaoRXJlgI/initramfs.cpio.gz \
+timeout 120 qemu-system-x86_64 -enable-kvm -m 512 -nographic -no-reboot \
+  -kernel /boot/vmlinuz-7.1.8+deb13-amd64 \
+  -initrd /tmp/tmp.lRWXtgIr1M/initramfs.cpio.gz \
   -append "console=ttyS0 loglevel=3 panic=1 mqg_modules=nls_base,nls_utf8,hfsplus,virtio,virtio_ring,virtio_pci,virtio_blk" \
-  -drive file=/tmp/tmp.LFaoRXJlgI/scratch.img,format=raw,if=virtio
+  -drive file=/tmp/tmp.lRWXtgIr1M/scratch.img,format=raw,if=virtio
 
-== console (unfiltered, 60s limit) ==
-c[?7l[2J[0mSeaBIOS (version Arch Linux 1.17.0-2-2)
+== console (unfiltered, 120s limit) ==
+c[?7l[2J[0mSeaBIOS (version 1.17.0-debian-1.17.0-1~bpo13+1)
 
 
-iPXE (http://ipxe.org) 00:03.0 C900 PCI2.10 PnP PMM+1EFD3D90+1EF33D90 C900
+iPXE (https://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+1EFC7B30+1EF07B30 CA00
 Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
 
 
 Booting from ROM...
-Probing EDD (edd=off to disable)... oc[?7l[2JMQG-PRIVOPS-INSMOD ok nls_utf8
-MQG-PRIVOPS-INSMOD ok cdrom
-MQG-PRIVOPS-INSMOD ok hfsplus
-MQG-PRIVOPS-MOUNT-FAILED
-MQG-PRIVOPS-DIAG block devices in /dev:
-  ls: /dev/sd*: No such file or directory
-  brw-------    1 0        0         254,   0 Sep 21 01:32 /dev/vda
-MQG-PRIVOPS-DIAG /proc/partitions:
-  major minor  #blocks  name
-  
-   254        0      16384 vda
-MQG-PRIVOPS-DIAG filesystems the kernel knows:
-31
-  	hfsplus
-MQG-PRIVOPS-DIAG modules loaded:
-  hfsplus
-  cdrom
-  nls_utf8
-MQG-PRIVOPS-DIAG mount /dev/vda says:
-  mount: mounting /dev/vda on /mnt failed: Invalid argument
-[    0.528921] reboot: Power down
+Probing EDD (edd=off to disable)... ok
+c[?7l[2J[    1.148942] Kernel panic - not syncing: No working init found.  Try passing init= option to kernel. See Linux Documentation/admin-guide/init.rst for guidance.
+[    1.151399] CPU: 0 UID: 0 PID: 1 Comm: swapper/0 Not tainted 7.1.8+deb13-amd64 #1 PREEMPT(lazy)  Debian 7.1.8-1~bpo13+1 
+[    1.153263] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.17.0-debian-1.17.0-1~bpo13+1 04/01/2014
+[    1.154992] Call Trace:
+[    1.155473]  <TASK>
+[    1.155883]  dump_stack_lvl+0x5d/0x80
+[    1.156538]  vpanic+0x249/0x440
+[    1.157123]  ? __pfx_kernel_init+0x10/0x10
+[    1.157839]  panic+0x6b/0x70
+[    1.158356]  kernel_init+0x130/0x130
+[    1.158995]  ret_from_fork+0x2ba/0x340
+[    1.159662]  ? __pfx_kernel_init+0x10/0x10
+[    1.160371]  ret_from_fork_asm+0x1a/0x30
+[    1.161074]  </TASK>
+[    1.161623] Kernel Offset: 0x15e00000 from 0xffffffff81000000 (relocation range: 0xffffffff80000000-0xffffffffbfffffff)
+[    1.163440] Rebooting in 1 seconds..
 
 == verdict ==
 exit      0
-bytes     971 of console output
+bytes     1328 of console output
+
+== source disks and the raw channel ==

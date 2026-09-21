@@ -796,3 +796,23 @@ definitely/not/here.h|some-dev-pkg|x|-|?
     [[ "$output" == *"no compiler to ask"* ]]
     [[ "$output" != *"PASS  header"* ]]
 }
+
+@test "prereqs.sh rejects a dynamically linked busybox" {
+    # ap-juicer 2026-09-21 had /usr/bin/busybox and this script said PASS.
+    # It is Debian's dynamic build; the initramfs holds one binary with no
+    # loader, so the microVM panicked with "No working init found".
+    # Presence was never the question.
+    printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/busybox"
+    chmod +x "$STUB_BIN/busybox"
+    # An ldd that reports a dynamic executable, as glibc's does.
+    printf '#!/bin/sh\necho "\tlinux-vdso.so.1 =>  (0x0)"\necho "\tlibc.so.6 => /lib/libc.so.6"\n' \
+        > "$STUB_BIN/ldd"
+    chmod +x "$STUB_BIN/ldd"
+    for t in $(sed -n 's/^\([a-z0-9._-]*\)|.*/\1/p' "$REPO/boot/prereqs.sh"); do
+        [ -e "$STUB_BIN/$t" ] || { printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"; chmod +x "$STUB_BIN/$t"; }
+    done
+    run env PATH="$STUB_BIN:/usr/bin:/bin" MQG_PKG_MANAGER=apt "$REPO/boot/prereqs.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"dynamically linked"* ]]
+    [[ "$output" == *"busybox-static"* ]]
+}
