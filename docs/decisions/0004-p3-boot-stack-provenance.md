@@ -86,6 +86,20 @@ submodule pins, i.e. a second thing that can drift.
   the same UTC day. Not fixed here: `SOURCE_DATE_EPOCH`-style determinism
   is a separate piece of work, and pretending the number is stable would be
   worse than writing down that it is not.
+- **And except that every artifact carries the build DIRECTORY.** Found
+  2026-09-21, while trying to compare a ccache build against a plain one
+  and getting eight differences from a change that touches nothing. EDK II
+  writes each module's debug-symbol path into the PE image it emits —
+  which is why `image/build-image.sh` refuses a `MQG_BUILD_DIR` longer than
+  about 120 characters — so the build directory is an **input**. Two cold
+  builds of identical sources by the same compiler on the same day, at
+  `…/ccache-verify/a` and `…/ccache-verify/w`, agreed on exactly one of the
+  eight artifacts: `OVMF_VARS.fd`, which holds no code. The other seven all
+  differed. So every checksum in the table above means "this source set,
+  built on that date, **under `$HOME/.local/share/mavericks-qemu-guest/build`**",
+  and a second host comparing its numbers has to match the path as well as
+  the sources. Same conclusion as the build-date bullet and the same
+  remedy: written down rather than papered over.
 - **Not yet cross-host.** Everything above was built on one machine
   (`docs/host-profile.md` §1). The claim that it rebuilds elsewhere is a
   hypothesis until a second host tries; `docs/test-hosts.md` names which

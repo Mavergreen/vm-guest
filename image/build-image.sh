@@ -81,6 +81,7 @@ cpuline|whether that -cpu line was one this project had evidence for, as judged 
 qemu|the QEMU this was built with
 compiler|the C compiler the boot stack was built with, and the dialect it was asked for -- NOT a pin, see docs/decisions/0004
 compilerrange|whether that compiler was inside the range this project declares it supports, as judged when this image was built (lib/compiler.sh)
+ccache|whether the firmware was compiled through ccache, which is claimed to change nothing and is recorded so that claim stays checkable (lib/ccache.sh)
 image|sha256 and size of the qcow2 produced
 ingredients|digest over every pin this repo controls (bin/ingredient-fingerprint.sh)
 ingredient.*|each of those pins, one line each, so a diff names what moved"
@@ -1241,6 +1242,17 @@ stage_manifest() {
         # compiler can get this far.
         printf 'compilerrange\t%s\n' \
             "$("$MQG_REPO_ROOT/boot/build-opencore.sh" --compiler-range 2>/dev/null || echo unknown)"
+        # ... AND WHETHER A CACHE STOOD BETWEEN THEM.
+        #
+        # ccache is a build-time tool whose whole claim is that it does not
+        # change the output. It is recorded anyway, and for the same reason
+        # `compiler` is recorded although it is not pinned: the claim is not
+        # verified on every host, and an unverified claim that leaves no
+        # trace is an unverifiable one. If a ccache build ever does produce
+        # different bytes, these lines are what say which images were built
+        # that way. Off by default -- see lib/ccache.sh.
+        printf 'ccache\t%s\n' \
+            "$("$MQG_REPO_ROOT/boot/build-opencore.sh" --ccache 2>/dev/null || echo unknown)"
         printf 'image\t%s %s bytes\n' \
             "$(sha256_file "$out_qcow2")" "$(stat -c %s "$out_qcow2")"
         # EVERY PIN, ONE LINE EACH, AND A DIGEST OVER THE LOT.

@@ -5196,3 +5196,100 @@ minutes there with nothing installed. **G25** is the hypothesis and
 `g25_verdict` in `lib/triangulate.sh` was written in the same commit as the
 entry, because G21 sat in the ledger for a day without one and the run that
 settled it printed nothing about it.
+
+---
+
+## 2026-09-21 — P4 — ccache for the firmware builds, and two things the
+## comparison found
+
+`bin/triangulate.sh` exists to be run again, and the OpenCore and OVMF
+builds are the expensive part of every run. EDK II shells out to the
+compiler through generated makefiles and finds it on `PATH` — the GCC
+toolchain runs `DEF(GCC_X64_PREFIX)gcc`, and `GCC_X64_PREFIX` is
+`ENV(GCC_BIN)`, empty on a normal host — so a `gcc` on `PATH` that happens
+to be `ccache gcc` is the whole mechanism. That seam is already ours: it is
+where `-std=gnu17` and `-Wno-error` are injected.
+
+### ccache is not installed here
+
+`command -v ccache` on the primary host: nothing. So the comparison this
+change deserves — a cache hit against a cold compile — **could not be run,
+and is not claimed.** `lib/ccache.sh` is therefore off by default, in the
+same shape and for the same reason as `MQG_CC_CEILING` in
+`lib/compiler.sh`: the mechanism is complete, the switch is `MQG_CCACHE=1`,
+and the file names the three places to update when somebody produces the
+evidence. `MQG_CCACHE_BIN` is the test seam — a code path whose input is
+"is this program installed" cannot be tested on a host that answers one
+way, and installing a program to test a detection is not a reasonable
+price.
+
+### What *was* measured: the seam does not change the artifacts
+
+Two cold boot-stack builds, both packages, primary host, gcc 13.3.0,
+2026-09-21, **the same UTC day** so the `OpenCore.efi` build-date wrinkle
+cannot confuse the comparison, and — see below — **the same build
+directory**. One straight; one with `MQG_CCACHE=1` and a stand-in `ccache`
+that does nothing but `exec "$@"`, which puts the shim, the `PATH` change
+and the resolved-by-absolute-path wrapper in the way of every compile:
+
+| artifact | no ccache | through the seam |
+|---|---|---|
+| `OVMF_CODE.fd` | `085eebf498d44ae55b6f26625ebc215259a0ed6eb2a895adc149522346754078` | identical |
+| `OVMF_VARS.fd` | `5d2ac383371b408398accee7ec27c8c09ea5b74a0de0ceea6513388b15be5d1e` | identical |
+| `OVMF.fd` | `f0994639dbe7354e1e6b4cced05dcd66005cc386cce17fc027490555c1b31007` | identical |
+| `BOOTx64.efi` | `a351f1cd041526a99774ebc0df96453024b3cc0a83ed544b40964112b50b7bae` | identical |
+| `OpenCore.efi` | `b6929f7cc5302c8bce2a3d08f311dd76cde22acde6ac705b9262e9a516b236e8` | identical |
+| `OpenRuntime.efi` | `805d40c991921d1e445ff35f1adc86d360b40c5f3ca639f56f0a25332e56e1af` | identical |
+| `OpenPartitionDxe.efi` | `593088f77c43a0341318f77806f8eecf9b97689f91f3d77218eedb4ecffdfa95` | identical |
+| `OpenHfsPlus.efi` | `6ee1236cf1f992e61bac79bddbe6114326146adbc5b8afda6702503a02a6d2de` | identical |
+
+All eight. 230 s and 236 s — the stand-in caches nothing, so equal times
+are the expected result and not a disappointment.
+
+That is evidence about the **shim**, which is the part this change
+introduces, and about one thing that could have gone wrong quietly: a shim
+first on `PATH` is also what `lib/compiler.sh` asks `--version`, and if it
+had answered as anything but the compiler it wraps, turning ccache on would
+have changed an image's recorded provenance *and* the stage input stamps
+with it. It answered identically. It is **not** evidence about ccache
+itself.
+
+### The first attempt was wrong, and finding out why is the better half
+
+The two sides were first built at two different directories —
+`ccache-verify/a` and `ccache-verify/b` — and **seven of the eight
+artifacts differed**, from a change that touches nothing. The one that
+matched was `OVMF_VARS.fd`, which holds no code.
+
+EDK II writes each module's debug-symbol path into the PE image it emits.
+That is not news — it is exactly why `image/build-image.sh` refuses a
+`MQG_BUILD_DIR` longer than about 120 characters, with a comment saying
+EDK II enforces a 255-byte limit on debug symbol paths. What had not been
+written down is the consequence: **`MQG_BUILD_DIR` is an input to the boot
+stack.** Every checksum in `decisions/0004` means "this source set, built
+on that date, under `$HOME/.local/share/mavericks-qemu-guest/build`", and a
+second host comparing its numbers has to match the path as well as the
+sources. A bullet now says so beside the `OpenCore.efi` build-date one,
+which is the same kind of admission.
+
+Worth noticing how this was caught: by running a comparison that was
+*supposed* to produce eight "identical"s and getting eight differences
+instead. A change that had been reasoned about rather than measured would
+have shipped with "ccache does not affect the output" and no test anyone
+could have run to doubt it.
+
+### Where the cache goes
+
+`$MQG_BUILD_DIR/ccache`, never the repository. The repo is NFS at 9–15 ms
+per file create and a ccache directory is thousands of small files, so
+caching there would be slower than not caching. Putting it in the build
+tree also means one decision covers it: `bin/triangulate.sh --keep-build`
+keeps the build tree and keeps the cache with it.
+
+Every image manifest gains a `ccache` line saying whether the firmware was
+compiled through it. The claim is that it changes nothing; an unverified
+claim that leaves no trace is an unverifiable one. The stage input stamps
+deliberately do **not** include it — installing ccache must not rebuild the
+firmware, which would be the opposite of the point.
+
+Test count 470 → 495.

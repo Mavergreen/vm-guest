@@ -68,6 +68,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$MQG_REPO_ROOT/lib/common.sh"
 # shellcheck source=../lib/compiler.sh
 . "$MQG_REPO_ROOT/lib/compiler.sh"
+# shellcheck source=../lib/ccache.sh
+. "$MQG_REPO_ROOT/lib/ccache.sh"
 
 if [ "${1:-}" = "--list-artifacts" ]; then
     printf '%s\n' "${FIRMWARE_FILES[@]}"
@@ -162,6 +164,11 @@ fi
 grep -q 'Wno-error' "$UDK/$OVMF_DSC" \
     || die "$OVMF_DSC still promotes upstream's warnings to errors"
 
+# Same seam, same switch, same reporting as boot/build-opencore.sh -- it
+# lives in lib/ccache.sh rather than in either script because both need it
+# and a check that exists twice is a check that will only be fixed once.
+ccache_setup
+
 log "building $OVMF_DSC from audk $AUDK_COMMIT in $UDK"
 log "arch $OVMF_ARCH, toolchain $OVMF_TOOLCHAIN, target $OVMF_TARGET"
 log "compiler: $("$MQG_REPO_ROOT/boot/build-opencore.sh" --compiler)"
@@ -181,6 +188,7 @@ start=$(date +%s)
          "rather than working around it"
 elapsed=$(( $(date +%s) - start ))
 log "build finished in $((elapsed / 60))m$((elapsed % 60))s"
+ccache_stats
 
 FV="$UDK/Build/OvmfX64/${OVMF_TARGET}_${OVMF_TOOLCHAIN}/FV"
 [ -d "$FV" ] || die "build reported success but $FV does not exist"

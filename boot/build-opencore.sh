@@ -196,6 +196,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$MQG_REPO_ROOT/lib/vendor.sh"
 # shellcheck source=../lib/compiler.sh
 . "$MQG_REPO_ROOT/lib/compiler.sh"
+# shellcheck source=../lib/ccache.sh
+. "$MQG_REPO_ROOT/lib/ccache.sh"
 
 artifact_names() {
     local entry
@@ -308,6 +310,14 @@ fi
 # whether the project claimed to support it at the time.
 if [ "${1:-}" = "--compiler-range" ]; then
     compiler_range_line
+    exit 0
+fi
+
+# Whether this host would use ccache, and why. image/build-image.sh records
+# it in the manifest: the claim is that ccache changes nothing, and an
+# unverified claim that leaves no trace is an unverifiable one.
+if [ "${1:-}" = "--ccache" ]; then
+    ccache_line
     exit 0
 fi
 
@@ -472,6 +482,11 @@ else
     log "EDK II tree already assembled at audk $AUDK_COMMIT"
 fi
 
+# Optional, detected, and off unless asked for. Absent ccache never fails
+# a build; whether it was used is reported either way and recorded in the
+# image manifest. See lib/ccache.sh for why the default is off.
+ccache_setup
+
 log "building OpenCore $OC_VERSION in $SRC"
 log "arch $OC_ARCH, toolchain $OC_TOOLCHAIN, target $OC_TARGET (this takes a while and is noisy)"
 log "compiler: $(host_compiler)"
@@ -485,6 +500,7 @@ start=$(date +%s)
 ) || die "build_oc.tool failed -- see $UDK/build.log, and report the error rather than working around it"
 elapsed=$(( $(date +%s) - start ))
 log "build_oc.tool finished in $((elapsed / 60))m$((elapsed % 60))s"
+ccache_stats
 
 BUILT="$UDK/Build/OpenCorePkg/${OC_TARGET}_${OC_TOOLCHAIN}/$OC_ARCH"
 [ -d "$BUILT" ] || die "build reported success but $BUILT does not exist"
