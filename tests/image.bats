@@ -281,3 +281,18 @@ setup() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"nic"* ]]
 }
+
+@test "compare-images.sh boots each image with the NIC its manifest names" {
+    # 10.9 gives a NIC it meets after installation no network service, so
+    # booting an image with the wrong NIC produces "never answered SSH" and
+    # a comparison that blames the image. The manifest knows which; a
+    # manifest with no nic field predates the field, and every image from
+    # then was built with usb-net.
+    local S="$BATS_TEST_TMPDIR"
+    printf 'name\tx\nnic\te1000-82545em\n' > "$S/a.manifest"
+    printf 'name\tx\n' > "$S/b.manifest"
+    eval "$(sed -n '/^nic_device_for() {/,/^}/p' "$REPO/image/compare-images.sh")"
+    [ "$(nic_device_for "$S/a.manifest")" = "e1000-82545em,netdev=net0" ]
+    [ "$(nic_device_for "$S/b.manifest")" = "usb-net,bus=usb.0,netdev=net0" ]
+    [ "$(nic_device_for "$S/nosuch.manifest")" = "usb-net,bus=usb.0,netdev=net0" ]
+}

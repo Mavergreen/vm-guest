@@ -245,6 +245,30 @@ ssh_guest() {
         -i "$priv_key" -p "$port" "$ssh_user@localhost" "$@"
 }
 
+# WHICH NIC THIS IMAGE NEEDS, ASKED RATHER THAN ASSUMED.
+#
+# This script used to hardcode usb-net, which was right while every image
+# had one. It is not a runtime knob: 10.9 creates network services for the
+# interfaces it saw during installation, so an image booted with a NIC it
+# has never met comes up with no network and never answers SSH -- which
+# this script would report as "never booted". Measured 2026-09-21, see
+# docs/decisions/0008 and docs/open-questions.md Q2.
+#
+# The manifest says which, and this is the "which image is this" question
+# the comment above anticipated. Images built before the field existed were
+# all built with usb-net, so that is what a missing field means -- not a
+# guess, a fact about when the field was added.
+nic_device_for() {
+    local manifest=$1 nic
+    # No pipe and no `head`: a closed pipe under `set -o pipefail` is how
+    # this project has killed a long-running boot before now.
+    nic=$(awk -F'\t' '$1 == "nic" { print $2; exit }' "$manifest" 2>/dev/null)
+    case ${nic:-usb-net} in
+        usb-net) printf '%s\n' "usb-net,bus=usb.0,netdev=net0" ;;
+        *)       printf '%s\n' "${nic},netdev=net0" ;;
+    esac
+}
+
 # Boot one image on its own -- no installer media, nothing else attached --
 # collect everything this comparison needs, and shut it down.
 #
@@ -252,7 +276,7 @@ ssh_guest() {
 # unattended" and "both answer SSH" are two of the four things being
 # claimed, and an offline file listing cannot test either.
 collect() {
-    local name=$1 port=$2 out qcow2 vars pid elapsed=0
+    local name=$1 port=$2 out qcow2 vars pid elapsed=0 nic
     qcow2=$images_dir/$name.qcow2
     [ -f "$qcow2" ] || die "no image at $qcow2"
     out=$work_root/$name
@@ -268,7 +292,8 @@ collect() {
     vars=$out/OVMF_VARS.fd
     [ -f "$vars" ] || cp "$MQG_BUILD_DIR/firmware/OVMF_VARS.fd" "$vars"
 
-    log "booting $name on port $port"
+    nic=$(nic_device_for "$images_dir/$name.manifest")
+    log "booting $name on port $port with -device $nic"
     "$qemu_bin" \
         -accel "$accel" -machine "$machine,vmport=off" -cpu "$cpu" \
         -m "$ram" -smp "$smp" \
@@ -283,7 +308,7 @@ collect() {
         -drive "id=target,if=none,format=qcow2,file=$qcow2" \
         -device "ide-hd,bus=ide.0,drive=target" \
         -netdev "user,id=net0,hostfwd=tcp::$port-:22" \
-        -device "usb-net,bus=usb.0,netdev=net0" \
+        -device "$nic" \
         -device "usb-kbd,bus=usb.0" -device "usb-mouse,bus=usb.0" \
         -device "VGA,vgamem_mb=64" -display none \
         -monitor "unix:$out/monitor.sock,server,nowait" \
