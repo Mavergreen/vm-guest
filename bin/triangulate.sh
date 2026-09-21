@@ -805,6 +805,7 @@ add G17 g17_verdict "$nested"
 add G18 g18_verdict "$have_ept"
 add G19 g19_verdict
 add G20 g20_verdict "$media_built" "$failed_stage" "$media_failure_kind" "$media_failure"
+add G21 g21_verdict "$ignore_msrs" "$install_ok"
 
 # --- report -----------------------------------------------------------------
 

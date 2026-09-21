@@ -449,6 +449,29 @@ g18_verdict() {
 # one install at a time, because running two is the thing the entry warns
 # about. Saying so is better than omitting the row, because the reason is
 # the finding.
+# G21 -- kvm.ignore_msrs=1 was set on the primary host on 2026-09-17 on the
+# authority of Somlo and OSX-KVM, and never tested without. This is the
+# entry that existed in the ledger for a full day with no verdict function,
+# so a run that could have settled it said nothing about it. A hypothesis
+# the harness cannot report on is not being tested by the harness.
+g21_verdict() {
+    local ignore_msrs=$1 install_ok=$2
+    case "$ignore_msrs" in
+        unknown|'')
+            judge CANNOT-SAY "this host does not expose kvm.ignore_msrs (not Linux, or the module parameter is unreadable)" ;;
+        1|Y|y)
+            judge CANNOT-SAY "ignore_msrs is on here, as on the primary host, so this run cannot tell a necessary setting from an inherited one" ;;
+    esac
+    case "$install_ok" in
+        yes)
+            judge REFUTE "ignore_msrs is OFF here and a guest installed and answered SSH anyway: the setting is not required, at least on this CPU and this QEMU. Stop asking users to change a kernel parameter until something shows it is needed" ;;
+        no)
+            judge CANNOT-SAY "ignore_msrs is off here and the install did not complete -- but it failed for a named reason unrelated to MSRs, so this says nothing either way. See the stage table" ;;
+        *)
+            judge CANNOT-SAY "ignore_msrs is off here, but no install was attempted at this level: run --full to settle it" ;;
+    esac
+}
+
 g19_verdict() {
     judge CANNOT-SAY "not tested: this script never runs two installs at once, which is the standing advice the entry gives. Settling it needs the deliberate experiment the entry describes"
 }

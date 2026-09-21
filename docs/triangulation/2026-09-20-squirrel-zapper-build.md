@@ -72,3 +72,56 @@ G13, G14, G16 need a booted guest or a Xeon; G19 needs the deliberate
 two-install experiment. `--full` on this host would settle the first
 three — and would also test **G21**, since this machine runs with
 `kvm.ignore_msrs=N`.
+
+---
+
+# `--full` completes — 2026-09-21
+
+Eleven stages, all `ok`. A Mavericks guest installed, booted without
+installer media, and answered SSH on a second machine.
+
+```
+esd 216s · opencore 393s · ovmf 229s · efi 2s · openssh 1s · payload 1s
+media 118s · target 0s · install 1332s · verify 113s · manifest 99s
+```
+
+**Install: 1332 s against 780–817 s on the primary host.** 1.7x, for a
+2-core Broadwell against a 6-core Coffee Lake. P6 should budget from the
+ratio rather than from our own wall clock, and TCG will make it worse.
+
+## G21 REFUTED — the sudo step we never needed
+
+`kvm.ignore_msrs=1` was applied on the primary host on 2026-09-17 because
+Somlo and OSX-KVM both call for it, and was **never tested without**.
+`squirrel-zapper` runs with `ignore_msrs=N` and installed, verified and
+answered SSH regardless.
+
+Scope of the refutation: this CPU (Broadwell) and QEMU 11.1.1. That is
+enough to stop *requiring* it.
+
+Two things made this nearly invisible twice over:
+
+1. It lived in §3 of `host-profile.md` as a **host state change** rather
+   than in §4 as a **hypothesis**, so for two phases nothing tried to
+   falsify it. The ledger is where assumptions go to be tested; this one
+   was not in the ledger.
+2. Once it was added as G21, `bin/triangulate.sh` had **no verdict
+   function for it** — so the run that settled it printed nothing about
+   it. The refutation came from reading `kvm_ignore_msrs N` in the facts
+   block next to a successful install, by hand. A hypothesis the harness
+   cannot report on is not being tested by the harness. `g21_verdict`
+   now exists.
+
+## Also confirmed by a booted guest
+
+| Entry | Verdict | What it now rests on |
+|---|---|---|
+| **G13** | CONFIRM | EHCI+UHCI carried a full install and SSH **under QEMU 11.1.1** — the finding survives three major QEMU versions, which the original entry could not know |
+| **G16** | CONFIRM | the guest reports connection bus `SATA` for `ide-hd` on q35, on a different QEMU |
+| G17, G18, G20 | CONFIRM | as in the `--build` run |
+
+## Still open here
+
+**G14** needs a Xeon — the Mac Pro 1,1. **G19** needs the deliberate
+two-install experiment, which this script deliberately never performs
+because the entry's own standing advice is one build per host.
