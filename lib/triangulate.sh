@@ -529,3 +529,30 @@ g5_verdict() {
         judge CANNOT-SAY "built here by this host's toolchain: OVMF_CODE.fd $ovmf, OpenCore EFI image $opencore. One host cannot tell a reproducible build from a lucky one -- diff these against another host's JSON"
     fi
 }
+
+# G24 -- "the NIC ranking is QEMU's, not this host's." The default guest NIC
+# became e1000-82545em on 2026-09-21 on numbers taken entirely under QEMU
+# 8.2.2 (docs/decisions/0008). Two things another host can say without
+# running a benchmark: whether its QEMU offers the device the default now
+# names, and -- at --full -- whether a guest installs and answers SSH over
+# it, which is the same evidence the decision was made on.
+#
+# This function exists because G21 sat in the ledger for a day without one,
+# and the run that settled it printed nothing about it.
+g24_verdict() {
+    local missing=$1 install_ok=$2 qemu_version=$3
+    case " $missing " in
+        *" e1000-82545em "*)
+            judge REFUTE "this QEMU does not offer e1000-82545em, which image/build-image.sh now defaults to. On this host the default is unbuildable and --nic usb-net is the fallback"
+            return ;;
+    esac
+    if [ -z "$qemu_version" ]; then
+        judge CANNOT-SAY "no QEMU here to ask about the device the default names"
+    elif [ "$install_ok" = yes ]; then
+        judge CONFIRM "a guest installed and answered SSH over e1000-82545em on QEMU $qemu_version -- the device works outside 8.2.2, though this run measured no throughput"
+    elif [ "$install_ok" = no ]; then
+        judge CANNOT-SAY "QEMU $qemu_version offers e1000-82545em but the install did not finish, and it stopped for a named reason of its own: see the stage table before blaming the NIC"
+    else
+        judge CANNOT-SAY "QEMU $qemu_version offers e1000-82545em, but only a --full run puts a guest on it. The throughput half of this entry needs a deliberate benchmark, which this script does not run"
+    fi
+}

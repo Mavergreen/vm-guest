@@ -270,6 +270,33 @@ tri_report() {
     [[ "$output" == *0004* ]]
 }
 
+@test "G24 refutes when the host's QEMU has no e1000-82545em to default to" {
+    # The default guest NIC became e1000-82545em on measurement taken
+    # entirely under QEMU 8.2.2 (docs/decisions/0008). A host whose QEMU
+    # cannot offer the device refutes the default outright, and should be
+    # told so rather than discovering it mid-install.
+    run g24_verdict " e1000-82545em" unknown 9.0.0
+    [[ "$output" == REFUTE* ]]
+    [[ "$output" == *"usb-net"* ]]
+}
+
+@test "G24 confirms only from an install, not from a device list" {
+    # Every number behind the decision came from one QEMU. A probe can say
+    # the device exists; only a guest that installed and answered SSH over
+    # it says the device works on this one.
+    run g24_verdict "" unknown 11.1.1
+    [[ "$output" == CANNOT-SAY* ]]
+    run g24_verdict "" yes 11.1.1
+    [[ "$output" == CONFIRM* ]]
+    [[ "$output" == *"11.1.1"* ]]
+}
+
+@test "G24 does not blame the NIC for an install that failed elsewhere" {
+    run g24_verdict "" no 11.1.1
+    [[ "$output" == CANNOT-SAY* ]]
+    [[ "$output" == *"stage table"* ]]
+}
+
 @test "G19 is permanently cannot-say, and says why" {
     run g19_verdict
     [[ "$output" == CANNOT-SAY* ]]
@@ -306,7 +333,8 @@ tri_report() {
                 "$(g18_verdict yes)" \
                 "$(g19_verdict)" \
                 "$(g20_verdict unknown)" \
-                "$(g20_verdict not-run opencore)"; do
+                "$(g20_verdict not-run opencore)" \
+                "$(g24_verdict '' unknown 8.2.2)"; do
         run tri_is_verdict "${line%%	*}"
         [ "$status" -eq 0 ]
     done

@@ -502,7 +502,7 @@ qemu_devices=""
 qemu_machines=""
 qemu_has_penryn=no
 missing_devices=""
-DEVICES="ich9-usb-ehci1 ich9-usb-uhci1 ich9-usb-uhci2 ich9-usb-uhci3 usb-storage usb-net usb-kbd usb-mouse usb-tablet ide-hd VGA"
+DEVICES="ich9-usb-ehci1 ich9-usb-uhci1 ich9-usb-uhci2 ich9-usb-uhci3 usb-storage usb-net e1000-82545em virtio-net-pci usb-kbd usb-mouse usb-tablet ide-hd VGA"
 if [ -n "$qemu_path" ]; then
     qemu_version=$("$qemu_bin" --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p' | first_line)
     qemu_accels=$("$qemu_bin" -accel help 2>&1 | sed -e '1d' -e 's/^[[:space:]]*//' | tr '\n' ' ')
@@ -806,6 +806,7 @@ add G18 g18_verdict "$have_ept"
 add G19 g19_verdict
 add G20 g20_verdict "$media_built" "$failed_stage" "$media_failure_kind" "$media_failure"
 add G21 g21_verdict "$ignore_msrs" "$install_ok"
+add G24 g24_verdict "$missing_devices" "$install_ok" "$qemu_version"
 
 # --- report -----------------------------------------------------------------
 
