@@ -1,0 +1,77 @@
+# ap-juicer — Mac Pro 1,1, Debian 13 — probe
+
+2026-09-21. The third host, and the one two ledger entries have been
+waiting for: **a Xeon**.
+
+Xeon 5150 (Woodcrest, 2006), 4 cores, 9.9 GiB RAM, Debian 13 trixie,
+kernel `7.1.8+deb13-amd64`, QEMU 11.0.2, repo on **ZFS**, images on
+**ext2/ext3**.
+
+## The blocker, and it is fixable
+
+```
+accel_kvm    no
+kvm_note     /dev/kvm exists but is not writable by this user (group membership?)
+accel_chosen tcg
+```
+
+Not a hardware limitation — a group membership. Until it is fixed every
+result here is about TCG, and an install would take hours rather than
+minutes. **`sudo usermod -aG kvm $USER`, then log back in.**
+
+It also makes the CPU table worthless on this host, which the report says
+itself: under TCG the emulator implements SSE4.1 regardless, so every row
+passes and nothing is learned about the hardware. **G25 CANNOT-SAY** for
+exactly that reason — a verdict function correctly declining to answer.
+
+## What it settled anyway
+
+| Entry | Verdict | Why it matters |
+|---|---|---|
+| **G3** | REFUTE | No SSE4.1, as `docs/test-hosts.md` predicted from CPU generations. **Not a stopper**: `decisions/0009` established that 10.9 boots on `-cpu Conroe`, so this host takes the Conroe row rather than being excluded. The prediction and the escape hatch were both written before the machine was ever run. |
+| **G18** | REFUTE | No EPT. Nested virtualization and the VMware Fusion goal of `decisions/0005` are out of reach here whatever CPU model we pick. |
+| **G10** | REFUTE | ext2/ext3, no reflinks: golden promotion is a full copy. Budget time and space. |
+| **G12** | REFUTE | Repo on local ZFS, 0.39 ms per file create against 10–15 ms of NFS on the other two hosts. The repo/image split this project needs is **unnecessary** here. |
+| **G4** | REFUTE | 4 cores, no SMT. P5's pinning ladder does not transfer. |
+| **G14** | CANNOT-SAY | *"this IS a Xeon — the host the entry has been waiting for."* Settling it needs an install with SMBIOS `MacPro5,1`, which `triangulate.sh` deliberately does not do. |
+
+## Two harness bugs, both ours
+
+A third host, a third distribution, and the fact-gathering broke in two
+new ways.
+
+**1. A fact printed with no name.**
+
+```
+  build_tree_kept        n/a
+  yes
+```
+
+Built as `[ "$level" = probe ] && echo n/a || { … } && echo yes || echo
+no`. On a probe `echo n/a` *succeeds*, so the trailing `&& echo yes` ran
+as well and the value became two lines. The SC2015 shape shellcheck flags
+elsewhere in this repo — it does not reach inside a command substitution.
+
+**2. A topology that describes no machine.**
+
+```
+  cpu_cores 4 · cpu_logical 3 · cpu_threads_per_core 0
+```
+
+`cpu_cores` reads the *topology* (`cpu cores` × sockets); `cpu_logical`
+counts *online* processors. They are not comparable, so their quotient
+can be anything, and integer division turned 3/4 into 0. Now derived from
+`/proc/cpuinfo`'s own per-socket `siblings`, and reported as `unknown`
+rather than as a number nobody can act on.
+
+Both fixed with regression tests asserting the report contains no bare
+value line and no zero threads-per-core.
+
+## Next here, in order
+
+1. `usermod -aG kvm`, log back in, re-run `--probe`. The CPU table then
+   means something.
+2. `./bin/triangulate.sh --full --cpu Conroe --keep-build`.
+3. **G14**: an install with SMBIOS `MacPro5,1`. This is the only machine
+   that can settle whether `AppleTyMCEDriver`'s panic was about the Xeon
+   or about something else — and my P1 explanation is what is on trial.

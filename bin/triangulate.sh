@@ -463,8 +463,27 @@ vendor=$(cpu_vendor || true); vendor=${vendor:-unknown}
 flags=$(cpu_flags || true)
 cores=$(cpu_cores || echo 0)
 logical=$(cpu_logical || echo 0)
-threads=1
-[ "$cores" -gt 0 ] 2>/dev/null && threads=$((logical / cores))
+# threads-per-core, guarded. `cpu_cores` reads the topology (cpu cores x
+# sockets) while `cpu_logical` counts ONLINE processors, so the two are not
+# comparable and their ratio can be nonsense: ap-juicer reported 4 cores, 3
+# logical and therefore 0 threads per core, which describes no machine.
+# Prefer /proc/cpuinfo's own per-socket `siblings`, and where the numbers
+# disagree say unknown rather than print a quotient nobody can act on.
+threads=unknown
+if [ "$os" = Linux ] && [ -r /proc/cpuinfo ]; then
+    sib=$(awk -F': *' '/^siblings/ { print $2; exit }' /proc/cpuinfo)
+    percore=$(awk -F': *' '/^cpu cores/ { print $2; exit }' /proc/cpuinfo)
+    if [ -n "$sib" ] && [ -n "$percore" ] && [ "$percore" -gt 0 ] 2>/dev/null; then
+        threads=$((sib / percore))
+    fi
+fi
+if [ "$threads" = unknown ] || [ "$threads" -lt 1 ] 2>/dev/null; then
+    if [ "$cores" -gt 0 ] 2>/dev/null && [ "$logical" -ge "$cores" ] 2>/dev/null; then
+        threads=$((logical / cores))
+    else
+        threads=unknown
+    fi
+fi
 ram=$(ram_mib || echo 0)
 
 case $os in
@@ -915,9 +934,21 @@ tri_fact install_ok "$install_ok"
 # it in the "What stays on this host" section, and a user diffing several
 # hosts should not have to read prose to find out which of them still has a
 # build tree.
-tri_fact build_tree_kept "$([ "$level" = probe ] && echo n/a \
-    || { [ "$keep" -eq 1 ] || [ "$keep_build" -eq 1 ] || [ "$image_dir_exists" = yes ]; } \
-    && echo yes || echo no)"
+# An if, not an && || chain. As written before 2026-09-21 this was
+#   [ "$level" = probe ] && echo n/a || { ... } && echo yes || echo no
+# and on a probe `echo n/a` SUCCEEDS, so the trailing `&& echo yes` ran
+# too: the value became "n/a\nyes" and the report printed a second line
+# with no fact name on it. Found on ap-juicer, the third host. Same
+# SC2015 shape shellcheck flags elsewhere in this repo -- it did not
+# reach inside the command substitution.
+if [ "$level" = probe ]; then
+    build_tree_kept=n/a
+elif [ "$keep" -eq 1 ] || [ "$keep_build" -eq 1 ] || [ "$image_dir_exists" = yes ]; then
+    build_tree_kept=yes
+else
+    build_tree_kept=no
+fi
+tri_fact build_tree_kept "$build_tree_kept"
 tri_fact ovmf_sha256 "$ovmf_sha"
 tri_fact opencore_sha256 "$opencore_sha"
 

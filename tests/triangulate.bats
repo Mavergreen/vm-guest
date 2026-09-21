@@ -623,3 +623,27 @@ populate_image_dir() {
     grep -q 'What stays on this host' "$REPO/bin/triangulate.sh"
     grep -q 'A SECOND RUN THEREFORE SKIPS' "$REPO/bin/triangulate.sh"
 }
+
+@test "build_tree_kept is one value, not two lines" {
+    # ap-juicer 2026-09-21: the value was built with
+    #   [ ... ] && echo n/a || { ... } && echo yes || echo no
+    # and on a probe `echo n/a` succeeds, so `&& echo yes` ran too. The
+    # report printed a second line with no fact name on it.
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/img" "$REPO/bin/triangulate.sh" --probe
+    [ "$status" -eq 0 ]
+    line=$(printf '%s\n' "$output" | grep -c '^  build_tree_kept')
+    [ "$line" -eq 1 ]
+    # No fact line may be a bare value with no name.
+    ! printf '%s\n' "$output" | grep -qE '^  (yes|no|n/a)[[:space:]]*$'
+}
+
+@test "threads per core is never zero" {
+    # Same host: 4 cores, 3 online logical CPUs, so logical/cores was 0 --
+    # a quotient describing no machine. cpu_cores reads topology and
+    # cpu_logical counts ONLINE processors; they are not comparable.
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/img" "$REPO/bin/triangulate.sh" --probe
+    [ "$status" -eq 0 ]
+    t=$(printf '%s\n' "$output" | awk '/^  cpu_threads_per_core/ { print $2 }')
+    [ -n "$t" ]
+    [ "$t" != 0 ]
+}
