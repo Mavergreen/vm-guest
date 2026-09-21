@@ -101,6 +101,15 @@ What to run here, in order:
    - **Stops in an earlier stage** → nothing about G14 either way, and the
      report names the stage.
 
+   **Do not sit through the whole timeout.** A panicked guest never
+   answers SSH, so the install stage would burn its full hour
+   (`MQG_INSTALL_TIMEOUT`, 3600 s by default) before giving up — while a
+   healthy install on this host takes about 1650 s. `build-image.sh` logs
+   a screenshot verdict every two minutes; a `text` screen that has not
+   changed by the four- or six-minute line is the panic, and the PNG
+   beside it says so outright. Let the stage fail on its own if you can,
+   because the recorded failure is what the report judges.
+
    Either result also wants a `NOTES.md` entry, including "it panicked and
    I could not read why".
 
