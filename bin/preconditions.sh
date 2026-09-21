@@ -20,7 +20,7 @@ verdicts=$(
     kvm_device_verdict /dev/kvm
     ignore_msrs_verdict "$msrs"
     ovmf_verdict "$OVMF_DIR"
-    for t in qemu-system-x86_64 qemu-img dmg2img kpartx sgdisk rsync xxd \
+    for t in qemu-system-x86_64 qemu-img dmg2img kpartx sgdisk xxd \
              openssl curl unzip python3 mkfs.hfsplus bats; do
         tool_verdict "$t"
     done

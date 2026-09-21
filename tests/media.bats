@@ -204,13 +204,93 @@ setup() {
     # The verification must happen after the ownership pass, not before:
     # the microVM mounts the volume, and a check that ran first would not
     # cover it. Compare the line numbers of the last call to each.
-    own=$(grep -n '^fix_media_ownership ' \
+    own=$(grep -n '^fix_media_ownership "' \
         "$REPO/media/build-installer-img.sh" | tail -1 | cut -d: -f1)
-    ver=$(grep -n 'verify_media_packages$' \
+    ver=$(grep -n '^verify_media_packages "' \
         "$REPO/media/build-installer-img.sh" | tail -1 | cut -d: -f1)
     [ -n "$own" ]
     [ -n "$ver" ]
     [ "$ver" -gt "$own" ]
+}
+
+# --- G26: the build must not need a desktop seat -------------------------
+
+@test "the media build attaches no loop device and mounts nothing" {
+    # udisks2's polkit policy grants loop-setup to a user AT A SEAT. An
+    # SSH session has none, so ap-juicer -- a headless server, and every
+    # CI runner P6 will ever use -- could not build media at all. The
+    # whole HFS+ assembly now happens inside the privops microVM.
+    #
+    # Asserted against the script rather than by running it, because the
+    # failure it guards against is a host this suite is not running on.
+    ! grep -qE '^[^#]*\b(udisksctl|losetup|findmnt|lsblk)\b' \
+        "$REPO/media/build-installer-img.sh"
+    ! grep -qE '^[^#]*\bhfs_(attach|mount|with_mounted)' \
+        "$REPO/media/build-installer-img.sh"
+    # hfs_create_gpt stays: it writes a plain file with mkfs.hfsplus,
+    # sgdisk and dd, and needs no privilege and no mount.
+    grep -q 'hfs_create_gpt' "$REPO/media/build-installer-img.sh"
+}
+
+@test "the media build refuses before dmg2img when the backend is missing" {
+    # Five gigabytes of conversion, and then "the privops backend is not
+    # available on this host" is how squirrel-zapper spent an hour. The
+    # backend is now what builds the media at all, so it is checked first.
+    check=$(grep -n 'privops_backend_missing' \
+        "$REPO/media/build-installer-img.sh" | head -1 | cut -d: -f1)
+    convert=$(grep -n 'dmg2img -s -i "$esd_dmg"' \
+        "$REPO/media/build-installer-img.sh" | head -1 | cut -d: -f1)
+    [ -n "$check" ]
+    [ -n "$convert" ]
+    [ "$check" -lt "$convert" ]
+}
+
+@test "the assembly payload never chowns: that is the ownership pass's job" {
+    # fix-ownership.sh records the six setuid and setgid modes BEFORE the
+    # chown that strips them and restores them after. A chown anywhere
+    # else would run before the code that makes it reversible -- a mistake
+    # that has already cost this project a full rebuild.
+    ! grep -qE '^[^#]*\bchown\b' "$REPO/media/privops/assemble.sh"
+    grep -q 'SPECIAL=' "$REPO/media/privops/fix-ownership.sh"
+}
+
+@test "what gets injected is staged before the ownership pass runs" {
+    # Anything injected after the chown would be the one uid-1000 file on
+    # otherwise root-owned media -- the state that made launchd say
+    # "Dubious ownership on file (skipping)" and load nothing at all.
+    asm=$(grep -n '^assemble_media$' \
+        "$REPO/media/build-installer-img.sh" | tail -1 | cut -d: -f1)
+    own=$(grep -n '^fix_media_ownership "' \
+        "$REPO/media/build-installer-img.sh" | tail -1 | cut -d: -f1)
+    [ -n "$asm" ]
+    [ -n "$own" ]
+    [ "$asm" -lt "$own" ]
+    grep -q 'MQG_RAW3' "$REPO/media/privops/assemble.sh"
+}
+
+@test "--check-sums holds guest-computed digests to the same constant" {
+    # The host cannot read the media any more, so the digests come from
+    # the microVM. The comparison is still against media/apple-packages.sha256
+    # -- what Apple shipped -- and still lives in the script whose job is
+    # "is this what it should be".
+    sums=$BATS_TEST_TMPDIR/sums.txt
+    grep -v '^#' "$REPO/media/apple-packages.sha256" \
+        | sed 's|  \./|  |' > "$sums"
+    run "$REPO/media/verify-installer-img.sh" --check-sums "$sums"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all 16 of Apple's packages match"* ]]
+
+    # One wrong digest is named, not merely counted.
+    sed 's/^a0609f3d/b0609f3d/' "$sums" > "$sums.bad"
+    run "$REPO/media/verify-installer-img.sh" --check-sums "$sums.bad"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Essentials.pkg: FAILED"* ]]
+
+    # And a package the guest never reported is MISSING, not passed over.
+    grep -v 'OSInstall.mpkg' "$sums" > "$sums.short"
+    run "$REPO/media/verify-installer-img.sh" --check-sums "$sums.short"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"OSInstall.mpkg: MISSING"* ]]
 }
 
 @test "Apple's pinned checksums cover exactly the packages an install needs" {

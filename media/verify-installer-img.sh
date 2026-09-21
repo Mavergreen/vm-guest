@@ -86,11 +86,61 @@ check_apple_packages() {
     log "all $n of Apple's packages match, in $where"
 }
 
+# check_apple_sums <file>
+#
+# The same question as check_apple_packages -- "is this what Apple
+# shipped?" -- asked of checksums that something else computed, given as
+# `<sha256>  <name>` lines.
+#
+# That something else is the privops microVM. Since G26 the host attaches
+# no loop device and mounts nothing, so `cd` into the media's Packages
+# directory is not available to it; the guest reads the files and prints
+# their digests, and the comparison against the constant happens here,
+# where every other version of this comparison lives.
+#
+# The check is no weaker for it. What made the FIRST version of this check
+# useless was that it read through the mount that had just written the
+# files -- the page cache, not the disk. The digests this compares come
+# from a microVM booted after the writing one exited: a fresh kernel with
+# no cache at all, reading through virtio off the host's file.
+check_apple_sums() {
+    local sums=$1 bad n
+    [ -f "$sums" ] || die "no such file: $sums"
+    [ -f "$APPLE_PACKAGES" ] || die "missing $APPLE_PACKAGES"
+    n=$(grep -cv '^#' "$APPLE_PACKAGES" || true)
+    # Names are compared with any leading ./ removed: the pinned file
+    # carries sha256sum's own `./Name` spelling and a digest computed
+    # elsewhere need not.
+    bad=$(awk '
+        FILENAME == want {
+            if ($0 ~ /^#/ || NF < 2) next
+            name = $2; sub(/^\.\//, "", name); expect[name] = $1; next
+        }
+        { if (NF < 2) next
+          name = $2; sub(/^\.\//, "", name); got[name] = $1 }
+        END {
+            for (name in expect) {
+                if (!(name in got))
+                    print name ": MISSING -- the media does not have it"
+                else if (got[name] != expect[name])
+                    print name ": FAILED -- " got[name] \
+                          " is not what Apple shipped (" expect[name] ")"
+            }
+        }' want="$APPLE_PACKAGES" "$APPLE_PACKAGES" "$sums" | sort)
+    if [ -n "$bad" ]; then
+        printf '%s\n' "$bad" | sed 's/^/    /' >&2
+        warn "the checksums in $sums are not what Apple shipped"
+        return 1
+    fi
+    log "all $n of Apple's packages match, by checksums read from $sums"
+}
+
 usage() {
     cat <<EOF
 usage: $(basename "$0") [--built <img>] [--reference <img>]
        $(basename "$0") --compare-trees <a> <b>
        $(basename "$0") --check-packages <dir>
+       $(basename "$0") --check-sums <file>
        $(basename "$0") --required
 
   --built/--reference  Override the images to compare.
@@ -98,6 +148,10 @@ usage: $(basename "$0") [--built <img>] [--reference <img>]
   --check-packages     Check a directory holding Apple's Packages against
                        media/apple-packages.sha256 -- what Apple shipped,
                        as a constant. Needs no image and no reference.
+  --check-sums         The same check, against "<sha256>  <name>" lines
+                       computed somewhere this host cannot reach -- the
+                       privops microVM, which is what reads the media now
+                       that nothing here mounts it.
   --required           Print the files an install cannot proceed without.
 EOF
 }
@@ -108,12 +162,16 @@ reference=
 tree_a=
 tree_b=
 pkg_dir=
+sums_file=
 while [ $# -gt 0 ]; do
     case $1 in
         --required) mode=required ;;
         --check-packages)
             [ $# -ge 2 ] || { usage >&2; exit 2; }
             mode=packages; pkg_dir=$2; shift ;;
+        --check-sums)
+            [ $# -ge 2 ] || { usage >&2; exit 2; }
+            mode=sums; sums_file=$2; shift ;;
         --compare-trees)
             mode=trees
             [ $# -ge 3 ] || { usage >&2; exit 2; }
@@ -134,6 +192,12 @@ fi
 if [ "$mode" = packages ]; then
     require_cmd sha256sum
     check_apple_packages "$pkg_dir"
+    exit $?
+fi
+
+if [ "$mode" = sums ]; then
+    require_cmd awk sort
+    check_apple_sums "$sums_file"
     exit $?
 fi
 
@@ -456,8 +520,9 @@ for p in sorted(ref_special - new_special):
     print("    only in the reference: %s (%s)" % (p, ref_modes[p]))
 for p in sorted(new_special - ref_special):
     print("    only in the build:     %s (%s)" % (p, new_modes[p]))
-print("(ownership is not compared: every file here is owned by whoever ran")
-print(" the build, because that is the only thing udisks will mount as)")
+print("(ownership is not compared: 7z does not report the reference's, and")
+print(" the build's is set by the privops microVM's chown, not by this copy.")
+print(" media/privops/fix-ownership.sh prints it where it is applied.)")
 print()
 
 print("== alternate streams (resource forks, ACLs) ==")

@@ -7,26 +7,40 @@
 # unprivileged equivalent (see lib/hfs.sh and the P4 entries in NOTES.md).
 # What comes out is what the Mac-produced reference ISO contains --
 # media/verify-installer-img.sh is how we find out whether that is true,
-# and a finished rsync on its own proves nothing.
+# and a finished copy on its own proves nothing.
 #
-#   1. dmg2img InstallESD.dmg, mount it.
-#   2. dmg2img the BaseSystem.dmg inside it, mount that too.
-#   3. Create a GPT image with one AF00 partition holding an "OS X Base
+#   1. dmg2img InstallESD.dmg.
+#   2. Create a GPT image with one AF00 partition holding an "OS X Base
 #      System" volume, sized from the reference.
-#   4. rsync BaseSystem onto it.
-#   5. Replace System/Installation/Packages -- a symlink into the ESD
-#      volume, dangling on media that has no ESD volume -- with the ESD's
-#      real Packages directory, plus BaseSystem.chunklist and
-#      BaseSystem.dmg, which the installer verifies the packages against.
-#   6. With --autoinstall, add the three files Apple's own /etc/rc.install
-#      looks for, which turn a boot of this media into an install that
-#      needs nobody watching. See image/autoinstall/.
+#   3. In a microVM: copy the ESD's BaseSystem.dmg onto a raw disk, since
+#      dmg2img runs here and cannot read an HFS+ volume. dmg2img it.
+#   4. In a microVM: copy BaseSystem onto the target volume, replace
+#      System/Installation/Packages -- a symlink into the ESD volume,
+#      dangling on media that has no ESD volume -- with the ESD's real
+#      Packages directory, add BaseSystem.chunklist and BaseSystem.dmg,
+#      which the installer verifies the packages against, and untar
+#      whatever --autoinstall staged.
+#   5. In a microVM: restore root ownership (media/privops/fix-ownership.sh).
+#   6. In a microVM of its own: read the finished Packages back and check
+#      them against media/apple-packages.sha256.
 #
-# Ownership: udisks mounts hfsplus with uid=<you>,gid=<you>,umask=22, so
-# nothing written here can be owned by root or carry a setuid bit, whatever
-# flags rsync is given. Whether the installer cares is the open question a
-# boot answers; it runs as root and may rebuild what it needs. Not worked
-# around here on purpose -- see NOTES.md.
+# NOTHING HERE MOUNTS ANYTHING, and that is the point of the shape.
+#
+# It used to: udisks2 attached a loop device and mounted the volumes under
+# /run/media/$USER. That needs a desktop seat -- polkit refuses loop-setup
+# to an SSH session with `NotAuthorizedCanObtain` -- so the build could not
+# run on a headless host at all, which is every CI runner and was the
+# machine this project actually wanted to build on. See G26 in
+# docs/host-profile.md. It also put file-browser windows and notification
+# popups on the screen of anyone who did have a seat, because
+# /run/media/$USER is exactly where desktop handlers look.
+#
+# Ownership: the copy now runs as uid 0 against volumes mounted without
+# uid=/gid= overrides, so on-disk ownership and setuid bits survive it --
+# neither of which was on offer through a udisks mount whatever flags rsync
+# was given. fix-ownership.sh still runs, still records the six setuid and
+# setgid files before the chown that would strip them, and still restores
+# them afterwards.
 set -euo pipefail
 
 MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -164,6 +178,13 @@ out=$media_dir/installer-linux.img
 work=${MQG_MEDIA_WORK_DIR:-$media_dir/work}
 esd_img=$work/esd.img
 bs_img=$work/basesystem.img
+# The raw disk the microVM writes the ESD's BaseSystem.dmg onto, and the
+# tar of files to inject that goes the other way. Both are plain files
+# here and block devices in the guest: that is the only channel between
+# the two now that this host mounts nothing.
+bs_dmg=$work/basesystem.dmg
+inject_tar=$work/inject.tar
+inject_list=$work/inject.list
 
 if [ "$describe" -eq 1 ]; then
     cat <<EOF
@@ -239,8 +260,30 @@ EOF
     exit 0
 fi
 
-require_cmd dmg2img sgdisk rsync truncate dd mkfs.hfsplus udisksctl \
-    losetup findmnt lsblk du df sha256sum
+require_cmd dmg2img sgdisk truncate dd mkfs.hfsplus tar sha256sum awk
+
+# NOT udisksctl, losetup, findmnt, lsblk or rsync any more. This script
+# attaches no loop device and mounts nothing: every read and write of an
+# HFS+ volume happens inside the privops microVM. See the G26 row in
+# docs/host-profile.md for why that had to change -- udisks2's polkit
+# policy grants loop-setup to a user AT A SEAT, so the old path could not
+# run over SSH on any headless host, including a CI runner.
+#
+# Asked here, before five gigabytes of dmg2img, rather than at the moment
+# the microVM is first needed. A host that cannot boot it should find that
+# out in a second and by name, not after twenty minutes of work it will
+# have to throw away -- which is exactly what happened on squirrel-zapper
+# when the backend was only checked at the end.
+media_missing=$(privops_backend_missing "$MQG_PRIVOPS_BACKEND")
+if [ -n "$media_missing" ]; then
+    printf '%s\n' "$media_missing" | while IFS= read -r m; do
+        warn "  missing: $m"
+    done
+    die "the privops backend '$MQG_PRIVOPS_BACKEND' is not available on" \
+        "this host, and it is now how the media is built at all -- not" \
+        "merely how ownership is fixed at the end. Nothing here installs" \
+        "anything: see boot/prereqs.sh and docs/host-profile.md"
+fi
 
 [ -f "$esd_dmg" ] || die "no InstallESD.dmg at $esd_dmg --" \
     "run media/fetch-installesd.sh first"
@@ -315,98 +358,80 @@ mkdir -p "$work" || die "cannot create $work"
 # Intermediates are regenerated every run rather than reused. They are
 # cheap (seconds) next to a stale or half-written one silently becoming the
 # media we then spend an hour booting.
-rm -f "$esd_img" "$bs_img" "$out.hfs-tmp"
+rm -f "$esd_img" "$bs_img" "$bs_dmg" "$inject_tar" "$inject_list" \
+   "$out.hfs-tmp"
 
-ESD_MNT=
-BS_MNT=
-
-# Counted before and after the copy, and logged. An rsync that silently
-# copies nothing looks exactly like an rsync that worked, until something
-# downstream fails for a reason that makes no sense.
-count_tree() {
-    local where=$1 what=$2 n bytes
-    n=$(find "$where" -mindepth 1 | wc -l)
-    bytes=$(du -sb "$where" | cut -f1)
-    log "$what: $n entries, $bytes bytes"
-}
-
-# BaseSystem has one file we are not allowed to read: /.file, mode 0000,
-# the marker OS X looks for to decide a volume has a filesystem on it. Root
-# could read it; we cannot, and rsync fails the whole transfer over it.
-# It is empty, so there is nothing in it to read -- what matters is that a
-# file of that name and mode exists. Copy the metadata by hand and keep the
-# transfer itself clean, so a genuine rsync failure still means something.
+# The microVM passes. Each of these boots the privops backend, does one
+# job as uid 0, and leaves the image cleanly unmounted; the host attaches
+# no loop device and mounts nothing at any point.
 #
-# Any *non-empty* unreadable file would be a different story: that would be
-# content we cannot copy without root, and a finding rather than a detail.
-# Hence the size check.
-unreadable_files() {
-    find "$1" -type f ! -readable -printf '%P\0'
+#   1. extract   the ESD's BaseSystem.dmg onto a raw disk, because dmg2img
+#                runs here and cannot read an HFS+ volume
+#   2. assemble  the whole media: BaseSystem, Packages, the injectables
+#   3. ownership  media/privops/fix-ownership.sh, unchanged
+#   4. verify    read the finished media back in a microVM of its own
+#
+# Four boots rather than one. Each costs about four seconds, which is the
+# price of the host not needing a desktop seat.
+
+# The console is the only channel out of the guest. privops_run copies it
+# to MQG_PRIVOPS_CONSOLE when asked, and the markers this build reads are
+# MQG-BASESYSTEM-BYTES, MQG-BASESYSTEM-SHA256, MQG-SUM-ESD and
+# MQG-SUM-MEDIA. `tr -d` strips the carriage returns a serial console
+# leaves on every line.
+privops_console=$work/privops-console.txt
+console_marker() {
+    sed -n "s/^$1 //p" "$privops_console" | tr -d '\r'
 }
 
-recreate_unreadable() {
-    local src=$1 dst=$2 rel
-    while IFS= read -r -d '' rel; do
-        log "recreating unreadable (mode $(stat -c %a "$src/$rel")) empty file: $rel"
-        : > "$dst/$rel" || die "cannot create $dst/$rel"
-        touch -r "$src/$rel" "$dst/$rel"
-        chmod "$(stat -c %a "$src/$rel")" "$dst/$rel"
-    done < <(unreadable_files "$src")
+# Pass 1. The media's root filesystem is the contents of BaseSystem.dmg,
+# which lives inside the ESD volume and is UDIF-compressed -- only dmg2img
+# can decode it, dmg2img runs here, and here cannot read the ESD.
+#
+# So the guest writes that one file to a raw disk, which on this side is a
+# plain file. The target image is attached because the backend always
+# mounts its first disk; this pass does not write to it.
+extract_basesystem() {
+    local bytes want got
+    log "bringing BaseSystem.dmg out of the ESD (microVM pass 1 of 4)"
+    # Sparse, and as large as the whole ESD image: the real file is about
+    # 470 MB and this costs nothing until it is written to.
+    rm -f "$bs_dmg"
+    truncate -s "$(stat -c %s "$esd_img")" "$bs_dmg" \
+        || die "cannot create $bs_dmg"
+    MQG_PRIVOPS_CONSOLE=$privops_console \
+        privops_run "$out" "$MQG_REPO_ROOT/media/privops/extract-basesystem.sh" \
+            "ro:$esd_img" "raw:$bs_dmg"
+    bytes=$(console_marker MQG-BASESYSTEM-BYTES)
+    want=$(console_marker MQG-BASESYSTEM-SHA256)
+    case $bytes in
+        ''|*[!0-9]*) die "the microVM did not report a BaseSystem.dmg size" ;;
+    esac
+    truncate -s "$bytes" "$bs_dmg" || die "cannot truncate $bs_dmg"
+    # The host's own read of the file, against the digest the guest sent.
+    # A short or torn write through the raw disk would otherwise surface
+    # as a dmg2img failure that says nothing about where the bytes went.
+    got=$(sha256_file "$bs_dmg")
+    [ "$got" = "$want" ] \
+        || die "BaseSystem.dmg did not survive the trip out of the microVM:" \
+               "the guest read $want and this host reads $got"
+    log "BaseSystem.dmg: $bytes bytes, sha256 $got"
 }
 
-populate_target() {
-    local tgt=$1 pkg_link=$1/System/Installation/Packages
-    local rel
-    local -a excludes=()
-    while IFS= read -r -d '' rel; do
-        [ "$(stat -c %s "$BS_MNT/$rel")" -eq 0 ] \
-            || die "$BS_MNT/$rel is unreadable and not empty:" \
-                   "copying it would need root"
-        excludes+=( "--exclude=/$rel" )
-    done < <(unreadable_files "$BS_MNT")
-
-    log "copying BaseSystem onto the target volume"
-    # -a without -o/-g: udisks mounts this filesystem uid=<us>,gid=<us>, so
-    # preserving ownership is not on offer and asking for it only produces
-    # errors. -H matters -- BaseSystem hardlinks several binaries, and
-    # without it each one is copied again, which this volume has no room
-    # for. No -X: the Linux hfsplus driver exposes no extended attributes
-    # at all (getfattr on the source returns nothing), so there is nothing
-    # for rsync to carry.
-    # `${excludes[@]+...}`: excludes is empty when every file was readable,
-    # and before bash 4.4 expanding an empty array under `set -u` is an
-    # "unbound variable" error. See bin/bash32-check.sh.
-    rsync -rlptDH --info=stats2 ${excludes[@]+"${excludes[@]}"} \
-        "$BS_MNT/" "$tgt/" >&2 \
-        || die "rsync of BaseSystem failed"
-    recreate_unreadable "$BS_MNT" "$tgt"
-    count_tree "$tgt" "after BaseSystem"
-
-    # On the ESD this is a symlink to /System/Installation/PackagesLink,
-    # which resolves through the ESD volume. On installer media there is no
-    # ESD volume, so the real directory goes here instead.
-    [ -L "$pkg_link" ] || die "expected a Packages symlink at $pkg_link"
-    log "replacing the Packages symlink with the ESD's real Packages"
-    rm -f "$pkg_link"
-    rsync -rlptDH --info=stats2 "$ESD_MNT/Packages/" "$pkg_link/" >&2 \
-        || die "rsync of Packages failed"
-
-    log "copying BaseSystem.dmg and BaseSystem.chunklist"
-    rsync -rlptDH "$ESD_MNT/BaseSystem.dmg" "$ESD_MNT/BaseSystem.chunklist" \
-        "$tgt/System/Installation/" \
-        || die "could not copy BaseSystem.dmg/chunklist"
-
-    check_esd_packages "$ESD_MNT/Packages"
-
-    [ "$autoinstall" -eq 0 ] || inject_autoinstall "$tgt"
-
-    count_tree "$tgt" "final volume"
-    log "free space on the target volume:"
-    df -h "$tgt" >&2
+# Pass 2. Everything the media is made of, copied volume to volume by a
+# process that is genuinely root.
+assemble_media() {
+    local -a disks=( "ro:$bs_img" "ro:$esd_img" )
+    [ ! -f "$inject_tar" ] || disks+=( "raw:$inject_tar" )
+    log "assembling the media inside the microVM (pass 2 of 4)"
+    MQG_PRIVOPS_CONSOLE=$privops_console \
+        privops_run "$out" "$MQG_REPO_ROOT/media/privops/assemble.sh" \
+            "${disks[@]}"
+    check_esd_packages
 }
 
-# WHY THESE TWO FUNCTIONS EXIST: A FINISHED RSYNC PROVES NOTHING, AND
-# NEITHER DOES READING BACK WHAT YOU JUST WROTE.
+# WHY THESE CHECKS EXIST: A FINISHED COPY PROVES NOTHING, AND NEITHER DOES
+# READING BACK WHAT YOU JUST WROTE.
 #
 # Three media builds in six put a corrupt copy of Apple's Essentials.pkg on
 # the media -- 3.2 GB, half of everything there. rsync reported success,
@@ -430,10 +455,11 @@ populate_target() {
 # later mount, failed. Verification that shares a cache with the thing it
 # is verifying is not verification.
 #
-# So the destination is checked AFTER the volume has been unmounted and
-# the ownership pass has run, on a fresh mount, where the bytes have to
-# come off the disk. That also covers the privops microVM, which the first
-# version did not.
+# So the media is read back in A MICROVM OF ITS OWN, booted after the one
+# that did the writing has exited: a fresh kernel with no page cache at
+# all, pulling every byte through virtio off this host's file. That is
+# more than the old fresh-mount check promised, not less, which matters
+# because the mount it used to be fresh *of* is gone.
 #
 # AND IT IS CHECKED AGAINST A CONSTANT, NOT AGAINST THE SOURCE. Recording
 # the source's checksums during the copy still cannot catch a source that
@@ -442,39 +468,80 @@ populate_target() {
 # is what Apple shipped, read from two images that share no code path, so
 # the same check now names the conversion when the conversion is at fault
 # and the copy when the copy is.
-check_apple_packages() {
-    local where=$1 what=$2
+check_apple_sums() {
+    local what=$2
     log "checking $what against Apple's pinned checksums"
     # One implementation, in the script whose job is "is this what it
-    # should be", so that the same check can be run by hand on any
-    # Packages directory.
-    "$MQG_REPO_ROOT/media/verify-installer-img.sh" --check-packages "$where"
+    # should be", so that the same comparison can be run by hand.
+    console_marker "$1" > "$work/sums.txt"
+    "$MQG_REPO_ROOT/media/verify-installer-img.sh" --check-sums "$work/sums.txt"
 }
 
 check_esd_packages() {
-    check_apple_packages "$1" "the ESD's Packages, as converted and read" \
+    check_apple_sums MQG-SUM-ESD "the ESD's Packages, as converted and read" \
         || die "the ESD does not contain what Apple shipped." \
                "The suspects are dmg2img and the Linux hfsplus read of" \
-               "its output, in that order -- not the media, which has not" \
-               "been written yet, and not media/apple-packages.sha256," \
-               "whose values were read from two images that share no code."
+               "its output, in that order -- not the media, whose copy of" \
+               "them has not been checked yet, and not" \
+               "media/apple-packages.sha256, whose values were read from" \
+               "two images that share no code."
 }
 
 verify_media_packages() {
-    check_apple_packages "$1/System/Installation/Packages" \
-        "the finished media, from a fresh mount" \
+    log "reading the finished media back in a microVM of its own (pass 4 of 4)"
+    MQG_PRIVOPS_CONSOLE=$privops_console \
+        privops_run "$1" "$MQG_REPO_ROOT/media/privops/verify-packages.sh"
+    check_apple_sums MQG-SUM-MEDIA "the finished media, read by a fresh guest" \
         || die "the media does not contain what Apple shipped." \
-               "This is the fault that a finished rsync, and a read-back" \
-               "through the same mount, both fail to report. Re-run with" \
+               "This is the fault that a finished copy, and a read-back" \
+               "through the same cache, both fail to report. Re-run with" \
                "--force. See the Task 34 entry in NOTES.md."
 }
 
-# The unattended-install hooks go on while the volume is already mounted
-# here, rather than in a pass of their own. That is not only cheaper: the
-# chown that follows (fix_media_ownership) is what makes them root-owned,
-# and anything injected after it would be the one uid-1000 file on
-# otherwise root-owned media -- exactly the state that made launchd say
-# "Dubious ownership on file (skipping)" and load nothing at all.
+# The unattended-install hooks and any packages this build carries.
+#
+# They are assembled into a staging DIRECTORY here, named for where they go
+# on the media, and handed to the microVM as a tar on a raw disk -- the
+# same channel BaseSystem.dmg comes back out on, run the other way. The
+# guest untars it straight onto the volume, so nothing but the tar is ever
+# held in the initramfs, which is RAM: the OpenSSH packages alone are
+# twelve megabytes.
+#
+# The guest does this BEFORE the ownership pass, deliberately. The chown is
+# what makes these root-owned, and anything injected after it would be the
+# one uid-1000 file on otherwise root-owned media -- exactly the state that
+# made launchd say "Dubious ownership on file (skipping)" and load nothing
+# at all.
+#
+# The functions below take a directory and write files into it, which is
+# what they did when that directory was a mountpoint. Only the caller
+# changed.
+stage_injectables() {
+    local stage=$1
+    [ "$autoinstall" -eq 1 ] || return 0
+    rm -rf "$stage" || die "cannot clear $stage"
+    mkdir -p "$stage" || die "cannot create $stage"
+    inject_autoinstall "$stage"
+    # FILES ONLY, NO DIRECTORY ENTRIES, and that is not a tidiness
+    # preference. A directory entry in a tar sets the mode of the
+    # directory it lands on, and these paths land on directories that
+    # already exist: System, System/Installation, private, private/etc.
+    # Archiving them carried this host's umask onto Apple's media and made
+    # five of its directories group-writable -- caught by
+    # verify-installer-img.sh against the Mac-produced reference, which is
+    # exactly the drift that comparison exists to find. Without them, tar
+    # creates only what is genuinely missing and leaves the rest alone.
+    #
+    # No --owner/--group either: they are spelled differently by GNU tar
+    # and by the bsdtar an OS X host has, and they would buy nothing. The
+    # ownership pass chowns the whole volume afterwards.
+    ( cd "$stage" && find . ! -type d | sed 's|^\./||' ) > "$inject_list" \
+        || die "cannot list $stage"
+    tar cf "$inject_tar" -C "$stage" -T "$inject_list" \
+        || die "cannot build $inject_tar"
+    log "staged $(stat -c %s "$inject_tar") bytes of files to inject"
+}
+
 inject_autoinstall() {
     local tgt=$1 src dst mode
     log "injecting the unattended-install hooks"
@@ -570,31 +637,8 @@ print(" ".join(plistlib.load(open(sys.argv[1], "rb"))))' "$collection")"
 # what a different build host would substitute.
 fix_media_ownership() {
     local img=$1
-    log "restoring root ownership (privops backend: ${MQG_PRIVOPS_BACKEND:-qemu-linux})"
+    log "restoring root ownership (microVM pass 3 of 4)"
     privops_run "$img" "$MQG_REPO_ROOT/media/privops/fix-ownership.sh"
-}
-
-
-with_basesystem() {
-    BS_MNT=$1
-    log "BaseSystem volume mounted at $BS_MNT"
-    count_tree "$BS_MNT" "BaseSystem source"
-
-    log "creating $out: GPT, one AF00 partition, $PART_MIB MiB, \"$VOLUME_NAME\""
-    hfs_create_gpt "$out" "$PART_MIB" "$VOLUME_NAME"
-    hfs_with_mounted_part "$out" 1 populate_target
-}
-
-with_esd() {
-    ESD_MNT=$1
-    log "ESD volume mounted at $ESD_MNT"
-    [ -f "$ESD_MNT/BaseSystem.dmg" ] \
-        || die "no BaseSystem.dmg on the ESD volume at $ESD_MNT"
-    log "converting BaseSystem.dmg to raw"
-    dmg2img -s -i "$ESD_MNT/BaseSystem.dmg" -o "$bs_img" >/dev/null \
-        || die "dmg2img failed on BaseSystem.dmg"
-    log "BaseSystem raw image: $(stat -c %s "$bs_img") bytes"
-    hfs_with_mounted_part "$bs_img" auto with_basesystem
 }
 
 started=$SECONDS
@@ -603,25 +647,40 @@ dmg2img -s -i "$esd_dmg" -o "$esd_img" >/dev/null \
     || die "dmg2img failed on $esd_dmg"
 log "ESD raw image: $(stat -c %s "$esd_img") bytes"
 
-hfs_with_mounted_part "$esd_img" auto with_esd
+# Created before anything is copied, because pass 1 needs a target to
+# attach: the backend always mounts its first disk, and an empty volume is
+# a perfectly good thing for it to mount while the guest reads the ESD.
+log "creating $out: GPT, one AF00 partition, $PART_MIB MiB, \"$VOLUME_NAME\""
+hfs_create_gpt "$out" "$PART_MIB" "$VOLUME_NAME"
+
+extract_basesystem
+
+log "converting BaseSystem.dmg to raw"
+dmg2img -s -i "$bs_dmg" -o "$bs_img" >/dev/null \
+    || die "dmg2img failed on BaseSystem.dmg"
+log "BaseSystem raw image: $(stat -c %s "$bs_img") bytes"
+
+stage_injectables "$work/inject"
+assemble_media
 
 sync
 fix_media_ownership "$out"
 
-# On a fresh mount, after the ownership pass, so the bytes come off the
-# disk rather than out of the cache that wrote them. See the comment above
-# check_esd_packages.
-hfs_with_mounted_part "$out" 1 verify_media_packages
+# In a microVM of its own, booted after the writing one exited, so the
+# bytes come off the disk rather than out of the cache that wrote them.
+# See the comment above check_apple_sums.
+verify_media_packages "$out"
 
 log "checksumming $out"
 # Ownership must be fixed BEFORE the checksum is taken: the microVM mounts
 # the image, and mounting an HFS+ volume rewrites its header. Checksumming
 # first would record a value that the very next step invalidates.
 sum=$(sha256_file "$out")
-# Recorded with its expiry date attached. udisks mounts HFS+ read-write,
-# and the kernel updates the volume header's modify time and last-mounted
-# version on the way in, so the first mount after this changes the file and
-# the checksum stops matching. That is a property of the media, not a
+# Recorded with its expiry date attached. The kernel updates the volume
+# header's modify time and last-mounted version on the way into a
+# read-write mount, so the first mount after this -- by a microVM, a guest
+# booting the media, anything -- changes the file and the checksum stops
+# matching. That is a property of the media, not a
 # corruption, and someone running `sha256sum -c` at the wrong moment should
 # find that written down rather than have to work it out. (sha256sum
 # ignores lines beginning with #.)
@@ -629,13 +688,15 @@ sum=$(sha256_file "$out")
     printf '# sha256 of %s as built at %s\n' \
         "$(basename "$out")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf '# Mounting the image invalidates this: HFS+ records the mount\n'
-    printf '# in its volume header, and udisks will only mount read-write.\n'
+    printf '# in its volume header, and a read-write mount rewrites it.\n'
     printf '%s  %s\n' "$sum" "$(basename "$out")"
 } > "$out.sha256"
 
 if [ "$keep_work" -eq 0 ]; then
     log "removing the raw conversions (--keep-work keeps them)"
-    rm -f "$esd_img" "$bs_img"
+    rm -f "$esd_img" "$bs_img" "$bs_dmg" "$inject_tar" "$inject_list" \
+        "$work/sums.txt" "$privops_console"
+    rm -rf "$work/inject"
     rmdir "$work" 2>/dev/null || true
 fi
 

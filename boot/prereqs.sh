@@ -66,6 +66,14 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # that under-reports is worse than none, because it answers wrongly rather
 # than not answering. tests/boot_scripts.bats asserts the two agree.
 #
+# rsync IS NOT HERE, and udisksctl, losetup, findmnt and lsblk are here
+# only for media/content-digest.sh. The media build used to reach HFS+
+# volumes through a udisks loop device and copy into them with rsync; it
+# now does the whole assembly inside the privops microVM, where busybox
+# `cp -a` does the copying and the host mounts nothing (G26). Nothing in
+# this repository invokes rsync any more, so listing it would be telling
+# a host to install something it will not use.
+#
 # busybox and cpio are here because the media build needs them, not the
 # boot stack: lib/privops-qemu-linux.sh builds a busybox initramfs with
 # cpio to do the one privileged step (restoring root ownership) inside a
@@ -117,7 +125,6 @@ tr|-|-|-|-
 truncate|-|-|-|-
 sha256sum|-|-|?|?
 bats|bats|?|?|?
-rsync|rsync|rsync|-|rsync
 openssl|openssl|openssl|-|openssl
 curl|curl|curl|-|curl
 unzip|unzip|unzip|-|unzip
