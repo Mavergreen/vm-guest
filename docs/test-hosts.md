@@ -36,15 +36,46 @@ our assumptions are least tested.
 | Ledger | Claim | What this host tests |
 |---|---|---|
 | **G14** | SMBIOS must not be `MacPro5,1`, because `AppleTyMCEDriver` panics on a non-Xeon CPU | This *is* a Xeon. If `MacPro5,1` works here, G14 is confirmed host-specific. **If it panics anyway, my explanation of P1's panic was wrong** and the real cause is something else. |
-| **G3** | The guest CPU model must be masked down from the host's | Inverts the problem: this host is *older* than the model we ask for. |
+| **G3** | The guest CPU model must be masked down from the host's | Inverts the problem: this host is *older* than the model we ask for — and as of 2026-09-21 we know how far down the mask can go. |
+| **G25** | This host can provide every `-cpu` line in `lib/cpu.sh`'s table | Answered in about a second per row by `bin/triangulate.sh --probe`, with nothing installed. Woodcrest should refuse the `Penryn` rows and accept `Conroe`. |
 | **G2** | Intel with VT-x | Worth confirming VT-x is present and enabled; some early Mac Pros shipped without it. |
 
-**The CPU string is expected to fail here, and that is the point.** The guest
-asks for `Penryn,+ssse3,+sse4.1,+sse4.2`. Mac Pro 1,1 is Woodcrest — 65 nm
-Core, 2006 — and **SSE4.1 arrived with Penryn in 2007**. A Woodcrest host
-cannot provide it, so `-cpu Penryn,+sse4.1` should be rejected outright. Our
-CPU choice only looks portable because every test so far ran on hardware
-newer than it. *(Reasoned from CPU generations, not yet measured.)*
+### The CPU string: this entry was wrong for a year, and it cost us the machine
+
+**What this section used to say**, and what was acted on: the guest asks for
+`Penryn,+ssse3,+sse4.1,+sse4.2`; Mac Pro 1,1 is Woodcrest — 65 nm Core,
+2006 — and **SSE4.1 arrived with Penryn in 2007**; a Woodcrest host cannot
+provide it, so `-cpu Penryn,+sse4.1` should be rejected outright. Reasoned
+from CPU generations, **never measured**, and read as "this host cannot run
+the project".
+
+**Half of that is still true and the conclusion was wrong.** Woodcrest
+really cannot provide SSE4.1. **Mavericks does not need it.** Measured
+2026-09-21 on the primary host (`docs/decisions/0009`): `-cpu Conroe` —
+Conroe/Merom, SSSE3 with no SSE4.1 and no SSE4.2, which is Woodcrest's
+feature set — boots this guest to SSH in 20 seconds, passes the verify
+stage's checks, and hashes 64 MiB correctly. The guest's own
+`machdep.cpu.features` lists `SSSE3` and no SSE4 of any kind. 10.9's floor
+is SSSE3, which is what everyone always said it was; the SSE4.1 in our line
+came from a UTM bundle, not from the OS.
+
+**So this host is viable, and it is the only machine that can settle G14.**
+What to run here, in order:
+
+1. `bin/triangulate.sh --probe` — installs nothing, needs no root, and its
+   `-cpu` table says which rows this machine can provide. Expect the
+   `Penryn` rows refused (naming `sse4.1` as the missing feature) and
+   `Conroe` accepted. That alone confirms both halves of `decisions/0009`.
+2. A full pipeline run with `--cpu Conroe`. If it installs and answers SSH,
+   the `Conroe` row in `lib/cpu.sh` moves from BOOTED to VERIFIED and
+   becomes the sensible default for a project whose portability story is
+   "hosts older than ours".
+3. G14, which is why this machine was wanted in the first place.
+
+**The lesson is not about SSE4.1.** A prediction from first principles sat
+in this file as though it were a result, and the machine it was about was
+never plugged in to check. It reads the same either way; only the italic
+disclaimer said otherwise, and nobody acts on an italic disclaimer.
 
 **What it cannot test:** nested virtualization. Woodcrest has VT-x but **no
 EPT**, which arrived with Nehalem in 2008, so VMware Fusion in the guest is

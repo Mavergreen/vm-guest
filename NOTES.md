@@ -5091,3 +5091,108 @@ three major versions across all three device models. **G24** is that
 hypothesis, and `bin/triangulate.sh` has a verdict function for it, added
 in the same commit as the entry, because G21 sat in the ledger for a day
 without one and the run that settled it printed nothing about it.
+
+---
+
+## 2026-09-21 — P4 — Task 37 — does Mavericks need SSE4.1?
+
+The `-cpu` line has been `Penryn,+ssse3,+sse4.1,+sse4.2` since P1 copied it
+out of a UTM bundle. Nobody had asked which part of it 10.9 requires.
+`docs/test-hosts.md` had written the Mac Pro 1,1 off on that line — the only
+Xeon in the fleet, and the only machine that can settle G14 — on a
+prediction from CPU generations that nobody had ever run.
+
+**Method.** A qcow2 overlay on the SSH-capable image
+(`images/q2-e1000-fresh.qcow2`, built 2026-09-21 with e1000 and OpenSSH
+10.5p1), one changed `-cpu` line, and `image/build-image.sh --stage verify`,
+which boots without the installer media, waits for SSH, runs the verify
+stage's own checks and powers the guest down. Overlay deleted after each
+run; the source image's sha256 is byte-identical to its manifest afterwards
+(`ff503395…`) and the golden was never opened at all.
+
+**The golden itself could not be used**, and that is worth writing down: the
+brief said to clone the golden, but `golden/p2-manual-install` is the P2
+manual install — "no SSH", says its own `.meta`. It can only ever reach a
+login window, which would not have answered the question. The SSH-capable
+pipeline image was cloned instead, by the same overlay mechanism.
+
+**The verify stage now asks the guest about its CPU.** `--cpu` names a QEMU
+model; `machdep.cpu.*` is what the guest decided it got, and only the second
+one settles anything. Added alongside the existing `diskbus` line, for the
+same reason G16 has one: a fact read off a screen by hand once is not a
+measurement, and a fact every build records is.
+
+### Three boots, all green
+
+```
+vm/clone.sh (GOLDEN_DIR=images) q2-e1000-fresh cpu-<label>
+image/build-image.sh --name cpu-<label> --stage verify --cpu <line> --ssh-port 229x
+```
+
+| `-cpu` | SSH | guest `machdep.cpu.features` | 64 MiB SHA-256 |
+|---|---|---|---|
+| `Penryn,+ssse3,+sse4.1,+sse4.2` | 20 s | `… SSE3 SSSE3 CX16 SSE4.1 SSE4.2 x2APIC VMM` | correct |
+| `Penryn` | 20 s | `… SSE3 SSSE3 CX16 SSE4.1 x2APIC VMM` | correct |
+| `Conroe` | 20 s | `… SSE3 SSSE3 x2APIC VMM` | correct |
+
+All three: `10.9.5 (13F34)`, `hw=iMac14,2 2cpu`, OpenSSH 10.5p1 answering,
+`diskbus=SATA`, `firstboot-daemon=removed`, and
+`3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351` over 64
+MiB of zeros — which is the right answer, so each guest did real work and
+got it right rather than merely reaching a login window. `cpuextfeatures`
+was `SYSCALL XD EM64T LAHF` and `leaf7_features` empty in all three.
+
+**No panic, and therefore no panic screenshot.** The brief asked for one if
+Conroe failed; it did not fail. The evidence here is the feature list the
+guest printed, not the fact that it came up. (Noting for the next person
+that `vm/screenshot.sh`'s colour count of 2 is white-on-black *text*, not a
+blank screen — that misreading cost an hour in P3 and the script says so in
+a comment now.)
+
+### What it means
+
+1. **10.9 does not require SSE4.1.** Conroe/Merom is SSSE3 without SSE4.1 —
+   the Mac Pro 1,1's Woodcrest feature set — and the guest booted on it and
+   said so itself. The floor is SSSE3, which is what was always cited. The
+   SSE4.1 came from the bundle, not from the OS. **The Mac Pro is viable.**
+2. **`+ssse3` and `+sse4.1` are redundant with `Penryn`; `+sse4.2` is not.**
+   Bare `Penryn` reports SSSE3 and SSE4.1 already. QEMU's `Penryn-v1` has no
+   SSE4.2 and should not — real Penryn had none, SSE4.2 arrived with Nehalem
+   in 2008 — so the line asks for a feature the CPU it names never had.
+
+**The default did not change**, and the reason is `decisions/0008`: a NIC
+turned out to be *build-time state* in 10.9, so "booted with X" and
+"installs with X" are demonstrably different claims in this guest. All three
+boots above ran on an image *installed* under the default line. `lib/cpu.sh`
+keeps VERIFIED and BOOTED apart for that reason and the default sits on the
+only VERIFIED row. One `--cpu Conroe` full pipeline run is what would move
+it.
+
+### Measurements that went nowhere, recorded because they were made
+
+- **`qemu64` refused under `enforce` on the primary host.** Not old
+  hardware: QEMU's own `qemu64` model asks for `CPUID.80000001H:ECX.svm`,
+  AMD's virtualization bit, on an Intel machine. Read as a host limitation
+  for about a minute. The probe now prints the missing feature beside every
+  rejection so nobody reads the next one that way — which is precisely the
+  misreading that wrote the Mac Pro off.
+- **`Nehalem`, `Westmere`, `SandyBridge`, `IvyBridge`, `Haswell-noTSX`,
+  `host`, `qemu64` — not booted.** They are rows in `lib/cpu.sh` at NOT
+  TESTED. The table would be worth nothing if it implied otherwise; this
+  project has caught four inherited claims wrong and a fifth would be ours.
+- **No install on anything but the default line.** Three boots, one install
+  line. That gap is the whole reason the default did not move.
+- **One QEMU, one host, KVM only.** All of it is 8.2.2 on Coffee Lake.
+  Under TCG the emulator provides SSE4.1 whatever the host has, so a TCG run
+  cannot distinguish any of this — which is why G25 reports CANNOT-SAY
+  rather than CONFIRM when it was not run under a hardware accelerator.
+
+### What would change the answer
+
+The Mac Pro 1,1 itself. `bin/triangulate.sh --probe` now runs the `enforce`
+test against a paused diskless VM for **every row of the table**, not just
+the current line, and prints which ones the host can provide. That is two
+minutes there with nothing installed. **G25** is the hypothesis and
+`g25_verdict` in `lib/triangulate.sh` was written in the same commit as the
+entry, because G21 sat in the ledger for a day without one and the run that
+settled it printed nothing about it.
