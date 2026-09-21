@@ -48,6 +48,17 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 #   debian   -- xxd and bats confirmed missing on ap-juicer 2026-09-21,
 #               which is how the two-list drift below was noticed
 #
+# THIS LIST MUST COVER EVERY `require_cmd` IN THE REPOSITORY, and must
+# agree with bin/triangulate.sh's. There were THREE lists, not two, and
+# the third is the one that matters: the build scripts declare what they
+# need with `require_cmd`, and on 2026-09-21 ap-juicer stopped at
+# `missing required command: zip` -- a tool neither this script nor
+# triangulate.sh had ever checked. Fixing the drift between two lists
+# while a third went unread is why that host burned a run to find out.
+# tests/boot_scripts.bats now derives the set from the source and fails
+# if anything here is missing, so the declarations are the authority and
+# this table is the lookup.
+#
 # THIS LIST AND bin/triangulate.sh's MUST AGREE. They did not until
 # 2026-09-21: triangulate checked xxd, bats, rsync, openssl, curl and
 # unzip, which this script had never heard of, so a host asking "what am I
@@ -83,6 +94,28 @@ mkfs.hfsplus|hfsprogs|hfsprogs (AUR)|?|?
 busybox|busybox-static|busybox|?|?
 cpio|cpio|?|-|?
 xxd|xxd|?|-|?
+zip|zip|zip|-|zip
+7z|?|?|?|?
+udisksctl|udisks2|udisks2|?|?
+qemu-img|qemu-utils|qemu-img|?|qemu
+ssh|openssh-client|openssh|-|openssh
+ssh-keygen|openssh-client|openssh|-|openssh
+tar|-|-|-|-
+mdir|mtools|mtools|mtools|mtools
+mmd|mtools|mtools|mtools|mtools
+losetup|-|-|?|?
+lsblk|-|-|?|?
+findmnt|-|-|?|?
+awk|-|-|-|-
+dd|-|-|-|-
+find|-|-|-|-
+head|-|-|-|-
+od|-|-|-|-
+sort|-|-|-|-
+tail|-|-|-|-
+tr|-|-|-|-
+truncate|-|-|-|-
+sha256sum|-|-|?|?
 bats|bats|?|?|?
 rsync|rsync|rsync|-|rsync
 openssl|openssl|openssl|-|openssl

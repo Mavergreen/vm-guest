@@ -17,16 +17,11 @@ setup() {
 }
 
 @test "prereqs.sh reports success when everything it needs is present" {
-    # PATH containing stubs for every required tool. The media tools
-    # (dmg2img, kpartx, mkfs.hfsplus) belong here too: before 2026-09-20
-    # this script checked only the OpenCore build tools, so on a host
-    # missing six things it reported three. See boot/prereqs.sh.
-    # busybox and cpio are here for the same reason: the media build's
-    # privops microVM needs them, and a "prereqs" script that omits a
-    # prerequisite answers the question wrongly.
-    for t in gcc make git python3 nasm iasl mtools sgdisk mcopy mformat \
-             dmg2img kpartx mkfs.hfsplus busybox cpio \
-             xxd bats rsync openssl curl unzip; do
+    # The stub list is DERIVED from prereqs.sh's own table, not typed out
+    # beside it. Hand-copying it here is how the lists drifted in the
+    # first place -- twice, and the second time a third list nobody was
+    # reading stopped a build on another machine.
+    for t in $(sed -n 's/^\([a-z0-9._-]*\)|.*/\1/p' "$REPO/boot/prereqs.sh"); do
         printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
         chmod +x "$STUB_BIN/$t"
     done
@@ -764,4 +759,18 @@ _fake_firmware() {
         run grep -q "^$t|" "$REPO/boot/prereqs.sh"
         [ "$status" -eq 0 ] || { echo "triangulate checks '$t'; prereqs.sh does not"; false; }
     done
+}
+
+@test "prereqs.sh knows every tool the scripts actually require" {
+    # ap-juicer 2026-09-21 stopped at "missing required command: zip",
+    # which neither prereqs.sh nor triangulate.sh checked. The build
+    # scripts declare their needs with require_cmd; that declaration is
+    # the authority, and this table is the lookup. An earlier fix
+    # reconciled two lists while a third went unread.
+    missing=""
+    for t in $(grep -rhoE 'require_cmd [a-z0-9. _-]+' --include='*.sh' "$REPO" \
+               | sed 's/require_cmd //' | tr ' ' '\n' | grep -v '^$' | sort -u); do
+        grep -q "^$t|" "$REPO/boot/prereqs.sh" || missing="$missing $t"
+    done
+    [ -z "$missing" ] || { echo "require_cmd names these; prereqs.sh does not:$missing"; false; }
 }
