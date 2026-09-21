@@ -31,7 +31,7 @@ exactly that reason — a verdict function correctly declining to answer.
 | **G3** | REFUTE | No SSE4.1, as `docs/test-hosts.md` predicted from CPU generations. **Not a stopper**: `decisions/0009` established that 10.9 boots on `-cpu Conroe`, so this host takes the Conroe row rather than being excluded. The prediction and the escape hatch were both written before the machine was ever run. |
 | **G18** | REFUTE | No EPT. Nested virtualization and the VMware Fusion goal of `decisions/0005` are out of reach here whatever CPU model we pick. |
 | **G10** | REFUTE | ext2/ext3, no reflinks: golden promotion is a full copy. Budget time and space. |
-| **G12** | REFUTE | Repo on local ZFS, 0.39 ms per file create against 10–15 ms of NFS on the other two hosts. The repo/image split this project needs is **unnecessary** here. |
+| **G12** | REFUTE, and it measures the cost directly | **This machine is the NFS server.** `/persistent/code/trees` on local ZFS here is the very export `pet-power-plant` and `squirrel-zapper` mount. So 0.39 ms and 10–15 ms per file create are *the same files*, from the server and from its clients — which makes the penalty attributable to NFS itself rather than to anything about the repository or the storage. The split is unnecessary here because there is no network in the path. |
 | **G4** | REFUTE | 4 cores, no SMT. P5's pinning ladder does not transfer. |
 | **G14** | CANNOT-SAY | *"this IS a Xeon — the host the entry has been waiting for."* Settling it needs an install with SMBIOS `MacPro5,1`, which `triangulate.sh` deliberately does not do. |
 
@@ -66,6 +66,15 @@ rather than as a number nobody can act on.
 
 Both fixed with regression tests asserting the report contains no bare
 value line and no zero threads-per-core.
+
+## A consequence of being the server
+
+`docs/test-hosts.md` warned that this machine "is presumably doing a job
+already; disruption there costs more than on a spare machine". That is
+sharper than it first read: a build here competes with the NFS service
+the other two hosts depend on, including for their own repository
+access. Sequence accordingly — do not build here while another host is
+triangulating.
 
 ## Next here, in order
 
