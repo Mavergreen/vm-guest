@@ -29,6 +29,8 @@ set -euo pipefail
 MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/common.sh
 . "$MQG_REPO_ROOT/lib/common.sh"
+# shellcheck source=../lib/cpu.sh
+. "$MQG_REPO_ROOT/lib/cpu.sh"
 
 # Read at call time by log()/warn()/die() in lib/common.sh.
 # shellcheck disable=SC2034
@@ -120,7 +122,10 @@ IDENTITY_VARIES="firstbootmarker"
 
 accel=kvm
 machine=q35
-cpu='Penryn,+ssse3,+sse4.1,+sse4.2'
+# One place decides which -cpu line is the default, and it is lib/cpu.sh --
+# not a second copy here that drifts. Two images compared on different CPU
+# models would not be a comparison of the images.
+cpu=$MQG_CPU_DEFAULT
 ram=4096
 smp=2
 qemu_bin=${MQG_QEMU:-qemu-system-x86_64}

@@ -34,6 +34,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export MQG_REPO_ROOT
 # shellcheck source=../lib/common.sh
 . "$MQG_REPO_ROOT/lib/common.sh"
+# shellcheck source=../lib/cpu.sh
+. "$MQG_REPO_ROOT/lib/cpu.sh"
 
 # Used by log()/warn()/die() in lib/common.sh, which read it at call time.
 # shellcheck disable=SC2034
@@ -71,6 +73,7 @@ openssh|the ModernMavericks/openssh release the guest got, or none
 updates|which post-10.9.5 updates the image carries
 nic|the network device the guest was installed and verified with
 accel|accelerator, machine, cpu, memory and disk size
+cpuline|whether that -cpu line was one this project had evidence for, as judged when this image was built (lib/cpu.sh)
 qemu|the QEMU this was built with
 compiler|the C compiler the boot stack was built with, and the dialect it was asked for -- NOT a pin, see docs/decisions/0004
 compilerrange|whether that compiler was inside the range this project declares it supports, as judged when this image was built (lib/compiler.sh)
@@ -83,7 +86,21 @@ ingredient.*|each of those pins, one line each, so a diff names what moved"
 name=
 accel=kvm
 machine=q35
-cpu='Penryn,+ssse3,+sse4.1,+sse4.2'
+# THE GUEST CPU MODEL IS A PARAMETER, AND WHICH LINES ARE KNOWN TO WORK IS
+# A MEASUREMENT.
+#
+# See lib/cpu.sh for the table and docs/decisions/0009 for how it was
+# arrived at. Two things worth knowing before you change this line:
+# Mavericks does NOT require SSE4.1 (Conroe boots), and `+ssse3` and
+# `+sse4.1` are redundant with the `Penryn` model while `+sse4.2` is not.
+# The default is unchanged anyway, because it is the only line with a
+# completed install behind it -- twice, on two QEMUs.
+#
+# Unlike --nic and --updates this is NOT validated against its list. The
+# list is guidance; an arbitrary QEMU -cpu string still works and only
+# earns a warning. A host this project has never seen must not be blocked
+# by our ignorance.
+cpu=$MQG_CPU_DEFAULT
 ram=4096
 smp=2
 disk_gb=60
@@ -139,6 +156,9 @@ usage: $(basename "$0") [options]
   --accel kvm|tcg      Accelerator (default: $accel). P6 uses tcg.
   --machine TYPE       QEMU machine type (default: $machine)
   --cpu MODEL          QEMU CPU model (default: $cpu)
+                       Any QEMU -cpu string works. --cpu-models lists the
+                       ones this project has evidence for, and an unlisted
+                       one warns rather than refuses (lib/cpu.sh).
   --ram MB             Guest memory (default: $ram)
   --smp N              Guest CPUs (default: $smp). Not 1: 10.9's first boot
                        after install is reported to fail without SMP.
@@ -166,6 +186,8 @@ usage: $(basename "$0") [options]
   --describe           Print the plan and exit. Touches nothing.
   --dry-run            Print the QEMU command line and exit. Starts nothing.
   --manifest-fields    List what the manifest records, and exit.
+  --cpu-models         List the guest CPU lines this project has tried, the
+                       status of each and the evidence behind it, and exit.
 
 Stages, in order:
 $(printf '%s\n' "$STAGES" | while IFS='|' read -r s d; do printf '  %-9s %s\n' "$s" "$d"; done)
@@ -205,6 +227,13 @@ while [ $# -gt 0 ]; do
         --install-timeout) install_timeout=$2; shift ;;
         --describe) describe=1 ;;
         --dry-run) dry_run=1 ;;
+        --cpu-models)
+            cpu_models | while IFS='	' read -r m st ev; do
+                printf '%-32s %s\n' "$m" "$st"
+                printf '%s\n' "$ev" | fold -s -w 68 | sed 's/^/    /'
+            done
+            printf '\ndefault: %s\n' "$(cpu_default_text)"
+            exit 0 ;;
         --manifest-fields)
             printf '%s\n' "$MANIFEST_FIELDS" \
                 | while IFS='|' read -r f d; do printf '%-9s %s\n' "$f" "$d"; done
@@ -341,6 +370,9 @@ image pipeline
   accel               $accel
   machine             $machine
   cpu                 $cpu
+                      $(cpu_line_manifest "$cpu")
+                      (--cpu-models lists the table; an unlisted line warns
+                      rather than refuses -- docs/decisions/0009)
   memory              $ram MB, $smp vCPUs
   target disk         $disk_gb GB
   qemu                $qemu_bin
@@ -862,12 +894,33 @@ stage_verify() {
     # Disk Utility by hand once; asking the guest every build makes it a
     # measurement, and gives bin/triangulate.sh something to report from
     # another host.
+    #
+    # THE CPU LINES ARE THE SAME KIND OF THING, AND THEY ARE NEW.
+    #
+    # --cpu names a QEMU model; machdep.cpu.* is what the GUEST decided it
+    # got. Those are two different facts and only the second one settles
+    # "does 10.9 need SSE4.1" (docs/decisions/0009, lib/cpu.sh). A boot
+    # that reaches SSH is not by itself evidence about a feature set --
+    # the image has to say which features it saw. brand_string also
+    # catches a model that QEMU accepted and then quietly did not provide.
+    #
+    # sha256-64MiB is the "and it computed something correct" half. 64 MiB
+    # of zeros has exactly one right answer --
+    # 3b6a07d0d404fab4e23b6d34bc6696a6a312dd92821332385e5af7c01c421351 --
+    # OpenSSL's sha256 takes the SSSE3 path on this
+    # vintage, and a CPU model that boots but miscomputes would otherwise
+    # look identical to one that works. It costs about a second.
     # shellcheck disable=SC2016
     out=$(ssh_guest '
         sw_vers
         echo "hostname=$(hostname)"
         echo "id=$(id)"
         echo "hw=$(sysctl -n hw.model) $(sysctl -n hw.ncpu)cpu $(sysctl -n hw.memsize)"
+        echo "cpubrand=$(sysctl -n machdep.cpu.brand_string)"
+        echo "cpufeatures=$(sysctl -n machdep.cpu.features)"
+        echo "cpuextfeatures=$(sysctl -n machdep.cpu.extfeatures)"
+        echo "cpuleaf7=$(sysctl -n machdep.cpu.leaf7_features 2>/dev/null)"
+        echo "sha256-64MiB=$(dd if=/dev/zero bs=1m count=64 2>/dev/null | openssl dgst -sha256)"
         echo "sshd=$(launchctl list | grep -c com.openssh.sshd) job(s)"
         echo "ssh=$(ssh -V 2>&1)"
         echo "hostkeys=$(ls /usr/local/etc/ssh_host_*_key /etc/ssh_host_*_key 2>/dev/null | xargs -n1 basename | xargs echo)"
@@ -939,6 +992,14 @@ stage_manifest() {
         printf 'nic\t%s\n' "$nic"
         printf 'accel\t%s machine=%s cpu=%s ram=%s smp=%s disk=%sG\n' \
             "$accel" "$machine" "$cpu" "$ram" "$smp" "$disk_gb"
+        # The line above says WHICH -cpu line; this one says what the
+        # project knew about that line when the image was made. Same
+        # relationship as `compiler` and `compilerrange`, and for the same
+        # reason: the table in lib/cpu.sh moves as measurements arrive and
+        # the image does not, so an image built on an untested model has to
+        # carry its own "this was untested" or it silently becomes a
+        # supported build the day somebody else tests that model.
+        printf 'cpuline\t%s\n' "$(cpu_line_manifest "$cpu")"
         printf 'qemu\t%s\n' "$("$qemu_bin" --version | head -1)"
         # THE ONE INPUT THAT IS RECORDED BUT NOT PINNED.
         #
@@ -1013,6 +1074,8 @@ if [ "${#MQG_BUILD_DIR}" -gt "$MAX_BUILD_DIR" ]; then
 fi
 
 resolve_ssh_key
+# Warns, never refuses -- see lib/cpu.sh for why this one is not a gate.
+cpu_line_check "$cpu"
 log "building $name (accel $accel, machine $machine, cpu $cpu, ${ram}MB)"
 mkdir -p "$images_dir" "$work_dir" "$(dirname "$payload_pkg")"
 
