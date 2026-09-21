@@ -58,6 +58,7 @@ level=probe
 want_json=0
 json_out=
 keep=0
+keep_build=0
 name=
 qemu_bin=${MQG_QEMU:-qemu-system-x86_64}
 
@@ -72,6 +73,10 @@ usage: $(basename "$0") [--probe|--build|--full] [options]
   --json           Write the JSON report to stdout, the human one to stderr.
   --json-out FILE  Write the JSON report to FILE, the human one to stdout.
   --keep           Leave behind whatever --build/--full created.
+  --keep-build     Leave the BUILD TREE behind, and remove the rest. The
+                   boot stack is ~14 minutes of compiling and this script
+                   exists to be run again; the images and target disks,
+                   which are the gigabytes, still go.
   --name NAME      Name for the image --full builds.
   --qemu BINARY    QEMU to interrogate (default: $qemu_bin).
   -h, --help       This.
@@ -90,6 +95,7 @@ while [ $# -gt 0 ]; do
         --json)  want_json=1 ;;
         --json-out) want_json=1; json_out=$2; shift ;;
         --keep)  keep=1 ;;
+        --keep-build) keep_build=1 ;;
         --name)  name=$2; shift ;;
         --qemu)  qemu_bin=$2; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -149,7 +155,9 @@ salvage_logs() {
         done <<EOF
 $(find "$p" -type f -name '*.log' -size -8M 2>/dev/null)
 EOF
-    done < "$created_list"
+    done <<EOF
+$(printf '%s\n' "${salvage_extra:-}"; cat "$created_list")
+EOF
     # $scratch/pipeline.log holds every stage's stdout AND stderr (see the
     # redirect on the build-image.sh call), and $scratch is deleted
     # unconditionally at the end of cleanup. So the single file holding the
@@ -182,6 +190,42 @@ EOF
     fi
 }
 
+# $MQG_IMAGE_DIR ITSELF, WHEN THIS RUN IS WHAT CREATED IT.
+#
+# Leaving a host as it was found is the right default and stays the
+# default: this script runs on other people's machines, and one of them is
+# a Mac Pro serving files.
+#
+# But that default used to be the only behaviour, and it threw away the
+# BUILD TREE with everything else -- about fourteen minutes of compiling --
+# on every run of a script whose entire purpose is repeated runs. So
+# --keep-build is the middle setting: the images and the target disks,
+# which are the gigabytes, still go; the build tree stays, and the next run
+# skips the opencore and ovmf stages.
+#
+# Kept as a decision made HERE rather than as a path in $created_list,
+# because the thing to spare lives inside the thing to remove.
+# shellcheck disable=SC2317  # reached through the EXIT/INT/TERM trap below
+cleanup_image_dir() {
+    local e
+    [ "$image_dir_exists" = no ] || return 0
+    [ -d "$image_dir" ] || return 0
+    if [ "$keep" -eq 1 ]; then
+        printf 'triangulate: --keep: left behind:\n  %s\n' "$image_dir" >&2
+        return 0
+    fi
+    if [ "$keep_build" -eq 0 ]; then
+        rm -rf "$image_dir" && printf 'triangulate: removed %s\n' "$image_dir" >&2
+        return 0
+    fi
+    for e in "$image_dir"/* "$image_dir"/.[!.]*; do
+        [ -e "$e" ] || continue
+        [ "$e" != "$build_dir" ] || continue
+        rm -rf "$e" && printf 'triangulate: removed %s\n' "$e" >&2
+    done
+    printf 'triangulate: --keep-build: kept %s\n' "$build_dir" >&2
+}
+
 # shellcheck disable=SC2317  # reached through the EXIT/INT/TERM trap below
 cleanup() {
     local p
@@ -195,6 +239,7 @@ cleanup() {
         printf 'triangulate: --keep: left behind:\n' >&2
         sed -e 's/^/  /' "$created_list" >&2
     fi
+    cleanup_image_dir
     rm -rf "$scratch"
 }
 trap cleanup EXIT INT TERM
@@ -484,6 +529,10 @@ image_dir=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 export MQG_IMAGE_DIR=$image_dir
 image_dir_exists=yes
 [ -d "$image_dir" ] || image_dir_exists=no
+# The expensive half: fetched tarballs, the assembled EDK II tree, the
+# OpenCore and OVMF artifacts. --keep-build is about this directory and
+# nothing else.
+build_dir=${MQG_BUILD_DIR:-$image_dir/build}
 probe_dir=$(nearest_existing "$image_dir")
 image_fs=$(fs_type_of "$probe_dir")
 repo_fs=$(fs_type_of "$MQG_REPO_ROOT")
@@ -740,13 +789,18 @@ if [ "$level" != probe ]; then
             tri_special "image/build-image.sh --accel accepts only kvm|tcg, so this host's '$accel' cannot drive the pipeline; --build/--full fall back to tcg, which is slower and is NOT a test of '$accel'"
             pipeline_accel=tcg ;;
     esac
-    if [ "$image_dir_exists" = no ]; then
-        track_created "$image_dir"
-    else
-        track_created "$image_dir/images/$name.qcow2"
-        track_created "$image_dir/images/$name.manifest"
-        track_created "$image_dir/work/build-$name"
-    fi
+    # What this run makes, one path at a time. $MQG_IMAGE_DIR itself is
+    # NOT tracked here even when this run created it: whether the whole
+    # directory goes is decided in cleanup_image_dir, which is where
+    # --keep-build can spare the build tree inside it.
+    track_created "$image_dir/images/$name.qcow2"
+    track_created "$image_dir/images/$name.manifest"
+    track_created "$image_dir/work/build-$name"
+    # The build tree is where build.log and ovmf-build.log are, and a
+    # cleanup that runs on failure must not remove the evidence of the
+    # failure. It is no longer in $created_list, so salvage_logs is told
+    # about it separately.
+    salvage_extra=$build_dir
     build_ok=yes
     # Every stage at once, and payload included: it used to rebuild on
     # every run because it had no "already done" check at all, and now it
@@ -857,6 +911,13 @@ tri_fact failed_stage "${failed_stage:-none}"
 tri_fact media_built "$media_built"
 tri_fact media_failure "${media_failure:-none}"
 tri_fact install_ok "$install_ok"
+# What this run leaves on the host, machine-readably: the human report says
+# it in the "What stays on this host" section, and a user diffing several
+# hosts should not have to read prose to find out which of them still has a
+# build tree.
+tri_fact build_tree_kept "$([ "$level" = probe ] && echo n/a \
+    || { [ "$keep" -eq 1 ] || [ "$keep_build" -eq 1 ] || [ "$image_dir_exists" = yes ]; } \
+    && echo yes || echo no)"
 tri_fact ovmf_sha256 "$ovmf_sha"
 tri_fact opencore_sha256 "$opencore_sha"
 
@@ -983,6 +1044,41 @@ if [ -n "$stage_report" ]; then
             say "$(cat "$scratch/tail.txt")"
             say "" ;;
     esac
+fi
+
+# WHAT THIS RUN IS ABOUT TO LEAVE BEHIND, AND WHAT THAT BUYS THE NEXT ONE.
+#
+# The cleanup itself prints line by line as it removes things, but that
+# scrolls past and is not in the saved report. A run on somebody else's
+# machine has to end with a plain statement of what is still on their disk.
+if [ "$level" != probe ]; then
+    say "## What stays on this host"
+    say ""
+    if [ "$keep" -eq 1 ]; then
+        say "  --keep: everything this run created stays, including the"
+        say "  images and the target disks. Nothing is removed."
+    elif [ "$image_dir_exists" = yes ]; then
+        say "  $image_dir was already here and is not this run's to remove."
+        say "  Going: this run's image, its manifest and its work directory."
+        say "  Staying: $build_dir, which was not ours either."
+        say "  A second run skips the opencore and ovmf stages if that tree"
+        say "  still matches the pins -- build-image.sh --freshness says."
+    elif [ "$keep_build" -eq 1 ]; then
+        say "  --keep-build: $build_dir stays -- about 1.5 GB of fetched"
+        say "  sources, the assembled EDK II tree and the built firmware."
+        say "  Everything else this run created under $image_dir goes,"
+        say "  including the images and the target disks."
+        say "  A SECOND RUN THEREFORE SKIPS: opencore and ovmf, roughly"
+        say "  fourteen minutes of compiling. It still fetches the ESD and"
+        say "  rebuilds the EFI image, the payload and the installer media,"
+        say "  which is where the gigabytes are."
+    else
+        say "  Nothing. $image_dir did not exist before this run and does"
+        say "  not exist after it -- including $build_dir, so the next run"
+        say "  recompiles the boot stack from scratch (~14 min)."
+        say "  --keep-build keeps that tree and nothing else."
+    fi
+    say ""
 fi
 say "## Ledger -- paste these rows into docs/host-profile.md section 4"
 say ""

@@ -523,3 +523,103 @@ tri_report() {
     sed -n '/^salvage_logs() {/,/^}/p' "$REPO/bin/triangulate.sh" \
         | grep -q 'pipeline.log'
 }
+
+# --- what a run leaves behind ----------------------------------------------
+#
+# bin/triangulate.sh:663 used to track $MQG_IMAGE_DIR itself as created, so
+# cleanup deleted the whole thing -- about fourteen minutes of firmware
+# rebuild on every run of a script whose entire purpose is repeated runs on
+# new hosts. Leaving a host as it was found is still the default; what is
+# new is that there is now a middle setting.
+
+# The cleanup decision, lifted out of the script and driven directly.
+run_cleanup_image_dir() {
+    local dir=$1 keep=$2 keep_build=$3
+    run bash -c '
+        image_dir='"$dir"'
+        build_dir=$image_dir/build
+        image_dir_exists=no
+        keep='"$keep"'
+        keep_build='"$keep_build"'
+        '"$(sed -n '/^cleanup_image_dir() {/,/^}/p' "$REPO/bin/triangulate.sh")"'
+        cleanup_image_dir
+    '
+}
+
+populate_image_dir() {
+    local dir=$1
+    mkdir -p "$dir/build/artifacts" "$dir/images" "$dir/media" "$dir/work"
+    printf 'firmware\n' > "$dir/build/artifacts/SHA256SUMS"
+    printf 'a guest\n' > "$dir/images/triangulate.qcow2"
+    printf 'apple bytes\n' > "$dir/media/InstallESD.dmg"
+}
+
+@test "the default still leaves the host as it was found" {
+    dir="$BATS_TEST_TMPDIR/imagedir"
+    populate_image_dir "$dir"
+    run_cleanup_image_dir "$dir" 0 0
+    [ "$status" -eq 0 ]
+    [ ! -d "$dir" ]
+}
+
+@test "--keep-build keeps the build tree and removes the images" {
+    dir="$BATS_TEST_TMPDIR/imagedir"
+    populate_image_dir "$dir"
+    run_cleanup_image_dir "$dir" 0 1
+    [ "$status" -eq 0 ]
+    # The fourteen minutes stay.
+    [ -f "$dir/build/artifacts/SHA256SUMS" ]
+    # The gigabytes do not.
+    [ ! -d "$dir/images" ]
+    [ ! -d "$dir/media" ]
+    [[ "$output" == *"kept"* ]]
+}
+
+@test "--keep still keeps everything, including the images" {
+    dir="$BATS_TEST_TMPDIR/imagedir"
+    populate_image_dir "$dir"
+    run_cleanup_image_dir "$dir" 1 0
+    [ "$status" -eq 0 ]
+    [ -f "$dir/images/triangulate.qcow2" ]
+    [ -f "$dir/build/artifacts/SHA256SUMS" ]
+}
+
+@test "--keep-build is a distinct flag from --keep" {
+    run "$REPO/bin/triangulate.sh" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--keep-build"* ]]
+    [[ "$output" == *"--keep "* ]]
+}
+
+@test "a run that did not create the image directory does not remove it" {
+    # Someone else's build tree is not this script's to delete, whatever
+    # the flags say.
+    dir="$BATS_TEST_TMPDIR/imagedir"
+    populate_image_dir "$dir"
+    run bash -c '
+        image_dir='"$dir"'
+        build_dir=$image_dir/build
+        image_dir_exists=yes
+        keep=0
+        keep_build=0
+        '"$(sed -n '/^cleanup_image_dir() {/,/^}/p' "$REPO/bin/triangulate.sh")"'
+        cleanup_image_dir
+    '
+    [ "$status" -eq 0 ]
+    [ -f "$dir/images/triangulate.qcow2" ]
+}
+
+@test "the build tree is still searched for logs after it left created_list" {
+    # The 2026-09-20 wound: cleanup removed the one artifact needed to
+    # diagnose the failure it had just reported. $MQG_IMAGE_DIR is no
+    # longer in $created_list, so salvage_logs has to be told about the
+    # build tree separately or that fix quietly stops working.
+    grep -q 'salvage_extra=\$build_dir' "$REPO/bin/triangulate.sh"
+    sed -n '/^salvage_logs() {/,/^}/p' "$REPO/bin/triangulate.sh" \
+        | grep -q 'salvage_extra'
+}
+
+@test "the report says what stays and what a second run therefore skips" {
+    grep -q 'What stays on this host' "$REPO/bin/triangulate.sh"
+    grep -q 'A SECOND RUN THEREFORE SKIPS' "$REPO/bin/triangulate.sh"
+}
