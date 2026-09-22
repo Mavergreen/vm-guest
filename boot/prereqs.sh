@@ -66,13 +66,18 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # that under-reports is worse than none, because it answers wrongly rather
 # than not answering. tests/boot_scripts.bats asserts the two agree.
 #
-# rsync IS NOT HERE, and udisksctl, losetup, findmnt and lsblk are here
-# only for media/content-digest.sh. The media build used to reach HFS+
-# volumes through a udisks loop device and copy into them with rsync; it
-# now does the whole assembly inside the privops microVM, where busybox
-# `cp -a` does the copying and the host mounts nothing (G26). Nothing in
-# this repository invokes rsync any more, so listing it would be telling
-# a host to install something it will not use.
+# rsync, udisksctl, losetup, findmnt AND lsblk ARE ALL GONE FROM THIS
+# TABLE, and a host needs none of them for anything this project does.
+# The media build used to reach HFS+ volumes through a udisks loop device
+# and copy into them with rsync; it now does the whole assembly inside the
+# privops microVM, where busybox `cp -a` does the copying and the host
+# mounts nothing (G26). The four mount tools outlived rsync here by a day
+# because media/content-digest.sh still mounted; on 2026-09-21 it stopped,
+# lib/hfs.sh lost its loop-and-mount half, and nothing in this repository
+# invokes any of the five. Listing a tool a host will not use is telling
+# it to install something for nothing -- and udisks2 in particular came
+# with a DESKTOP SEAT attached, which is the requirement a headless build
+# host could not meet at all.
 #
 # busybox and cpio are here because the media build needs them, not the
 # boot stack: lib/privops-qemu-linux.sh builds a busybox initramfs with
@@ -104,16 +109,12 @@ cpio|cpio|?|-|?
 xxd|xxd|?|-|?
 zip|zip|zip|-|zip
 7z|?|?|?|?
-udisksctl|udisks2|udisks2|?|?
 qemu-img|qemu-utils|qemu-img|?|qemu
 ssh|openssh-client|openssh|-|openssh
 ssh-keygen|openssh-client|openssh|-|openssh
 tar|-|-|-|-
 mdir|mtools|mtools|mtools|mtools
 mmd|mtools|mtools|mtools|mtools
-losetup|-|-|?|?
-lsblk|-|-|?|?
-findmnt|-|-|?|?
 awk|-|-|-|-
 dd|-|-|-|-
 find|-|-|-|-

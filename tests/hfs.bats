@@ -120,3 +120,30 @@ PY
     [ "$status" -eq 0 ]
     [[ "$output" != *"no HFS+ volume header"* ]]
 }
+
+# --- the whole repository, not just this file ----------------------------
+
+@test "no shell script in this repository mounts anything on the host" {
+    # The one assertion that cannot drift as callers come and go. Both
+    # halves of the old path are named: the tools (udisks2's client, and
+    # the three that inspect what it attached) and the functions that
+    # wrapped them.
+    #
+    # It matters beyond tidiness. udisks2's polkit policy grants
+    # `loop-setup` to a user AT A SEAT, so anything reaching for it
+    # refuses an SSH session to a headless host -- every CI runner, and
+    # the machine this project actually wanted to build on (G26). And a
+    # mount lands under /run/media/$USER, which is where desktop handlers
+    # look, so it pops a window at anyone who does have a seat.
+    #
+    # Comment lines are exempt: the reasons above are written down in
+    # several of these files and must stay written down.
+    found=""
+    while IFS= read -r f; do
+        grep -qE '^[^#]*\b(udisksctl|losetup|findmnt|lsblk)\b' "$f" \
+            && found="$found $f"
+        grep -qE '^[^#]*\bhfs_(attach|mount|unmount|detach|with_mounted|with_mounted_part|partition_dev|backing_file|mountpoint)\b' "$f" \
+            && found="$found $f"
+    done < <(find "$REPO" -name .git -prune -o -name '*.sh' -print)
+    [ -z "$found" ] || { echo "these still reach for the host mount path:$found"; false; }
+}
