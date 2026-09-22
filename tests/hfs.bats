@@ -136,13 +136,25 @@ PY
     # mount lands under /run/media/$USER, which is where desktop handlers
     # look, so it pops a window at anyone who does have a seat.
     #
-    # Comment lines are exempt: the reasons above are written down in
+    # MATCHED IN COMMAND POSITION, not anywhere on a line, and that is not
+    # fussiness: lib/triangulate.sh's G26 verdict NAMES these four tools
+    # in the sentence it prints, which is exactly what a reader looking at
+    # a refusal needs to see, and a bare word-boundary grep called that an
+    # invocation. So: start of line, or after a pipe, a semicolon, an
+    # ampersand, an opening paren or command substitution, or one of the
+    # shell keywords a command can follow. Comments are exempt for the
+    # same reason -- the reasons above are written down in
     # several of these files and must stay written down.
+    #
+    # What it therefore does not catch: an indirect call, `command -v
+    # losetup`, or a name built at runtime. The first is what a reviewer
+    # is for; the second is a probe and not a mount.
+    cmd='(^|[|;&(!]|[$]\(|\<(if|then|else|elif|do|while|until|time)[[:space:]])[[:space:]]*'
     found=""
     while IFS= read -r f; do
-        grep -qE '^[^#]*\b(udisksctl|losetup|findmnt|lsblk)\b' "$f" \
+        grep -qE "^[^#]*${cmd}(udisksctl|losetup|findmnt|lsblk)\b" "$f" \
             && found="$found $f"
-        grep -qE '^[^#]*\bhfs_(attach|mount|unmount|detach|with_mounted|with_mounted_part|partition_dev|backing_file|mountpoint)\b' "$f" \
+        grep -qE "^[^#]*${cmd}hfs_(attach|mount|unmount|detach|with_mounted|with_mounted_part|partition_dev|backing_file|mountpoint)\b" "$f" \
             && found="$found $f"
     done < <(find "$REPO" -name .git -prune -o -name '*.sh' -print)
     [ -z "$found" ] || { echo "these still reach for the host mount path:$found"; false; }
