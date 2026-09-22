@@ -125,12 +125,34 @@ qemu_bin=${MQG_QEMU:-qemu-system-x86_64}
 ssh_port=2222
 ssh_key=
 ssh_user=mavsuser
-# docs/open-questions.md Q1 asks whether images should carry Apple's
-# post-10.9.5 updates and names P4 as its deadline. This pipeline does not
-# answer it. What it does is leave the question answerable: a switch with
-# one value implemented, rather than the absence of a switch.
-updates=none
-UPDATES_CHOICES="none"
+# WHICH POST-10.9.5 UPDATES AN IMAGE CARRIES IS A PARAMETER, AND THE
+# DEFAULT IS A DECISION.
+#
+# docs/open-questions.md Q1, answered 2026-09-22, and
+# docs/decisions/0011-updates-in-the-default-image.md.
+#
+#   none      nothing. **P5's baseline.** Every performance measurement
+#             compares against it, and an update that silently disabled a
+#             service would make those unattributable. It must stay
+#             bit-for-bit what it was before this switch had a second
+#             value -- see image/fetch-updates.sh and
+#             media/build-installer-img.sh --extra-space-mib, both of which
+#             are no-ops at `none` on purpose.
+#   security  Security Update 2016-004, the last one Apple shipped for
+#             10.9. The default, because it is what anyone running a dev VM
+#             should get.
+#   all       ...plus Safari 9.1.3 and iTunes 12.6.2. Opt-in: those are
+#             applications rather than the operating system.
+#
+# Like --nic and unlike --cpu, an unlisted value is REFUSED: the list is
+# not guidance here, it is the set of things vendor/sources.tsv has pins
+# for.
+#
+# NEVER `softwareupdate` at build time. It reaches Apple's servers during
+# the build, makes the build non-reproducible and network-dependent, and a
+# 2013 OS talking to 2026 servers may hang.
+updates=security
+UPDATES_CHOICES="none security all"
 # THE NETWORK DEVICE IS A PARAMETER, AND WHICH ONE IS DEFAULT IS A
 # MEASUREMENT.
 #
@@ -196,7 +218,12 @@ usage: $(basename "$0") [options]
   --no-openssh         Leave the guest on stock OpenSSH 6.2. An Ed25519 key
                        is then refused at build time, and reaching the guest
                        needs a client that still speaks ssh-rsa.
-  --updates WHICH      Post-10.9.5 updates to include ($UPDATES_CHOICES)
+  --updates WHICH      Post-10.9.5 updates to include (default: $updates)
+                       none      nothing -- P5's performance baseline
+                       security  Security Update 2016-004 (354 MB)
+                       all       ...plus Safari 9.1.3 and iTunes 12.6.2
+                       Pinned standalone packages, never softwareupdate.
+                       See image/fetch-updates.sh --describe.
   --nic DEVICE         Guest network device (default: $nic)
                        Choices: $NIC_CHOICES
                        virtio-net-pci has no driver in 10.9 and produces an
@@ -291,8 +318,9 @@ esac
 case " $UPDATES_CHOICES " in
     *" $updates "*) : ;;
     *) die "unknown --updates '$updates': choose one of $UPDATES_CHOICES." \
-           "See docs/open-questions.md Q1 -- the switch exists so that" \
-           "question stays answerable without rewriting this pipeline." ;;
+           "See docs/open-questions.md Q1 and docs/decisions/0011 for what" \
+           "each one installs, and image/fetch-updates.sh --describe for" \
+           "the packages and where they come from." ;;
 esac
 case " $NIC_CHOICES " in
     *" $nic "*) : ;;
@@ -435,8 +463,13 @@ image pipeline
   nic                 $nic -> -device $(nic_device)
                       (choices: $NIC_CHOICES; docs/open-questions.md Q2)
   --updates           $updates (choices: $UPDATES_CHOICES)
-                      docs/open-questions.md Q1 is not answered here; the
-                      switch is what keeps it answerable.
+                      $(case $updates in
+                          none) echo "nothing. P5's baseline -- bit-for-bit what it was before this switch had a second value" ;;
+                          security) echo "Security Update 2016-004 (354 MB), the last one Apple shipped for 10.9" ;;
+                          all) echo "2016-004, Safari 9.1.3 and iTunes 12.6.2 (685 MB in all)" ;;
+                      esac)
+                      pinned standalone packages, never softwareupdate
+                      (docs/open-questions.md Q1, docs/decisions/0011)
 
   stages, in order (each skipped when the inputs it recorded still match --
   ask --freshness which ones those are today)
@@ -603,11 +636,16 @@ stage_extra_inputs() {
             printf '%s\n' \
                 "sshkey=$(ssh_key_fingerprint)" \
                 "openssh-enabled=$openssh"
+            # The payload package names the update packages in its conf
+            # file, so the selection is one of its inputs.
+            updates_stamp
             ;;
         media)
             printf '%s\n' \
                 "payload=$(sha256_or "$payload_pkg")" \
                 "openssh-enabled=$openssh"
+            # ...and the media is what actually carries them.
+            updates_stamp
             ;;
         install)
             # media is named by the digest of ITS inputs, not by the
@@ -624,6 +662,12 @@ stage_extra_inputs() {
                 "firmware=$(sha256_or "$firmware_dir/OVMF_CODE.fd")" \
                 "accel=$accel" "machine=$machine" "cpu=$cpu" \
                 "ram=$ram" "smp=$smp" "disk=${disk_gb}G" "nic=$nic"
+            # Named here as well as inherited through `media=`, because
+            # this is the stage whose output is the installed guest and
+            # "which updates went in" is the question someone will ask of
+            # THIS stamp. Task #36 built this machinery and --smbios was
+            # its first user; this is its second.
+            updates_stamp
             ;;
         *) : ;;
     esac
@@ -835,6 +879,75 @@ resolve_openssh() {
     openssh_replace_pkg=${paths[1]}
 }
 
+# THE UPDATE PACKAGES, RESOLVED ONCE.
+#
+# Same shape as resolve_openssh above, and for the same reason: the paths
+# are wanted by two stages and fetching them twice would download 685 MB
+# twice. `updates=none` resolves to an empty list and touches nothing.
+updates_pkgs=()
+updates_resolved=0
+resolve_updates() {
+    [ "$updates_resolved" -eq 0 ] || return 0
+    updates_resolved=1
+    [ "$updates" != none ] || return 0
+    local line
+    # `while read` rather than `mapfile`, which is bash 4 -- see
+    # bin/bash32-check.sh.
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        updates_pkgs+=("$line")
+    done < <("$MQG_REPO_ROOT/image/fetch-updates.sh" --updates "$updates")
+    [ "${#updates_pkgs[@]}" -gt 0 ] \
+        || die "image/fetch-updates.sh named no packages for --updates $updates"
+}
+
+# updates_args <--extra-pkg|--update-pkg> -- one flag per package, in
+# install order, or nothing at all when the image carries no updates.
+updates_args() {
+    [ "$updates" != none ] || return 0
+    resolve_updates
+    local p
+    for p in ${updates_pkgs[@]+"${updates_pkgs[@]}"}; do
+        printf '%s\n' "$1" "$p"
+    done
+}
+
+# How much bigger the installer media's HFS+ partition has to be to carry
+# them. The 512 MiB margin in media/build-installer-img.sh is not spare
+# room -- it was measured against a media that carries no updates and it
+# leaves 483.8 MiB free -- so the cargo pays for its own space, plus 64 MiB
+# because HFS+ wants somewhere to put the catalog entries too.
+updates_extra_mib() {
+    [ "$updates" != none ] || { printf '0\n'; return 0; }
+    resolve_updates
+    local p total=0
+    for p in ${updates_pkgs[@]+"${updates_pkgs[@]}"}; do
+        total=$(( total + $(stat -L -c %s "$p") ))
+    done
+    printf '%s\n' "$(( (total + 1048575) / 1048576 + 64 ))"
+}
+
+# The update pins, as stamp lines: the selection, and every package's
+# pinned checksum. NOTHING AT ALL for `none`.
+#
+# That silence is the point. An `--updates none` build's stage stamps are
+# byte-identical to the ones a build made before this switch had a second
+# value, so P5's baseline image does not reinstall itself because a feature
+# it does not use was added. Every transition still shows up: none has no
+# lines, security has one, all has seven, and any two of those differ.
+updates_stamp() {
+    [ "$updates" != none ] || return 0
+    printf 'updates=%s\n' "$updates"
+    local name
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        printf 'update:%s=%s\n' "$name" \
+            "$(awk -F'\t' -v n="$name" \
+               '$0 !~ /^#/ && $1 == n { print $3; exit }' \
+               "$MQG_REPO_ROOT/vendor/sources.tsv")"
+    done < <("$MQG_REPO_ROOT/image/fetch-updates.sh" --names --updates "$updates")
+}
+
 stage_openssh() {
     if [ "$openssh" -eq 0 ]; then
         log "--no-openssh: the guest keeps its stock OpenSSH 6.2"
@@ -870,13 +983,20 @@ stage_payload() {
     # about a tag that had been fetched twice and thrown away both times.
     # Found by bin/triangulate.sh, which runs one stage per process.
     resolve_openssh
+    # And the same trap: updates_args runs in `< <(...)` below, so the
+    # array resolve_updates fills there would be thrown away.
+    resolve_updates
     while IFS= read -r arg; do
         [ -n "$arg" ] || continue
         extra+=("$arg")
     done < <(openssh_args --openssh-pkg)
     [ "$openssh" -eq 0 ] || extra+=(--openssh-tag "$openssh_tag")
+    while IFS= read -r arg; do
+        [ -n "$arg" ] || continue
+        extra+=("$arg")
+    done < <(updates_args --update-pkg)
     "$MQG_REPO_ROOT/image/payload/build-firstboot-pkg.sh" \
-        --ssh-key "$ssh_key" --out "$payload_pkg" \
+        --ssh-key "$ssh_key" --out "$payload_pkg" --updates "$updates" \
         ${extra[@]+"${extra[@]}"} >/dev/null
     stage_record payload
 }
@@ -888,12 +1008,22 @@ stage_media() {
     # Same reason as stage_payload: openssh_args resolves inside a
     # subshell, so this stage cannot rely on it having happened.
     resolve_openssh
+    resolve_updates
     while IFS= read -r arg; do
         [ -n "$arg" ] || continue
         extra+=("$arg")
     done < <(openssh_args --extra-pkg)
+    # The updates ride exactly as the OpenSSH packages do: carried on the
+    # media, absent from OSInstall.collection, installed by firstboot.sh on
+    # the booted system. One mechanism, not two.
+    while IFS= read -r arg; do
+        [ -n "$arg" ] || continue
+        extra+=("$arg")
+    done < <(updates_args --extra-pkg)
     "$MQG_REPO_ROOT/media/build-installer-img.sh" --force --autoinstall \
-        --firstboot-pkg "$payload_pkg" ${extra[@]+"${extra[@]}"} >/dev/null
+        --firstboot-pkg "$payload_pkg" \
+        --extra-space-mib "$(updates_extra_mib)" \
+        ${extra[@]+"${extra[@]}"} >/dev/null
     stage_record media
 }
 
@@ -1207,6 +1337,9 @@ stage_verify() {
 
 stage_manifest() {
     local commit dirty
+    # So the manifest can name the packages even on a resumed run
+    # (--stage manifest) where no earlier stage filled the array.
+    resolve_updates
     commit=$(git -C "$MQG_REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
     if git -C "$MQG_REPO_ROOT" diff --quiet 2>/dev/null &&
        git -C "$MQG_REPO_ROOT" diff --cached --quiet 2>/dev/null; then
@@ -1253,7 +1386,14 @@ stage_manifest() {
         fi
         printf 'openssh\t%s\n' \
             "$([ "$openssh" -eq 1 ] && echo "${openssh_tag:-$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$MQG_REPO_ROOT/components/openssh/version" | grep -v '^$' | head -1)}" || echo none)"
-        printf 'updates\t%s\n' "$updates"
+        # WHICH selection, and WHICH packages it resolved to -- so two
+        # images are distinguishable without booting them, and so a
+        # manifest still says what it carried after the registry moves.
+        printf 'updates\t%s\n' "$updates$(
+            [ "$updates" = none ] || printf ' (%s)' "$(
+                for p in ${updates_pkgs[@]+"${updates_pkgs[@]}"}; do
+                    printf '%s ' "$(basename "$p")"
+                done | sed 's/ $//')")"
         printf 'nic\t%s\n' "$nic"
         printf 'accel\t%s machine=%s cpu=%s ram=%s smp=%s disk=%sG\n' \
             "$accel" "$machine" "$cpu" "$ram" "$smp" "$disk_gb"

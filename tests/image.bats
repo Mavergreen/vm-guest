@@ -105,12 +105,19 @@ setup() {
     [ "$status" -ne 0 ]
 }
 
-@test "it leaves room for the software-update question rather than closing it" {
-    # docs/open-questions.md Q1 names P4 as its deadline. The pipeline must
-    # not hard-code "no updates" in a way that makes answering it a rewrite.
+@test "the software-update question is answered, and all three answers work" {
+    # docs/open-questions.md Q1, answered 2026-09-22: two images. The
+    # switch P4 left behind was the whole point of leaving it, and it now
+    # has three implemented values rather than one. tests/updates.bats is
+    # where the packages and the guest-side wiring are tested; this is only
+    # the pipeline's end of it.
     run "$BUILD" --describe
     [ "$status" -eq 0 ]
     [[ "$output" == *"--updates"* ]]
+    for u in none security all; do
+        run "$BUILD" --updates "$u" --describe
+        [ "$status" -eq 0 ] || { echo "--updates $u was refused"; return 1; }
+    done
     run "$BUILD" --updates nonsense --describe
     [ "$status" -ne 0 ]
 }
