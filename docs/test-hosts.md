@@ -224,7 +224,24 @@ nothing, needs no root, writes only under `$MQG_IMAGE_DIR`, and removes
 what it created — the hosts on this page belong to the user, and one of
 them is a NAS that is presumably serving something.
 
-    ./bin/triangulate.sh                     # ~2 min, touches nothing
+Every run, at every level, also writes
+`./triangulate-logs-<host>-<stamp>/` in the directory it was started from:
+`report.txt`, `report.json`, `pipeline.log`, and any build logs salvaged
+from a failed stage. That directory is the thing to send back — the ledger
+rows above are in it whether the run succeeded or failed, so nobody has to
+copy a terminal by hand. Its path is printed when the run starts, so
+`tail -f <dir>/pipeline.log` follows a long `--build` or `--full` from
+another machine, and again as the last line, so it cannot scroll past.
+
+The report header names the **commit** and whether the working tree was
+**dirty**. Some of these runs are made from a tree shared over NFS rather
+than from a clone, where another host's uncommitted edit is picked up
+silently and a commit can land mid-run; and a run from a shared tree does
+not test the fresh clone `docs/decisions/0006` is about, while looking
+exactly like one that does. A result traced to no particular code is worth
+much less than one that is.
+
+    ./bin/triangulate.sh                     # ~2 min, builds nothing
     ./bin/triangulate.sh --build             # ~10 min, no install
     ./bin/triangulate.sh --full --json-out h.json
 

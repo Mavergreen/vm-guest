@@ -9,9 +9,12 @@
 #
 #   * it installs nothing, and never asks for root
 #   * it writes only under $MQG_IMAGE_DIR (and a temporary directory it
-#     removes), and at --probe it writes nothing that outlives the run
+#     removes), and at --probe it creates neither of those
 #   * it cleans up after itself, and says exactly what it removed and what
 #     it left behind
+#   * the one thing it deliberately leaves on disk is the run directory in
+#     the current directory: the report, the JSON and the build log. That
+#     is the deliverable, not a leftover, and it is kilobytes.
 #   * the default level is the safe one, because the safe thing should be
 #     what happens when someone types the command with no arguments
 #
@@ -94,6 +97,14 @@ usage: $(basename "$0") [--probe|--build|--full] [options]
   --qemu BINARY    QEMU to interrogate (default: $qemu_bin).
   -h, --help       This.
 
+Every run, at every level, writes what it found into
+./triangulate-logs-<host>-<stamp>/ -- report.txt, report.json,
+pipeline.log, and any build logs salvaged from a failed stage. The
+directory's path is printed at the start, so that pipeline.log can be
+followed with tail -f while a long run is going, and again as the last
+line, so that it cannot be missed. --json still writes JSON to stdout and
+nothing else, for piping.
+
 The levels are cumulative and the cheap one is the default, because a user
 with five machines runs --probe on all of them and --full on the two that
 look promising.
@@ -139,6 +150,11 @@ say() { report="$report$*
 "; }
 
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+run_stamp=$(date -u +%Y%m%d-%H%M%S)
+# Set for real below, once the hostname is known. Declared here because the
+# EXIT trap and salvage_logs both read them and either can fire first.
+run_dir=
+pipeline_log=
 
 # --- a scratch directory that always goes away -----------------------------
 
@@ -164,10 +180,17 @@ created_list=$scratch/created
 # so --keep (which keeps everything) is the wrong instrument for this.
 # shellcheck disable=SC2317  # reached through the EXIT/INT/TERM trap below
 salvage_logs() {
-    local stamp dest n=0 f
+    local dest n=0 f
     [ -s "$created_list" ] || return 0
-    stamp=$(date -u +%Y%m%d-%H%M%S)
-    dest="$PWD/triangulate-logs-$(hostname 2>/dev/null || echo host)-$stamp"
+    # The run directory, which already holds pipeline.log and is about to
+    # hold report.txt and report.json. One directory per run rather than a
+    # second one stamped at the second the failure happened: a reader
+    # should not have to work out which of two directories is the run.
+    dest=$run_dir
+    if [ -z "$dest" ]; then
+        dest="$PWD/triangulate-logs-$(hostname 2>/dev/null || echo host)"
+        dest="$dest-$(date -u +%Y%m%d-%H%M%S)"
+    fi
     while IFS= read -r p; do
         if [ -z "$p" ] || [ ! -d "$p" ]; then
             continue
@@ -184,16 +207,22 @@ EOF
     done <<EOF
 $(printf '%s\n' "${salvage_extra:-}"; cat "$created_list")
 EOF
-    # $scratch/pipeline.log holds every stage's stdout AND stderr (see the
-    # redirect on the build-image.sh call), and $scratch is deleted
-    # unconditionally at the end of cleanup. So the single file holding the
+    # pipeline.log holds every stage's stdout AND stderr (see the redirect
+    # on the build-image.sh call). It used to live in $scratch, which
+    # cleanup deletes unconditionally, so the single file holding the
     # actual failure was the one file guaranteed not to survive it. The
     # report's 25-line tail is a window onto this log; when the error falls
     # past the edge of that window, as a microVM failure did on
     # squirrel-zapper on 2026-09-20, there was nothing left to read.
-    if [ -f "$scratch/pipeline.log" ]; then
+    # Since this run directory exists from the start, pipeline.log is
+    # normally written straight into it and there is nothing to copy. The
+    # copy remains for the fallback case where the directory could not be
+    # created and the log went to $scratch after all.
+    if [ -f "${pipeline_log:-$scratch/pipeline.log}" ] \
+       && [ "${pipeline_log:-}" != "$dest/pipeline.log" ]; then
         mkdir -p "$dest" 2>/dev/null || true
-        cp "$scratch/pipeline.log" "$dest/" 2>/dev/null && n=$((n + 1))
+        cp "${pipeline_log:-$scratch/pipeline.log}" "$dest/" 2>/dev/null \
+            && n=$((n + 1))
     fi
     # The report is the deliverable, and until 2026-09-20 it went only to
     # stdout -- so a failed run on someone else's machine left build logs
@@ -201,7 +230,8 @@ EOF
     # did not was visible on their terminal and nowhere else. Write it
     # beside the logs. This also covers a stage that fails without
     # producing a .log at all, which is why $dest is created even when
-    # n is 0.
+    # n is 0. write_evidence writes it again, with the stage table filled
+    # in; this copy is the one that exists if anything below goes wrong.
     if [ -n "${report:-}" ]; then
         mkdir -p "$dest" 2>/dev/null || true
         if printf '%s' "${report:-}" > "$dest/report.txt" 2>/dev/null; then
@@ -267,6 +297,12 @@ cleanup() {
     fi
     cleanup_image_dir
     rm -rf "$scratch"
+    # THE LAST LINE, after all the removal chatter, because a path printed
+    # before a screenful of "removed ..." is a path nobody sees.
+    if [ -n "${run_dir:-}" ] && [ -d "${run_dir:-}" ]; then
+        printf 'triangulate: this run is written down here:\n  %s\n' \
+            "$run_dir" >&2
+    fi
 }
 trap cleanup EXIT INT TERM
 
@@ -501,6 +537,49 @@ PY
 # --- gather ----------------------------------------------------------------
 
 log "level $level on $host ($os $kernel $arch)"
+
+# --- where this run is written down ----------------------------------------
+#
+# EVERY RUN LEAVES ITS EVIDENCE, NOT ONLY THE ONES THAT FAIL.
+#
+# The report went to stdout and was copied to a file only on the failure
+# path, so a SUCCESSFUL run left nothing at all. The ledger rows -- which
+# docs/test-hosts.md calls the actual deliverable, "not 'it worked' or 'it
+# didn't', but an updated ledger" -- existed only as scrollback on the
+# terminal of whoever typed the command, and getting them back meant
+# asking that person to paste a result that had already been produced.
+#
+# AND A RUN IN PROGRESS WAS OPAQUE TO EVERYONE BUT THAT PERSON.
+#
+# pipeline.log lived in a mktemp -d under /tmp, on that host, deleted at
+# the end. Watching a two-hour --full on another machine meant asking the
+# user to find a path they had to discover first. It is written here from
+# the start instead, at a name anyone can predict and tail -f.
+#
+# The existing triangulate-logs-<host>-<stamp>/ name is reused rather than
+# invented afresh: .gitignore already covers it, docs/triangulation already
+# refers to directories with that name, and one directory per run means a
+# failure appends to the run's own directory instead of creating a second
+# one stamped at a different second. The name says "logs" and the contents
+# are now more than logs -- but they have been since report.txt joined them
+# on 2026-09-20, so the name was already the narrower half of the truth.
+run_dir="$PWD/triangulate-logs-$host-$run_stamp"
+if mkdir -p "$run_dir" 2>/dev/null && : > "$run_dir/pipeline.log" 2>/dev/null
+then
+    pipeline_log=$run_dir/pipeline.log
+    log "evidence:  $run_dir"
+    log "watch it:  tail -f $pipeline_log"
+else
+    # Say it, rather than failing or pretending. A read-only working
+    # directory is a reason this run produces no artifact, and the person
+    # who has to copy their terminal by hand should be told now and not
+    # discover it at the end.
+    warn "cannot create $run_dir -- this run will leave NO evidence" \
+        "behind, and the report will exist only on this terminal." \
+        "Run it from a writable directory to get one."
+    run_dir=
+    pipeline_log=$scratch/pipeline.log
+fi
 
 brand=$(cpu_brand || true); brand=${brand:-unknown}
 vendor=$(cpu_vendor || true); vendor=${vendor:-unknown}
@@ -883,7 +962,7 @@ note_preexisting() {
 $("$MQG_REPO_ROOT/image/build-image.sh" --name "$name" \
     --accel "$pipeline_accel" ${cpu_choice:+--cpu "$cpu_choice"} \
     ${smbios_choice:+--smbios "$smbios_choice"} \
-    --freshness 2>>"$scratch/pipeline.log" \
+    --freshness 2>>"$pipeline_log" \
   | awk -F'\t' '$2 == "skip" { print $1 }' || true)
 EOF
 }
@@ -900,7 +979,7 @@ run_stage() {
     if "$MQG_REPO_ROOT/image/build-image.sh" --name "$name" --accel "$pipeline_accel" \
             ${cpu_choice:+--cpu "$cpu_choice"} \
             ${smbios_choice:+--smbios "$smbios_choice"} \
-            --generate-ssh-key --stage "$stage" >> "$scratch/pipeline.log" 2>&1; then
+            --generate-ssh-key --stage "$stage" >> "$pipeline_log" 2>&1; then
         stage_was_preexisting "$stage" && result=reused
         stage_report="$stage_report$stage	$result	$((SECONDS - t0))s
 "
@@ -991,8 +1070,8 @@ if [ "$level" != probe ]; then
     # speak to it; a media stage that stopped for any other reason is not
     # evidence. See tri_media_failure_kind.
     if [ "$media_built" = no ]; then
-        media_failure_kind=$(tri_media_failure_kind "$scratch/pipeline.log")
-        media_failure=$(tri_media_failure_reason "$scratch/pipeline.log")
+        media_failure_kind=$(tri_media_failure_kind "$pipeline_log")
+        media_failure=$(tri_media_failure_reason "$pipeline_log")
     fi
     if stage_was_preexisting ovmf && stage_was_preexisting efi; then
         boot_fresh=no
@@ -1013,8 +1092,8 @@ if [ "$level" = full ] && [ "$build_ok" = yes ]; then
     done
     # The verify stage asks the guest what it is, diskbus included (for
     # G16); its answer is in the log.
-    guest_bus=$(sed -n 's/^ *diskbus=//p' "$scratch/pipeline.log" | first_line || true)
-    guest_screen=$(grep 'lit px' "$scratch/pipeline.log" 2>/dev/null \
+    guest_bus=$(sed -n 's/^ *diskbus=//p' "$pipeline_log" | first_line || true)
+    guest_screen=$(grep 'lit px' "$pipeline_log" 2>/dev/null \
         | sed -e 's/^ *//' -e 's/  */ /g' | tail -1 || true)
     failed_stage=$(tri_failed_stage "$stage_report")
 fi
@@ -1241,7 +1320,7 @@ if [ -n "$stage_report" ]; then
             # is worse than no report.
             say "  The last 25 lines before it stopped:"
             say ""
-            tail -25 "$scratch/pipeline.log" 2>/dev/null | sed -e 's/^/    /' \
+            tail -25 "$pipeline_log" 2>/dev/null | sed -e 's/^/    /' \
                 > "$scratch/tail.txt" || true
             say "$(cat "$scratch/tail.txt")"
             say "" ;;
@@ -1307,6 +1386,31 @@ if [ -n "$TRI_SPECIALS" ]; then
     say ""
 fi
 
+say "## Where this run is written down"
+say ""
+if [ -n "$run_dir" ]; then
+    say "  $run_dir"
+    say ""
+    say "  report.txt    this, in full"
+    say "  report.json   the same facts and ledger rows, machine-readable"
+    say "  pipeline.log  every stage's stdout and stderr, written as the run"
+    say "                goes, so 'tail -f' on it follows a run in progress"
+    if [ "$level" = probe ]; then
+        say "                -- empty here, because --probe runs no stages"
+    fi
+    say "  *.log         build logs, salvaged out of the build trees before"
+    say "                the cleanup removed them, when a stage failed"
+    say ""
+    say "  Send the directory, not a summary of it. The ledger rows above"
+    say "  are what a triangulation run is for, and they are in report.txt"
+    say "  whether this run succeeded or failed."
+else
+    say "  NOWHERE. The working directory could not be written to, so this"
+    say "  report exists only on the terminal that produced it. Re-run from"
+    say "  a writable directory if it needs to reach anybody else."
+fi
+say ""
+
 emit_json() {
     printf '{\n'
     printf '  "schema": "mqg-triangulate-1",\n'
@@ -1358,8 +1462,13 @@ escape_accumulators() {
     done)
 }
 
+# The accumulators are escaped exactly once, and now always: the JSON goes
+# into the run directory whether or not anybody asked for it on stdout.
+escape_accumulators
+
+# --json means stdout is JSON and nothing but JSON, for whoever is piping
+# it. Unchanged.
 if [ "$want_json" -eq 1 ]; then
-    escape_accumulators
     if [ -n "$json_out" ]; then
         emit_json > "$json_out"
         printf '%s' "$report"
@@ -1371,6 +1480,19 @@ if [ "$want_json" -eq 1 ]; then
 else
     printf '%s' "$report"
 fi
+
+# Written whether this run succeeded or failed, which is the whole point:
+# a success used to leave nothing, and the ledger rows are the deliverable
+# either way.
+write_evidence() {
+    [ -n "$run_dir" ] || return 0
+    mkdir -p "$run_dir" 2>/dev/null || return 0
+    printf '%s' "$report" > "$run_dir/report.txt" 2>/dev/null \
+        || warn "could not write $run_dir/report.txt"
+    emit_json > "$run_dir/report.json" 2>/dev/null \
+        || warn "could not write $run_dir/report.json"
+}
+write_evidence
 
 # A failed --build or --full is a failed run; a probe that found a host
 # that cannot do something is not. The report is the deliverable either

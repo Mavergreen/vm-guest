@@ -12,6 +12,10 @@ setup() {
     source "$REPO/lib/common.sh"
     # shellcheck source=/dev/null
     source "$REPO/lib/triangulate.sh"
+    # Every run of bin/triangulate.sh now writes its evidence directory
+    # into the current directory. Tests run it for real, so they run it
+    # from somewhere disposable rather than from the working tree.
+    cd "$BATS_TEST_TMPDIR"
 }
 
 # --- flag spelling ---------------------------------------------------------
@@ -548,7 +552,6 @@ EOF
 @test "the report names the commit and calls a clean tree clean" {
     local bin
     bin=$(fake_git_dir clean)
-    cd "$BATS_TEST_TMPDIR"
     PATH="$bin:$PATH" run "$REPO/bin/triangulate.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"1111111111111111111111111111111111111111 (clean)"* ]]
@@ -558,7 +561,6 @@ EOF
 @test "a dirty tree is said so prominently, with a count" {
     local bin
     bin=$(fake_git_dir dirty)
-    cd "$BATS_TEST_TMPDIR"
     PATH="$bin:$PATH" run "$REPO/bin/triangulate.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"(DIRTY)"* ]]
@@ -568,7 +570,6 @@ EOF
 @test "no repository is 'unknown', which is not 'clean'" {
     local bin
     bin=$(fake_git_dir none)
-    cd "$BATS_TEST_TMPDIR"
     PATH="$bin:$PATH" run "$REPO/bin/triangulate.sh"
     [ "$status" -eq 0 ]
     [[ "$output" == *"(unknown)"* ]]
@@ -579,7 +580,6 @@ EOF
 @test "the commit and the dirty flag are in the JSON too, not only the report" {
     local bin
     bin=$(fake_git_dir dirty)
-    cd "$BATS_TEST_TMPDIR"
     PATH="$bin:$PATH" run "$REPO/bin/triangulate.sh" \
         --json-out "$BATS_TEST_TMPDIR/out.json"
     [ "$status" -eq 0 ]
@@ -600,6 +600,105 @@ assert f["repo_uncommitted"] == "2", f["repo_uncommitted"]
     [ "$status" -eq 0 ]
     after=$(find "$REPO" -maxdepth 1 -name '.mqg-triangulate*' | wc -l)
     [ "$before" -eq "$after" ]
+    # The G12 timing directory is temporary and goes; the run directory in
+    # the CURRENT directory is the deliverable and stays. One, not two.
+    [ "$(find . -maxdepth 1 -type d -name 'triangulate-logs-*' | wc -l)" -eq 1 ]
+}
+
+@test "the probe does not create MQG_IMAGE_DIR on a host that never ran this" {
+    # The evidence directory is new; the promise that a probe touches
+    # nothing of the project's on someone else's machine is not.
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/never/existed" \
+        "$REPO/bin/triangulate.sh" --probe
+    [ "$status" -eq 0 ]
+    [ ! -e "$BATS_TEST_TMPDIR/never" ]
+}
+
+# --- every run leaves its evidence -----------------------------------------
+#
+# The report went to stdout, and to a file only on the failure path. So a
+# SUCCESSFUL run left nothing at all and the ledger rows -- which
+# docs/test-hosts.md calls the deliverable of a run -- lived only in the
+# scrollback of whoever typed the command. Getting them back meant asking
+# that person to paste a result that had already been produced.
+
+# The single run directory in the current directory, or a failure naming
+# how many were found instead.
+the_run_dir() {
+    local n
+    n=$(find . -maxdepth 1 -type d -name 'triangulate-logs-*' | wc -l)
+    [ "$n" -eq 1 ] || { echo "expected 1 run directory, found $n"; return 1; }
+    find . -maxdepth 1 -type d -name 'triangulate-logs-*'
+}
+
+# One probe, several claims: a probe costs seconds and this file already
+# spends plenty of them.
+@test "a successful run leaves its report, its JSON and its pipeline.log" {
+    local dir
+    run "$REPO/bin/triangulate.sh"
+    [ "$status" -eq 0 ]
+    dir=$(the_run_dir)
+
+    [ -s "$dir/report.txt" ]
+    grep -q 'triangulation report' "$dir/report.txt"
+    # The ledger rows are the point of the exercise, so they are what the
+    # file has to contain.
+    grep -q '^| Entry | Verdict | Host | Observation |' "$dir/report.txt"
+    grep -q '^| G13 |' "$dir/report.txt"
+
+    # The JSON is written whether or not anybody asked for it on stdout.
+    python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["schema"] == "mqg-triangulate-1"
+assert len(d["ledger"]) > 10
+assert d["facts"]["repo_commit"]
+assert d["facts"]["repo_dirty"] in ("clean", "DIRTY", "unknown")
+' "$dir/report.json"
+
+    # pipeline.log is present even at --probe, which runs no stages: a
+    # predictable path that is empty says "no stages yet", and a path that
+    # may or may not exist cannot be tailed before the run reaches it.
+    [ -f "$dir/pipeline.log" ]
+    # And the stages write there rather than into the mktemp -d.
+    grep -q 'pipeline_log=\$run_dir/pipeline.log' "$REPO/bin/triangulate.sh"
+    grep -q '>> "\$pipeline_log" 2>&1' "$REPO/bin/triangulate.sh"
+}
+
+@test "the run directory is announced at the start and printed last" {
+    local err dir
+    err=$BATS_TEST_TMPDIR/err
+    "$REPO/bin/triangulate.sh" > "$BATS_TEST_TMPDIR/out" 2> "$err"
+    dir=$(the_run_dir)
+    # Early, so a two-hour run on another machine can be watched.
+    grep -q 'evidence:' "$err"
+    grep -q "tail -f .*$(basename "$dir")/pipeline.log" "$err"
+    # Last, after the cleanup's removal chatter, so it cannot scroll past.
+    [ "$(basename "$(tail -1 "$err" | sed -e 's/^ *//')")" \
+      = "$(basename "$dir")" ]
+}
+
+@test "--json keeps stdout for the JSON and still leaves the evidence" {
+    local dir
+    "$REPO/bin/triangulate.sh" --json > "$BATS_TEST_TMPDIR/j" 2>/dev/null
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["schema"]=="mqg-triangulate-1"' \
+        "$BATS_TEST_TMPDIR/j"
+    dir=$(the_run_dir)
+    [ -s "$dir/report.txt" ]
+    [ -s "$dir/report.json" ]
+}
+
+@test "a run that cannot write its directory says so rather than pretending" {
+    local ro=$BATS_TEST_TMPDIR/readonly
+    mkdir -p "$ro"
+    chmod 555 "$ro"
+    cd "$ro"
+    run "$REPO/bin/triangulate.sh"
+    chmod 755 "$ro"
+    # Still produces a report -- it just has nowhere to put it, and says
+    # which, because "I could not save this" is not the same as "saved".
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NOWHERE"* ]]
 }
 
 @test "a failed build salvages logs before cleanup removes the build tree" {
@@ -642,6 +741,38 @@ assert f["repo_uncommitted"] == "2", f["repo_uncommitted"]
     # It copies logs, not everything: the build tree is gigabytes.
     notes=$(find "$BATS_TEST_TMPDIR" -name 'notes.txt' -path '*triangulate-logs-*' | wc -l)
     [ "$notes" -eq 0 ]
+}
+
+@test "a failed run puts the logs and the report in the run's own directory" {
+    # One directory per run, success or failure. A failure used to create a
+    # SECOND directory stamped at the second the failure happened, so a
+    # reader had to work out which of two was the run they were sent.
+    local dir="$BATS_TEST_TMPDIR/triangulate-logs-testhost-20260922-000000"
+    local doomed="$BATS_TEST_TMPDIR/build"
+    mkdir -p "$dir" "$doomed"
+    printf 'the error that matters\n' > "$doomed/ovmf-build.log"
+
+    run bash -c '
+        scratch=$(mktemp -d)
+        created_list=$scratch/created
+        printf "%s\n" "'"$doomed"'" > "$created_list"
+        run_dir="'"$dir"'"
+        pipeline_log=$run_dir/pipeline.log
+        printf "a stage said this\n" > "$pipeline_log"
+        report="## Pipeline stages
+  ovmf       FAILED  12s
+"
+        '"$(sed -n '/^salvage_logs() {/,/^}/p' "$REPO/bin/triangulate.sh")"'
+        salvage_logs
+        rm -rf "$scratch"
+    '
+    [ "$status" -eq 0 ]
+    [ -f "$dir/ovmf-build.log" ]
+    grep -q 'FAILED' "$dir/report.txt"
+    # pipeline.log was already there and is not duplicated or clobbered.
+    grep -q 'a stage said this' "$dir/pipeline.log"
+    # And no second directory was invented beside it.
+    [ "$(find "$BATS_TEST_TMPDIR" -maxdepth 1 -type d -name 'triangulate-logs-*' | wc -l)" -eq 1 ]
 }
 
 @test "a failed run salvages the report, not only the build logs" {

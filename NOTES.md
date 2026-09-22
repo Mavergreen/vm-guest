@@ -6208,3 +6208,59 @@ comparing the intermediate `.dll` against the final `.efi` — a differing
 a smaller one than either "identical" or "different" would have been — but
 it is the one the evidence supports, and §8.3's clause is no longer stating
 an outcome nobody measured.
+
+## 2026-09-22 — a run that leaves nothing behind is a run nobody else can read
+
+`bin/triangulate.sh` printed its report to stdout and saved it to a file
+only when a stage failed. So the **successful** runs — the ones worth
+keeping — left no artifact at all, and the ledger rows that
+`docs/test-hosts.md` calls the actual deliverable ("not 'it worked' or 'it
+didn't', but an updated ledger") existed only as scrollback on the terminal
+of whoever typed the command. Several times in the last two days that meant
+asking someone to paste back a result that had already been produced.
+
+A run **in progress** was worse: `build-image.sh`'s output went to
+`$scratch/pipeline.log`, and `$scratch` was a `mktemp -d` under `/tmp`,
+local to that host and deleted at the end. Watching a two-hour `--full` on
+another machine meant asking the user to `tail -f` a path they had to
+discover first.
+
+### One directory per run, created at the start
+
+`./triangulate-logs-<host>-<stamp>/`, holding `report.txt`, `report.json`
+and `pipeline.log`, plus any `*.log` salvaged from the build trees when a
+stage fails. The existing name is reused rather than a new one invented:
+`.gitignore` already covers `triangulate-logs-*/`, `docs/triangulation`
+already refers to directories with that name, and **one** directory means a
+failure appends to the run's own directory instead of creating a second one
+stamped at the second the failure happened — which is what used to happen,
+and left a reader working out which of two directories was the run.
+
+`pipeline.log` is created empty before the first stage, so the path exists
+to be tailed before there is anything in it, and it is printed twice: once
+when the run starts with the `tail -f` line spelled out, and once as the
+very last line, after the cleanup's removal chatter, where it cannot scroll
+past. A working directory that cannot be written to is reported as such and
+the run still produces its report — "I could not save this" is a different
+answer from "saved", the same distinction `bin/image-staleness.sh` draws.
+
+### And which code produced the result
+
+The header carried host, kernel and bash version but not the commit. Some
+of these runs come from a working tree **shared over NFS** rather than a
+clone: `/home/schmonz/trees/...` on one host and
+`/home/schmonz/Documents/trees/...` on another are the same files. A run
+therefore picks up whatever is on disk when it starts, including another
+machine's mid-edit — that nearly happened on 2026-09-20, and on 2026-09-21
+a commit landed *during* a run and changed its behaviour in flight. It
+happened again while this very change was being written: `HEAD` moved from
+`0b268c5` to `5dfe588` under a session that had already read the tree.
+
+So `repo_commit`, `repo_dirty` and `repo_uncommitted` are now facts, in the
+report header and in the JSON. Three answers, not two: `clean`, `DIRTY`
+with a count of differing paths, and `unknown` for no git or no repository.
+`DIRTY` and `unknown` each get a warning on stderr as the run starts and a
+stanza under the header, because a result traced to no particular code is
+worth much less than one that is — and because `docs/decisions/0006` claims
+a fresh clone reproduces the image, which a run from the shared tree does
+not test while looking exactly like one that does.
