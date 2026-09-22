@@ -5726,3 +5726,41 @@ because the two machines share this working tree over NFS. It helped
 this time: the old code printed a PIL warning instead of a verdict. It
 could as easily have swapped code under a running experiment. The shared
 tree is a hazard that has now cut both ways.
+
+### And the second explanation was refuted by the ledger itself
+
+An hour after writing that the P1 panic was an unemulated MSR which
+`kvm.ignore_msrs=1` would paper over, I checked the parameter. It has
+been `Y` on `pet-power-plant` since 2026-09-17 -- recorded in §3 of
+`host-profile.md`, which I had read today. **The control panic here
+happened with `ignore_msrs` already on.** The hypothesis was dead before
+I proposed it, and the evidence was in the file I was editing.
+
+Two wrong causes in one evening, both mine, for an observation that has
+now survived every test anyone has thrown at it.
+
+**Third hypothesis, and this one at least fits the name of the function
+that faults.** `enableInterruptForCorrectableMemoryCoreRegister` --
+"interrupt for correctable memory" is **CMCI**, the Corrected Machine
+Check Interrupt, configured through `IA32_MCi_CTL2`. **KVM does not
+implement CMCI.** That explains why `ignore_msrs` is no help: these are
+not MSRs KVM is ignorant of, they are MSRs it knows and whose semantics
+it does not support, so the access still takes a #GP.
+
+It predicts everything seen so far, which the previous two did not:
+identical behaviour on two CPU families, with `ignore_msrs` on and off,
+across two OpenCore versions and two firmwares. If it is right,
+`MacPro5,1` is unusable under KVM at any CPU model, and the remedy is
+the one already shipped.
+
+**What would actually test it**, neither yet done: read the faulting
+address off the panic screen and compare it against the `IA32_MCi_CTL2`
+range, or run the same image under TCG, which emulates rather than
+delegates and may implement more of the MCE architecture.
+
+**The pattern worth keeping.** Each time, the observation survived and my
+explanation did not. The entry has been useful throughout anyway --
+because `docs/test-hosts.md` wrote down what would falsify it before the
+hardware existed. An explanation nobody can test is a story; an
+observation with a named falsifier is an asset, even while the story
+attached to it keeps being wrong.
