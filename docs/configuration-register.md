@@ -87,7 +87,7 @@ the cost ranking at the end.
 
 | Knob | Value | Why — and by whom | How we know it is doing its job | What would change it |
 |---|---|---|---|---|
-| `SystemProductName` | `iMac14,2` | **MEASURED, in the weakest useful sense**: P1 changed it away from the reference config's `MacPro5,1` because that panicked, and this was the first value that worked. Not a value shown to be best. | **MEASURED**: full unattended installs on **three** hosts, each then booting without installer media and answering SSH; the installed guest reports `hw.model=iMac14,2`, so the override reaches the installed system and not only the installer. | **Nothing needs to change it.** What is open is the *neighbouring* question: G14's observation that `MacPro5,1` panics has survived three phases, two OpenCore versions, two firmwares and a real Xeon — but **all three explanations offered for it have now been refuted or are unsupported** (see §7). |
+| `SystemProductName` | `iMac14,2` | **MEASURED, in the weakest useful sense**: P1 changed it away from the reference config's `MacPro5,1` because that panicked, and this was the first value that worked. Not a value shown to be best. | **MEASURED**: full unattended installs on **three** hosts, each then booting without installer media and answering SSH; the installed guest reports `hw.model=iMac14,2`, so the override reaches the installed system and not only the installer. | **Nothing needs to change it, and as of 2026-09-22 we know why the alternative fails** — see §11's G14 entry. `MacPro5,1` is not unusable "on a non-Xeon host"; it is unusable **under QEMU at all**, because QEMU never sets `MCG_CMCI_P` and the driver writes `IA32_MC0_CTL2`. The falsifier is a host kernel older than 6.0. |
 | Identity fields | `SystemSerialNumber` `W00000000001`, `SystemUUID` all zeroes, `MLB` `M0000000000000001`, `ROM` `112233445566` — the sample's placeholders | **REASONED, and deliberately.** "Generating a plausible serial number is what you do when you want a VM to pass for a real Mac to Apple's servers; we want the opposite" (`boot/config/README.md`). | Three installs and three SSH-answering guests, so nothing in 10.9's boot path consults them. | Something in the guest would have to need a well-formed serial. Nothing does. **If a real-looking serial ever appears in a diff, that is the thing to question.** |
 | `Automatic` | `true` | **REASONED**, and it is what makes the row above coherent: OpenCore derives the board id, firmware features and platform feature word from the product name. `Mac-F221BEC8` is the board id P1's panic printed **without anyone ever having typed it**. | That derivation is the measurement: the board id moved when the product name moved. | Nothing. It is why `--smbios` can be a one-variable experiment at all. |
 
@@ -222,6 +222,64 @@ login window.
   `lib/cpu.sh` keeps VERIFIED and BOOTED apart because `decisions/0008`
   demonstrated that "booted with X" and "installs with X" are different
   claims in this guest.
+
+### And one measurement that was not cheap, but was decisive: G14
+
+The register's SMBIOS row pointed at an open question — `MacPro5,1` panics,
+and **three explanations had been refuted in a day, all three of them
+reasoned rather than measured.** The falsifier `docs/test-hosts.md` and G14
+had both named in advance was "read the panic's faulting address and compare
+it against the `IA32_MCi_CTL2` range, or run the same image under TCG."
+
+**The first half needed no new run. The answer was already on a screen
+nobody had read.** macOS prints the CPU registers above the backtrace, and
+the panic dump says:
+
+```
+panic(cpu 0 caller 0xffffff80098dc43e): Kernel trap at 0xffffff7f8aefc6b7,
+    type 13=general protection, registers:
+RAX: 0xffffff7f8aefc6ac, RBX: 0x0000000000000000, RCX: 0x0000000000000280, ...
+RIP: 0xffffff7f8aefc6b7
+...
+com.apple.driver.AppleTyMCEDriver :
+    __ZN16AppleTyMCEDriver47enableInterruptForCorrectableMemoryCoreRegisterEPv + 0xb
+System model name: MacPro5,1 (Mac-F221BEC8)
+```
+
+**`RCX: 0x0000000000000280`.** RCX is the MSR index register for `rdmsr` and
+`wrmsr`. `0x280` is `IA32_MC0_CTL2` — the first CMCI control register. The
+faulting instruction is eleven bytes into a function called
+"enable **I**nterrupt **F**or **C**orrectable **M**emory". There is no
+inference left to make.
+
+Reproduced from scratch on 2026-09-22 as a one-variable control on a fresh
+overlay of the SSH-capable image — `SystemProductName` the only thing
+changed, same firmware, same OpenCore build, same CPU line, same host: panic
+at 40 s, no SSH in 180 s where the default answers in 20–40 s.
+
+**Why `ignore_msrs` cannot help, and the date it stopped being able to.**
+`ignore_msrs` suppresses the #GP *only* for handlers that return the
+`KVM_MSR_RET_UNSUPPORTED` sentinel. A handler returning plain `1`
+short-circuits before `ignore_msrs` is read, injects #GP, **and logs
+nothing.** Since commit `281b5278` (author date **2022-06-10**, first release
+**v6.0, 2022-10-02**) the whole range `0x280`–`0x29F` is dispatched to
+`get_msr_mce`/`set_msr_mce`, which `return 1` when `MCG_CMCI_P` is clear —
+and **QEMU never sets that bit** (`MCE_CAP_DEF = MCG_CTL_P|MCG_SER_P`;
+`kvm.c` masks down, never up).
+
+That also explains the one piece of evidence that looked unhelpful: with
+`report_ignored_msrs=Y`, the panic run logged exactly **one** ignored MSR,
+`0x300`, and **nothing in the `0x280` range**. The code says that is precisely
+what a #GP there looks like, because that path emits no log line at all.
+
+**The falsifier, written down before anyone tries:** before v6.0 the range
+fell through to `default:` → `UNSUPPORTED`, where `ignore_msrs=1` *would*
+have suppressed it and *would* have logged `ignored rdmsr: 0x280`. So **on a
+host kernel older than 6.0 with `ignore_msrs=1`, `MacPro5,1` should boot here
+without panicking.** No host in the fleet is old enough. If it panics there
+anyway, this explanation is wrong too — which would make it four.
+
+---
 
 ---
 
