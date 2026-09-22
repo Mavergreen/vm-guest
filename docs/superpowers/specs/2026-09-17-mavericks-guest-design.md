@@ -1,6 +1,11 @@
 # Design: OS X 10.9 Mavericks as a usable KVM guest
 
 Date: 2026-09-17
+Revised: 2026-09-22 — the phase spine, §1's success criteria and §5.1's
+layout, brought up to date with `decisions/0007` (what this project ships),
+`open-questions.md` Q1 (answered), and the user's ordering of the remaining
+work. Three new phases: P8 `vmavs`, P9 the build VM, P10 release packaging.
+Nothing in §§2–5 or §§7–10 changed.
 Status: approved
 Supersedes: `mavericks-qemu-brief.md`, `mavericks-kvm-perf-brief.md`,
 `mavericks-kvm-integration-brief.md`, `mavericks-gha-tcg-brief.md`
@@ -29,6 +34,13 @@ throughput is secondary.
 | 2 | One command, from a clean checkout, produces a bootable SSH-reachable qcow2 with no human interaction. Run twice, the outputs are equivalent. |
 | 3 | A baseline-vs-tuned measurement table, a recommended default profile, and every host-specific assumption recorded. |
 | 4 | `mavericks-smoke.yml` runs green on a `macos-15` runner inside 30 minutes. |
+| Shipping (`decisions/0007`) | `vmavs` is the documented entry point and reports a version; the README answers "what is this" in thirty seconds; a release exists and is structurally incapable of containing Apple's bytes; somebody who is not us can install it and reach a Mavericks desktop. |
+
+The last row is not a fifth goal. The four above it are the user's words, in
+the user's priority order. The shipping criterion arrived later, with
+`decisions/0007`, once P4 meant there was something to ship rather than
+something to get working — and it is tracked here rather than done as an
+errand because that is how an errand becomes a phase nobody planned.
 
 ## 2. Host and available hardware
 
@@ -146,11 +158,16 @@ The full component-by-component record, with pins and checksums, is
 ### 5.1 Repository layout
 
 ```
+bin/vmavs                      the command (P8). Dispatches; implements nothing
+build/version.sh               the version scheme: YYYYMMDD.N (P8)
+UPSTREAM_VERSION               this product's own version line, hand-bumped
 docs/
   superpowers/{specs,plans}/   design docs and implementation plans
   prior-art.md                 every source, and what each one gives us
   host-profile.md              host facts; the generalization ledger
+  configuration-register.md    every knob: measured, inherited or reasoned
   decisions/                   ADRs: what we chose, the evidence, what we rejected
+emit/                          interop artifacts for other tools (P8: packer)
 lib/common.sh                  shared shell: logging, checksums, guards
 media/                         installer acquisition and assembly
 boot/                          firmware and bootloader, built from source
@@ -214,10 +231,19 @@ rather than aspirational: a profile diff is the experiment.
 | P1 — Known-good boot | **complete** 2026-09-17 | Installer GUI under KVM. Cost four failures worth reading in `NOTES.md`; the fix was SMBIOS, not the shipped `Kernel > Block`. |
 | P2 — Manual install | **complete** 2026-09-17 | 10.9.5 installed and rebooting; golden #1 (`p2-manual-install`) promoted and verified after being cloned from. |
 | P3 — Reproducible boot stack | **complete** 2026-09-17 | See below. |
-| P4 — Unattended pipeline | **complete** 2026-09-18 | `image/build-image.sh`: one command, clean checkout to a bootable, SSH-reachable image, no interaction. Media built on Linux without root; the install driven by Apple's own `rc.cdrom.local` / `minstallconfig.xml` / `OSInstall.collection` hooks; the first-boot payload installed as a flat package this project builds on Linux. See `decisions/0006` for what "reproducible" means here. **Not delivered:** post-10.9.5 updates (`--updates` has one value; `open-questions.md` Q1 is still open), and byte-identical images, which is deliberately not the claim. |
-| P5 — Interactive performance | not started | Display work is now about *changing* modes, not reaching a usable one. |
-| P6 — GitHub Actions runner | not started | Also depends on the keypress defect. |
-| P7 — Guest integration | deferred | |
+| P4 — Unattended pipeline | **complete** 2026-09-18 | `image/build-image.sh`: one command, clean checkout to a bootable, SSH-reachable image, no interaction. Media built on Linux without root; the install driven by Apple's own `rc.cdrom.local` / `minstallconfig.xml` / `OSInstall.collection` hooks; the first-boot payload installed as a flat package this project builds on Linux. See `decisions/0006` for what "reproducible" means here. **Q1 was answered 2026-09-22** — two images, `--updates none` as P5's baseline and `--updates security` as the default — and is being implemented now. **Still not delivered, and deliberately:** byte-identical images. `decisions/0006` says what is claimed instead. |
+| **P8 — `vmavs`, the front door** | **next** | The ten subcommands of `decisions/0007` over machinery that already works, a version the command can report, a README that is product documentation, and `emit packer`. Plan: `docs/superpowers/plans/2026-09-22-shipping-vmavs.md`. |
+| **P9 — Build in a controlled Linux VM** | **blocked on a decision** | Spec written 2026-09-21 and the *direction* approved; the *design* is not adopted and no plan exists. It carries its own abandon thresholds (§7.4: >1.5× cold, >60 s warm, >10 s freshness), so it may end as an optional backend rather than the default. Its headline number is why P10 waits for it: the host tool list goes from 36 to about 7. |
+| **P10 — Release packaging and distribution** | **blocked on P9** | `release.yml`, `release-notes/`, the artifact, and how a host installs it. Deliberately not decided while the dependency list is about to change by 5×. Shape and constraints: the shipping plan, Phase C. |
+| P5 — Interactive performance | **deferred by choice** | The user's call: the guest is working fine enough. Not waiting on anything — and `decisions/0007` says P5 measures Product A's `run`, so its baseline is better taken after P8 than before. Display work is now about *changing* modes, not reaching a usable one. |
+| P6 — GitHub Actions runner | not reached | Nothing blocks it but order. (The keypress defect it used to wait on was fixed 2026-09-17 — `NOTES.md`, "the keypress requirement is fixed".) |
+| P7 — Guest integration | **split by `decisions/0007`** | The interop half is `emit` subcommands and ships in P8, Packer only — one template reaches QEMU, VirtualBox, VMware and Proxmox. The guest-side half (M0–M6 below) stays **deferred by choice** and belongs to Product B. |
+
+**The numbers are identities, not an order.** The order of work is **P8, P9,
+P10, then P5, P6, P7**. Four status words are used and they mean different
+things: *not reached* (nothing blocks it but sequence), *deferred by choice*
+(the user postponed it; it waits on nothing), *blocked on a decision*
+(something must be settled before it can start), and *blocked on <phase>*.
 
 ### P0 — Foundations
 
@@ -324,8 +350,11 @@ Answered on the way, each of which had been guessed at before:
   strict PE loader rejects it. `docs/decisions/0002` has the measurement.
 - **The firmware belongs in Tier 0**, for the reasons recorded in §4.
 
-**Not met, and both P4 and P6 need it fixed: `p3-full` still requires a
-keypress.** `Misc > Boot > Timeout = 5` with an empty NVRAM makes the
+**Not met at the time, and since fixed (2026-09-17, `NOTES.md` "P4 — the
+keypress requirement is fixed"): `p3-full` required a keypress.** The
+paragraph below is kept as written because it is the record of what was
+wrong and why; P4's unattended installs are the evidence it no longer is.
+`Misc > Boot > Timeout = 5` with an empty NVRAM makes the
 picker's default the OpenCore disk itself, so an unattended boot times out
 into `EFI_ALREADY_STARTED` and hangs; `2` must be pressed within five
 seconds. It is a `config.plist` defect, not a firmware one, and it was left
@@ -398,9 +427,19 @@ digest matches the local one exactly.
   `decisions/0004` identify this host's build rather than the source.
 - **An answer to `open-questions.md` Q1.** `--updates` exists with one
   value implemented, so answering it is configuration rather than a rewrite.
+  **Answered 2026-09-22** — two images, `none` for P5's baseline and
+  `security` as the default — and the configuration it predicted is being
+  implemented now. The prediction held: no rewrite was needed.
 - **Two concurrent builds on one host.** One of them wedged; see `NOTES.md`.
 
-### P5 — Interactive performance (goal #3)
+### P5 — Interactive performance (goal #3) — deferred by choice
+
+**Deferred by the user, 2026-09-22, not by sequencing.** The guest is
+"working fine enough", and `decisions/0007` puts P5 after shipping for an
+independent reason: P5 measures Product A's `run`, so its baseline should be
+a baseline of the shipped thing rather than of a scratch invocation. What
+follows is the plan for when it resumes, unchanged.
+
 
 Tuning, not re-bring-up. Start from the known-good command line, change one
 thing at a time, every change measured and reversible.
@@ -509,9 +548,29 @@ gets evicted.
 **Exit:** `mavericks-smoke.yml` green on `macos-15` within 30 minutes, inside
 the RAM and disk limits, with `df` and memory pressure logged.
 
-### P7 — Guest integration (deferred)
+### P7 — Guest integration — split by `decisions/0007`
 
-Recorded, not planned. The user chose to defer all of it; it will be
+This phase was written as one thing and is two. `decisions/0007` separated
+them and the spine now reflects that.
+
+**The interop half ships in P8, and only as `emit`.** "Emit config for
+target X" is not guest integration at all — it is a format-mapping exercise
+over a machine description this project already has, because `vm/profiles/`
+*is* a canonical parameterised description of a machine (`docs/test-hosts.md`).
+P8 ships exactly one emitter, **Packer**, because one Packer template
+reaches QEMU, VirtualBox, VMware and Proxmox and its `vagrant`
+post-processor makes the boxes. libvirt XML, `.utm`, a Proxmox config and a
+container recipe all reach targets that template already covers, so they
+stay unwritten rather than duplicated.
+
+**Packer is an emit target and not the build**, for three reasons.
+Packer's core value is `boot_command` GUI keystroke automation, which P4
+engineered away entirely by using Apple's own unattended hooks. Adopting it
+would cost the stage-level input-hash freshness the pipeline now has, and
+most of the manifest. And it covers two stages of eleven.
+
+**The guest-side half stays deferred by choice**, and belongs to Product B
+(`decisions/0007`, Decision 1). Recorded, not planned; it will be
 re-brainstormed once P5 shows what is actually limiting. The milestone
 structure and prior art are preserved in `docs/prior-art.md` so nothing is
 lost:
@@ -532,6 +591,92 @@ lost:
 
 Out of scope there and here: 3D acceleration (Quartz Extreme / Core Image),
 shared folders (use SMB, NFS, or sshfs), and a virtio block driver.
+
+### P8 — `vmavs`, the front door (the product decision) — **next**
+
+Added 2026-09-22, after `decisions/0007`. The four goals at the top of this
+document are about making something work. This phase is about making it
+something a stranger can use, which is a different kind of work and was not
+tracked anywhere — so it was about to be done as an errand.
+
+The machinery is done. Eleven stages work, 553 tests are green, and what is
+missing is a name to type. `decisions/0007` lists ten subcommands and every
+one of them maps onto a stage that already exists.
+
+- **`bin/vmavs` dispatches; nothing moves.** The scripts stay under `boot/`,
+  `media/`, `image/` and `vm/`, because those directory names are what says
+  what each script is for, because roughly 150 references across the docs,
+  the tests and the scripts point at them, and because `NOTES.md` is
+  append-only and rewriting 26 of its entries would falsify the record. An
+  installed copy is the whole tree under a libdir with one `vmavs` in
+  bindir, which is what `libexec/` would have bought without the rename.
+- **The direct scripts keep working and stop being documented.** They cannot
+  be deprecated: `vmavs image` *is* `image/build-image.sh`. There are no
+  external users to break — neither repository has a git remote — and 553
+  internal ones that must not be.
+- **A version the command can report.** `YYYYMMDD.N`, the family's
+  **self-upstream** shape (`mavericks-porthole`). `decisions/0007` declared
+  a deviation from `<upstream>-mavericks.N` on the grounds that there is no
+  single upstream, which is right and stops one step short: the family's
+  own answer to "no single upstream" is that the product is its own
+  upstream. See `docs/decisions/0012-version-scheme.md`.
+- **A README that is product documentation.** It currently opens by
+  describing the host it was developed on.
+- **`emit packer`**, per the P7 split above.
+
+**Exit:** `vmavs doctor`, `vmavs image`, `vmavs run` and `vmavs ssh` take
+someone from a clean checkout to a shell in a Mavericks guest; the README
+says so in its first thirty seconds; `./bin/run-tests.sh` green.
+
+Plan: `docs/superpowers/plans/2026-09-22-shipping-vmavs.md`.
+
+### P9 — Build in a controlled Linux VM — **blocked on a decision**
+
+Spec: `docs/superpowers/specs/2026-09-21-build-in-a-linux-vm-design.md`. The
+*direction* is the user's and is approved; the *design* is proposed and not
+adopted, and no implementation plan exists.
+
+It sits between P8 and P10 for a concrete reason. Its headline number is
+that **the host tool list shrinks from 36 executables plus a development
+header to about seven** (its §9.1), because everything that produces bytes
+moves inside and only `target`, `install`, `verify` and `manifest` stay
+outside. That number is the input to P10's distribution question, and
+choosing a packaging mechanism before it is settled would bake a dependency
+list we are about to delete into packaging metadata.
+
+**Adoption is conditional, and the conditions are written down in advance**
+(its §7.4): a cold boot stack more than **1.5×** native, a warm rebuild over
+**60 s**, or a `--freshness` answer over **10 s** each say "keep it as an
+optional backend for foreign hosts; do not make it the default". So P10 must
+not assume it lands.
+
+### P10 — Release packaging and distribution — **blocked on P9**
+
+What a release is, and how a host gets the tool. Missing today:
+`.github/workflows/release.yml`, `release-notes/`, and a decision about the
+artifact. (`renovate.json`, `INGREDIENTS.md`, `build/msc.sh`,
+`.claude/settings.json`, `ci.yml` and `conventions.yml` all exist.)
+
+**The distribution question is deliberately open**, for the reason in P9
+above. Two candidate worlds: with ~36 host dependencies, realistically a
+`git clone` or a distro package with a long dependency list; with QEMU plus
+a handful, a tarball or a single pkgsrc or Homebrew entry becomes
+reasonable. pkgsrc is the only candidate that covers NetBSD, Linux, macOS
+*and* eventually 10.9 from one recipe — an argument from host coverage.
+Whether pkgsrc still supports 10.9 in 2026 has not been checked here.
+
+**One constraint binds whatever is chosen, and it is structural rather than
+procedural: a release must be incapable of shipping Apple's bytes.** The
+artifact is `git archive` of the tag and nothing else, because
+`bin/no-apple-bytes.sh` checks exactly what `git archive` would package — an
+artifact assembled any other way would make that gate partial, and a gate
+that covers most of a thing reads green while the thing is wrong. The gate
+runs in the release job, not only in `ci.yml`: checking it on pull requests
+and not on the release checks the wrong artifact.
+
+The workflow's full shape — release model, triggers, concurrency, notes
+generator, declared state — is specified in the shipping plan's Phase C so
+that this becomes an hour of planning rather than a re-derivation.
 
 ## 7. Testing strategy
 
