@@ -6264,3 +6264,179 @@ stanza under the header, because a result traced to no particular code is
 worth much less than one that is — and because `docs/decisions/0006` claims
 a fresh clone reproduces the image, which a run from the shared tree does
 not test while looking exactly like one that does.
+
+
+## 2026-09-22 — Q1 built: the default image now carries Security Update 2016-004
+
+`docs/open-questions.md` Q1 was answered by the user today — two images —
+and this is the build of it. Two full runs on `pet-power-plant` (i7-8700B,
+QEMU 8.2.2, `-accel kvm`, `-cpu Penryn,+ssse3,+sse4.1,+sse4.2`, 2 vCPU,
+4096 MB, `e1000-82545em`), one per `--updates` value, both unattended from
+`image/build-image.sh` with no arguments beyond `--name` and `--updates`.
+
+### What the guest said, which is the only part that settles anything
+
+**`sw_vers` still says 10.9.5 after 2016-004**, and it is supposed to.
+`ProductVersion` *is* 10.9.5 — this is a security update, not a point
+release — so anyone reading that field and concluding "the update did not
+take" would be wrong, and anyone reading `installer`'s zero exit and
+concluding it did would be lucky rather than right. Two things actually
+move, and both were read out of the running guest over SSH:
+
+```
+--updates security                     --updates none
+  BuildVersion:  13F1911                 BuildVersion:  13F34
+  receipts=1 post-10.9.5 package(s)      receipts=0 post-10.9.5 package(s)
+  updatepkgs=com.apple.pkg.update.security.2016-004Mavericks.13F1911
+```
+
+The full receipt, asked of the guest directly:
+
+```
+package-id: com.apple.pkg.update.security.2016-004Mavericks.13F1911
+version: 1.0.0.0.1.1467765440
+volume: /      location: /      install-time: 1790064567
+groups: com.apple.securityfix.pkg-group
+        com.apple.snowleopard-repair-permissions.pkg-group
+        com.apple.FindSystemFiles.pkg-group
+```
+
+...and `/System/Library/CoreServices/SystemVersion.plist` on the installed
+disk now reads `ProductBuildVersion 13F1911` with `ProductVersion 10.9.5`,
+which is the file the build number came from.
+
+The guest's own first-boot log, which is where the 92 seconds comes from:
+
+```
+08:07:57 updates: security
+08:07:57 updates: build before: 13F34
+08:07:57 run (3600s limit): installer -verbose -pkg .../mqg-update-01-SecUpd2016-004Mavericks.pkg -target /
+08:09:29 updates: installed 1 package(s), 0 missing
+08:09:29 updates: build after: 13F1911
+08:09:29 updates: sw_vers still reports: 10.9.5 (expected -- a security update is not a point release)
+08:09:29 updates: receipts: com.apple.pkg.update.security.2016-004Mavericks.13F1911
+```
+
+Both images installed unattended, booted with **no installer media
+attached**, and answered SSH with the key they were built for.
+
+### The ordering hazard, found by reading the package rather than by losing an install
+
+Security Update 2016-004's Payload contains, among 11,374 entries:
+
+```
+./usr/bin/ssh
+./usr/sbin/sshd
+./System/Library/CoreServices/SystemVersion.plist
+```
+
+The first two are the reason `firstboot.sh` installs updates **before** the
+family's OpenSSH. The System-Replace package puts symlinks at those paths;
+the other order would have overwritten them with 6.2 binaries and the guest
+would have quietly gone back to an OpenSSH that a 2026 client refuses — the
+defect that cost a full install to find in P4, reintroduced by an ordering
+nobody would have thought to check. `/usr/libexec/sshd-keygen-wrapper` is
+**not** in the payload, so the wrapper this project writes survives.
+
+It worked. In the finished `--updates security` guest:
+
+```
+lrwxr-xr-x  /usr/bin/ssh  -> /usr/local/bin/ssh
+lrwxr-xr-x  /usr/sbin/sshd -> /usr/local/sbin/sshd
+$ ssh -V   OpenSSH_10.5p1, LibreSSL 4.3.2
+```
+
+### Is `--updates none` still what it was? Yes, and here is how that was established
+
+Not by assertion. The media built today with `--updates none` was compared
+file by file against the media built from the pre-change tree (39,416-line
+listings from `media/content-digest.sh --list`, taken before any of this
+landed). The **entire** diff:
+
+```
+8987c8987
+< ab6c20b9...  ./System/Installation/Packages/mqg-firstboot.pkg
+---
+> cf06fa6a...  ./System/Installation/Packages/mqg-firstboot.pkg
+39416c39416
+< 4da97280...  39415 files  6427835991 bytes  0 unreadable
+> 38479616...  39415 files  6427837687 bytes  0 unreadable
+```
+
+Same file count, same paths, every byte identical except the first-boot
+payload — which changed by 1,696 bytes because `firstboot.sh` gained the
+block that installs updates. That block is **inert** at `none`: it logs
+"none requested" and does nothing, and the generated `firstboot.conf` is
+byte-identical to one built before any of this existed, because
+`build-firstboot-pkg.sh` writes the two update variables only when there
+are packages. The partition is back to exactly **6759 MiB =
+7,087,325,184 bytes**, the pre-change number, because `--extra-space-mib`
+defaults to 0.
+
+What is NOT claimed: byte-identity of the payload package. It is bigger, so
+its checksum moved and the payload and media stages rerun once. That is a
+one-time rebuild, not a behavioural difference, and `docs/decisions/0011`
+says so rather than leaving someone to discover it.
+
+### The stamp caught the switch, which is the whole point of task #36's machinery
+
+Flipping `--updates security` -> `none` on an otherwise untouched tree, the
+pipeline reran exactly the stages that carry updates and named why:
+
+```
+esd/opencore/ovmf/efi: up to date (inputs unchanged)
+payload: inputs changed (update:apple-secupd-2016-004 updates)
+media:   inputs changed (payload update:apple-secupd-2016-004 updates)
+```
+
+`--smbios` was this machinery's first user; `--updates` is its second.
+Nothing at all is emitted for `none`, so an image built before the switch
+had a second value does not reinstall itself over a feature it does not
+use — and every transition is still caught, because none has no lines,
+security has one and all has seven.
+
+### The cost, measured both ways on the same host
+
+| | `--updates none` | `--updates security` | difference |
+|---|---|---|---|
+| media stage | 108 s | 119 s | **+11 s** |
+| install stage | 819 s | 963 s | **+144 s** (+18%) |
+| SSH answered after | 780 s | 920 s | +140 s |
+| of which, the update itself | — | 92 s | (from the guest's own log) |
+| media partition | 7,087,325,184 B | 7,525,629,952 B | +418 MiB |
+| free on the media afterwards | 483.8 MiB | 548.0 MiB | — |
+| files on the media | 39,415 | 39,416 | +1 |
+| finished qcow2 | 8,960,737,280 B | 10,685,710,336 B | **+1.61 GiB** |
+| whole run, wall clock | 17:50 | 21:14 | (the 21:14 run also rebuilt the firmware) |
+
+Plus a **one-time 354 MB download** of `SecUpd2016-004Mavericks.pkg`, cached
+under `$MQG_IMAGE_DIR/updates` and verified against its pin on every reuse.
+
+The 144 seconds is more than the 92 the `installer` run took; the rest is
+first boot doing more work afterwards — 6,891 files replaced, and the
+kernel and dyld caches rebuilt on the way out.
+
+### Why the media had to grow, which was nearly a silent overflow
+
+The 512 MiB margin in `media/build-installer-img.sh` is not spare room. Read
+straight out of the HFS+ volume header of the media that was sitting on
+disk: **483.8 MiB free**. 2016-004 is 353.8 MiB, which would have fitted
+with 130 MiB to spare — and `--updates all` is 685 MiB, which would not
+have fitted at all, and would have failed as a short write somewhere inside
+a 7 GB image, which is precisely the failure mode Task 34 spent days on.
+So `--extra-space-mib` is passed the size of the packages plus 64 MiB, and
+the `security` media came out with 548.0 MiB free.
+
+### Two honest limitations
+
+- **`--updates all` has never been built.** All seven packages are pinned,
+  fetched and checksum-verified, and `image/fetch-updates.sh --updates all`
+  stages them in install order — but no image has been built with it, so
+  "iTunes 12.6.2's five packages install cleanly in that order on a 10.9.5
+  guest" is untested.
+- **The two images were built from adjacent commits.** `u-none` is
+  `b111f92`, `u-security` is `13db030`; the difference between them is two
+  lines added to the *verify* stage's SSH query (the receipt check), which
+  writes nothing to an image. `u-security`'s receipts above were collected
+  by re-running `--stage verify` at the later commit against the image the
+  earlier one produced.

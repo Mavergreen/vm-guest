@@ -161,6 +161,24 @@ and it was corrected by asking a live guest, not by reading a write-up.
 `docs/open-questions.md` Q1 records how, so the next person re-checks
 rather than inherits.
 
+## Built and measured, 2026-09-22
+
+Both values were built end to end on `pet-power-plant` and the guest was
+asked what happened. `NOTES.md` carries the detail; the summary:
+
+- `--updates security`: `BuildVersion 13F1911`, one receipt
+  (`com.apple.pkg.update.security.2016-004Mavericks.13F1911`),
+  `ProductVersion` still 10.9.5, `/usr/bin/ssh` still the symlink the
+  OpenSSH replacement left, installed unattended and answered SSH with no
+  installer media attached.
+- `--updates none`: `BuildVersion 13F34`, zero receipts, and a media whose
+  39,415 files are byte-identical to the pre-change media except the
+  first-boot payload.
+- Cost: **+144 s** on the install stage (819 -> 963 s), **+11 s** on the
+  media stage, **+1.61 GiB** of qcow2, and a one-time 354 MB download. The
+  `installer` run itself took 92 s; the rest is first boot replacing 6,891
+  files and rebuilding its caches.
+
 ## Consequences
 
 - Every default build now fetches and installs 354 MB more than it did.
