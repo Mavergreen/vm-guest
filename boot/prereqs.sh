@@ -15,8 +15,8 @@
 #      advice.
 #   2. It checked the OpenCore build tools and nothing else, so on
 #      `squirrel-zapper` it reported three missing tools when six were
-#      missing. The media path needs `dmg2img`, `kpartx` and
-#      `mkfs.hfsplus`, and a script called "prereqs" that omits half the
+#      missing. The media path needs `dmg2img` and `mkfs.hfsplus`,
+#      and a script called "prereqs" that omits half the
 #      prerequisites is worse than one that does not exist, because it
 #      answers the question wrongly instead of not answering it.
 #
@@ -66,8 +66,8 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # that under-reports is worse than none, because it answers wrongly rather
 # than not answering. tests/boot_scripts.bats asserts the two agree.
 #
-# rsync, udisksctl, losetup, findmnt AND lsblk ARE ALL GONE FROM THIS
-# TABLE, and a host needs none of them for anything this project does.
+# rsync, udisksctl, losetup, findmnt, lsblk AND kpartx ARE ALL GONE
+# FROM THIS TABLE, and a host needs none of them for anything this project does.
 # The media build used to reach HFS+ volumes through a udisks loop device
 # and copy into them with rsync; it now does the whole assembly inside the
 # privops microVM, where busybox `cp -a` does the copying and the host
@@ -78,6 +78,14 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # it to install something for nothing -- and udisks2 in particular came
 # with a DESKTOP SEAT attached, which is the requirement a headless build
 # host could not meet at all.
+#
+# kpartx went the same day and for the same reason, one step further back:
+# it is from eprigorodov/mkosxinstallusb's recipe, which maps an image's
+# partitions with device-mapper and mounts them. This project never took
+# that path -- it went to udisks2 instead -- so kpartx has been asked for
+# since the beginning and invoked by nothing, ever. `grep -r kpartx` over
+# the *.sh and *.bats files finds nothing now and found only requirement
+# lists before.
 #
 # busybox and cpio are here because the media build needs them, not the
 # boot stack: lib/privops-qemu-linux.sh builds a busybox initramfs with
@@ -102,7 +110,6 @@ mcopy|mtools|mtools|mtools|mtools
 mformat|mtools|mtools|mtools|mtools
 sgdisk|gdisk|gptfdisk|?|gptfdisk
 dmg2img|dmg2img|dmg2img (AUR)|?|?
-kpartx|kpartx|multipath-tools|?|?
 mkfs.hfsplus|hfsprogs|hfsprogs (AUR)|?|?
 busybox|busybox-static|busybox|?|?
 cpio|cpio|?|-|?

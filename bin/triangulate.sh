@@ -760,7 +760,7 @@ fi
 # docs/test-hosts.md exists precisely to break that assumption, so this
 # script must not inherit it. The package manager is reported as a fact
 # about the host -- not as a mapping, and never as a command to run.
-RUNTIME_TOOLS="qemu-system-x86_64 qemu-img dmg2img kpartx sgdisk xxd openssl curl unzip python3 mkfs.hfsplus bats"
+RUNTIME_TOOLS="qemu-system-x86_64 qemu-img dmg2img sgdisk xxd openssl curl unzip python3 mkfs.hfsplus bats"
 BUILD_TOOLS="gcc make git python3 nasm iasl mcopy mformat sgdisk"
 tools_present=""
 tools_missing=""

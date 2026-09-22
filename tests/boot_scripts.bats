@@ -42,7 +42,7 @@ setup() {
 
 @test "prereqs.sh names the packages to install, not just the binaries" {
     for t in gcc make git python3 mtools sgdisk mcopy mformat \
-             dmg2img kpartx mkfs.hfsplus; do
+             dmg2img mkfs.hfsplus; do
         printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
         chmod +x "$STUB_BIN/$t"
     done
@@ -56,7 +56,7 @@ setup() {
     # on Debian and gptfdisk on Arch. Printing an apt line on an Arch host
     # is not merely unhelpful, it is wrong advice.
     for t in gcc make git python3 mtools mcopy mformat \
-             dmg2img kpartx mkfs.hfsplus; do
+             dmg2img mkfs.hfsplus; do
         printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
         chmod +x "$STUB_BIN/$t"
     done
@@ -73,7 +73,7 @@ setup() {
     # guess that is wrong costs more than a blank, because the reader
     # cannot tell which one they are looking at.
     for t in gcc make git python3 mtools sgdisk mcopy mformat \
-             dmg2img kpartx mkfs.hfsplus; do
+             dmg2img mkfs.hfsplus; do
         printf '#!/bin/sh\nexit 0\n' > "$STUB_BIN/$t"
         chmod +x "$STUB_BIN/$t"
     done
