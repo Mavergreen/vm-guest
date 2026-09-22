@@ -279,6 +279,22 @@ host kernel older than 6.0 with `ignore_msrs=1`, `MacPro5,1` should boot here
 without panicking.** No host in the fleet is old enough. If it panics there
 anyway, this explanation is wrong too — which would make it four.
 
+**And the second half of the falsifier was run, and it agrees.** The same
+overlay, the same OpenCore image, the same firmware, the same `-cpu` line,
+the same host — **one variable, `-accel tcg` instead of `-accel kvm`**:
+
+| `-accel` | SMBIOS | Result |
+|---|---|---|
+| `kvm` | `iMac14,2` | SSH in 20–40 s |
+| `kvm` | `MacPro5,1` | **panic at 40 s**, `RCX=0x280`, no SSH in 180 s |
+| `tcg` | `MacPro5,1` | **SSH at 80 s**, guest reports `10.9.5` and `hw.model=MacPro5,1` |
+
+TCG emulates the MSR rather than delegating it, and the panic does not
+happen. So `MacPro5,1` is not "unusable on a non-Xeon host" — the Xeon
+panicked too. **It is unusable under KVM and usable under TCG**, which is a
+property of KVM's machine-check emulation rather than of Mavericks or of any
+hardware we own. **P6 runs TCG**, which makes this more than a curiosity.
+
 ---
 
 ---

@@ -5868,3 +5868,204 @@ Nothing mounts on the host. Not the media build, not content-digest, not
 the test suite. The only HFS+ mounts this project performs are inside the
 privops microVM, where we are genuinely root and where no polkit policy,
 no seat and no desktop handler has an opinion.
+
+---
+
+## 2026-09-22 — every knob, and the answer that was on a screen nobody read
+
+The brief was: *"I would like us to know exactly why every config knob is
+the way it is, how we know it's doing the job, and what would have to be
+true for us to change the setting."* Plus, specifically: narrow down the
+conditions under which Somlo and others said `ignore_msrs` was necessary.
+
+That produced `docs/configuration-register.md`, a dated archaeology section
+in `docs/prior-art.md`, six one-variable measurements, and the end of a
+question that had been open since P1.
+
+### The archaeology, and what it cost us to have never done it
+
+`ignore_msrs` was set here on 2026-09-17 on the authority of "Somlo and
+OSX-KVM". **Nobody had read either source.** Both were read on 2026-09-21,
+and neither says what this project believed.
+
+Somlo named **one** MSR — `0x199`, `IA32_PERF_CTL` — **one** guest,
+**Yosemite 10.10**, and by the revision of his page last updated
+**2016-09-05** had already scoped it to "**kernels older than 4.7**". From
+his 2017 revision the instruction is gone from the page entirely. The
+symptom was not a panic: Radim Krčmář's patch posting of **2016-05-27**
+describes `#GP` → `#DF` → **triple fault → vCPU reset**, which is the
+"bootloop" every downstream guide cites without naming. **It was fixed
+upstream in Linux 4.7, released 2016-07-24.** Our kernel is 7.2.6.
+
+So G21 is not merely "not required on this CPU and QEMU". **It is
+obsolete, and has been for nine years and roughly thirty kernel releases.**
+`docs/host-profile.md` §3 now says so and tells nobody to set it.
+
+kholia/OSX-KVM has carried the knob since at least 2016 and **has never
+once given a reason** — a commit search for it in that repo returns zero,
+and the README has said "may need … to work" for ten years. Nicholas
+Sherlock's Proxmox guides use byte-identical wording six years apart. Two
+maintained projects run macOS on KVM with no use of it at all: foxlet's
+(2019–2020, every blob of every commit grepped) and DarwinKVM's
+(2023–2026). Upstream KVM calls the OSX-KVM configuration unsupported
+(Bonzini, **2024-12-19**).
+
+**And the MacPro5,1 hypothesis died on the way.** The guess was that Somlo
+and OSX-KVM needed the knob because they ran `MacPro5,1`. Somlo used the
+bare `-smbios type=2` with no product name at all; OSX-KVM went
+`Macmini6,2` → `iMacPro1,1` (2020-03-19) → `iMac19,1` (2026-01-26), never
+`MacPro5,1`. That was the third wrong explanation offered in two days, and
+all three were reasoned rather than measured. The register carries a
+column that marks which is which for exactly this reason.
+
+### G14, settled — and the evidence had been sitting on disk since P1
+
+`docs/test-hosts.md` and G14 both named the falsifier in advance: *"read
+the panic's faulting address and compare against the `IA32_MCi_CTL2`
+range, or run the same image under TCG."*
+
+**The first half needed no new run.** macOS prints the CPU registers above
+the backtrace, and the panic dump says:
+
+```
+Kernel trap at 0xffffff7f8aefc6b7, type 13=general protection, registers:
+RAX: 0xffffff7f8aefc6ac, RBX: 0x0000000000000000, RCX: 0x0000000000000280
+...
+com.apple.driver.AppleTyMCEDriver :
+    __ZN16AppleTyMCEDriver47enableInterruptForCorrectableMemoryCoreRegisterEPv + 0xb
+System model name: MacPro5,1 (Mac-F221BEC8)
+```
+
+**`RCX: 0x0000000000000280`.** RCX is the MSR index register for `rdmsr`
+and `wrmsr`. `0x280` is `IA32_MC0_CTL2`, the first CMCI control register.
+The faulting instruction is eleven bytes into a function named
+"enable Interrupt For Correctable Memory". There is no inference left.
+
+That number has been on every screenshot of this panic since P1. Five
+explanations were argued over it. Nobody read the register dump.
+
+### Why `ignore_msrs` could not have helped, with the date it stopped being able to
+
+`ignore_msrs` suppresses the `#GP` **only** for handlers that return the
+`KVM_MSR_RET_UNSUPPORTED` sentinel. A handler returning plain `1`
+short-circuits before `ignore_msrs` is read, injects `#GP`, **and logs
+nothing at all.**
+
+Since commit `281b5278` ("KVM: x86: Add emulation for MSR_IA32_MCx_CTL2
+MSRs", author date **2022-06-10**, first release **v6.0, 2022-10-02**) the
+whole range `0x280`–`0x29F` is dispatched to `get_msr_mce`/`set_msr_mce`,
+which `return 1` when `MCG_CMCI_P` is clear. **QEMU never sets that bit** —
+`MCE_CAP_DEF = MCG_CTL_P|MCG_SER_P`, and `kvm.c` masks *down*, never up.
+
+This also explains the one piece of evidence that had looked unhelpful.
+This host runs `report_ignored_msrs=Y`, so every MSR the knob swallows is
+logged — and the panic run logged exactly **one**, `0x300`, and **nothing
+in the `0x280` range.** The code says that is precisely what a `#GP` there
+looks like, because that path emits no line.
+
+**The falsifier, written down before anyone tries:** before v6.0 the range
+fell through to `default:` → `UNSUPPORTED`, where `ignore_msrs=1` *would*
+have suppressed it and *would* have logged `ignored rdmsr: 0x280`. So on a
+host kernel older than 6.0, `MacPro5,1` should boot here without
+panicking. No host in the fleet is old enough. If it panics there anyway,
+this explanation is wrong too — which would make it four.
+
+### The control, which is what makes it a measurement and not a story
+
+| `-accel` | SMBIOS | Result |
+|---|---|---|
+| `kvm` | `iMac14,2` | SSH in 20–40 s |
+| `kvm` | `MacPro5,1` | **panic at 40 s**, `RCX=0x280`, no SSH in 180 s |
+| `tcg` | `MacPro5,1` | **SSH at 80 s**, guest reports `10.9.5` and `hw.model=MacPro5,1` |
+
+One variable between rows two and three: the accelerator. Same overlay,
+same OpenCore image, same firmware, same `-cpu` line, same host. **TCG
+emulates the MSR instead of delegating it, and the panic does not happen.**
+
+So `MacPro5,1` is not "unusable on a non-Xeon host" — the Xeon panicked
+too. It is **unusable under KVM**, and usable under TCG. That is a
+property of KVM's machine-check emulation, not of Mavericks and not of any
+hardware we own. **P6 runs TCG**, which makes this more than a curiosity.
+
+The remedy stays the one already in place: an SMBIOS that does not load
+the driver. One lead is untried — kholia/OSX-KVM ships
+`AppleMCEReporterDisabler.kext`, commented "Fix kernel panic MacPro
+SMBIOS", which works by overriding the driver's IOKit **personality** so it
+never matches. That would explain why P1's `Kernel > Block` on the bundle
+ID did nothing. Its `MinKernel` is 21.0.0, so it is not directly usable,
+but the mechanism might transfer to 10.9 as a `Kernel > Patch` entry.
+
+### The cheap measurements, and one claim that did not survive them
+
+Four one-variable boots against a qcow2 overlay on the SSH-capable
+pipeline image, through `--stage verify`, which boots **without** installer
+media and asks the guest what it is. Overlays deleted afterwards. **The
+golden was never opened** — it is the P2 manual install and has no SSH.
+
+| Changed line | SSH | Guest reported |
+|---|---|---|
+| `--smp 1` | 40 s | `hw=iMac14,2 1cpu` |
+| `--ram 2048` | 40 s | `2147483648` |
+| `--ram 1024` | 40 s | `1073741824` |
+| `--cpu Nehalem` | 40 s | `Intel Core i7 9xx (Nehalem Class Core i7)`, `POPCNT` |
+
+All four hashed 64 MiB to `3b6a07d0…c421351`, the same constant the CPU
+ladder used, so each did real work and got it right rather than merely
+reaching a login window.
+
+**`-smp 1` boots**, which matters because `vm/profiles/base-kvm.args` says
+"SMP is not optional here: Somlo reports that 10.9's first boot after
+install fails without it. Do not 'simplify' this to `-smp 1`." **The
+archaeology found no such claim on his page in any revision.** What he
+actually runs is `-smp 4,cores=2`, and only from 2017, for Sierra. The
+steady-state half of that ban is now refuted; the install half is untested
+and costs about twenty minutes to test.
+
+**1024 MB boots an installed guest.** It says nothing about the install,
+where Apple's installer builds a ramdisk — and that is the measurement P6
+actually needs, because P6's whole budget is 7 GB.
+
+**`Nehalem` moves from NOT-TESTED to BOOTED** in `lib/cpu.sh`. It is the
+first model with EPT, which is what G18 and `decisions/0005` are waiting
+on. The row existed precisely so that entry had somewhere to land.
+
+None of them is an install, so none may be written as VERIFIED.
+`decisions/0008` is why that distinction is kept.
+
+### What the register says about the project as a whole
+
+Roughly **half of what this project sets has never been tested**, and the
+register says which half. The three rows where a wrong answer would cost
+most:
+
+1. **The five `Booter > Quirks`**, inherited from OpenCore 0.6.6 under TCG
+   on Apple Silicon and never re-tested on 1.0.7 under KVM. They decide
+   whether `boot.efi` loads and relocates correctly, so a wrong one
+   produces a hang that looks like something else. The failure tree that
+   would change them one at a time exists and has never run, because
+   nothing has failed.
+2. **`-m 4096` and `-smp 2` at install time.** Both came from a bring-up
+   brief; neither has been tested where it matters. P6 has 7 GB and 3
+   cores.
+3. **The compiler above the declared ceiling.** Both known failures are
+   fixed and neither fix has been tested up there. The failure mode that
+   remains is the silent one — a green build with different bytes — and it
+   is already measured that C23 changes `OVMF_CODE.fd`.
+
+### A note on instruments, which is the transferable part
+
+Three separate things were settled today by reading data that already
+existed rather than by running anything:
+
+- **`RCX=0x280`** had been on every screenshot of this panic since P1.
+- **`report_ignored_msrs=Y`** meant the complete list of MSRs
+  `ignore_msrs` has ever papered over here was in `dmesg` the whole time.
+  It is eleven registers, all power and energy telemetry, none of them
+  `0x199`, none of them machine-check.
+- **Somlo's own page** said "kernels older than 4.7" in a revision dated
+  2016-09-05, and answered the question this project had been carrying a
+  `sudo` step for since 2026-09-17.
+
+The pattern in all three: **the evidence was not missing, it was
+unread.** That is a cheaper failure to fix than a missing measurement, and
+a more embarrassing one to keep.

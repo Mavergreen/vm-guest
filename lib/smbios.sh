@@ -12,9 +12,18 @@
 # AppleTyMCEDriver, which panics on a non-Xeon CPU. Using iMac14,2." The
 # first half of that is an OBSERVATION, made once, on one host, in P1, with
 # OpenCore 0.6.6 out of a UTM bundle and firmware we no longer use. The
-# second half -- "because the driver wants a Xeon" -- is an EXPLANATION,
-# and it has never been tested. Nobody has booted MacPro5,1 on a Xeon, and
-# until 2026-09-21 nobody had booted it here again either.
+# second half -- "because the driver wants a Xeon" -- was an EXPLANATION,
+# and it was WRONG: a real Xeon 5150 panicked too, on 2026-09-21.
+#
+# The explanation that survived is measured, and it is neither about the
+# host CPU nor about the SMBIOS in itself. The panic dump prints RCX =
+# 0x280, which is IA32_MC0_CTL2, and KVM injects #GP on that range whenever
+# MCG_CMCI_P is clear -- which under QEMU it always is. The control: the
+# same image with -accel tcg and nothing else changed boots and answers SSH
+# as MacPro5,1. See the table row below and docs/host-profile.md G14.
+#
+# Keeping the parameter is still right. It is what made all of that
+# testable in one command instead of an edit to a tracked file.
 #
 # An explanation that has never been tested is exactly the kind of thing
 # this project has been wrong about four times (the usb-tablet kext, "DNS
@@ -74,7 +83,7 @@ MQG_SMBIOS_DEFAULT='iMac14,2'
 # in lib/cpu.sh and TRI_FACTS in lib/triangulate.sh.
 MQG_SMBIOS_MODELS="\
 iMac14,2	VERIFIED	The default since P1. Full unattended installs on three hosts -- pet-power-plant (QEMU 8.2.2), squirrel-zapper (QEMU 11.1.1) and ap-juicer (Mac Pro 1,1, QEMU 11.0.2) -- each of which then booted without installer media and answered SSH. The installed guest reports hw.model=iMac14,2, so the override reaches the installed system and not only the installer (docs/install-log.md). A 2013 Haswell iMac paired with a Penryn guest CPU, which 10.9 evidently tolerates.
-MacPro5,1	PANICKED	TWO observations, both on pet-power-plant (i7-8700B Coffee Lake, NOT a Xeon), and the second is why this row is not merely inherited. 2026-09-17, P1: the INSTALLER kernel panicked under khronokernel's OpenCore 0.6.6 and UTM firmware. 2026-09-21, the control for the Mac Pro experiment: rebuilt with --smbios MacPro5,1 on OUR OpenCore 1.0.7, OUR OVMF and OUR config.plist, booting an ALREADY-INSTALLED 10.9.5 guest (an overlay on the p2-manual-install golden, no installer media) -- the same panic at 40 s, AppleTyMCEDriver::start followed by a type 13 general protection trap in __ZN16AppleTyMCEDriver47enableInterruptForCorrectableMemoryCoreRegisterEPv, System model name MacPro5,1 (Mac-F221BEC8). The same overlay with the default SMBIOS reached the Finder desktop in 60 s, so the ONE variable was this string. THE OBSERVATION therefore survives three phases, two OpenCore versions, two firmwares and an installed-vs-installer guest. THE EXPLANATION -- that the driver loads because the model names a Xeon machine and faults because the CPU is not one -- is STILL UNTESTED: only a Xeon host can test it, and none has been asked. See docs/decisions/0010, docs/host-profile.md G14, docs/test-hosts.md.
+MacPro5,1	PANICKED	PANICS UNDER KVM, BOOTS UNDER TCG, AND AS OF 2026-09-22 WE KNOW WHY. Three observations under KVM on pet-power-plant (i7-8700B Coffee Lake, NOT a Xeon): 2026-09-17 P1, the INSTALLER panicked under khronokernel's OpenCore 0.6.6 and UTM firmware; 2026-09-21, an ALREADY-INSTALLED 10.9.5 guest on OUR OpenCore 1.0.7, OUR OVMF and OUR config.plist panicked at 40 s; 2026-09-22, reproduced again on a fresh overlay of the SSH-capable pipeline image as a one-variable control -- panic at 40 s, no SSH in 180 s where the default SMBIOS answers in 20-40 s. Also PANICKED on ap-juicer, which IS a Xeon 5150, so it is not about the host CPU. THE CAUSE IS MEASURED AND IT IS NOT THE SMBIOS AND NOT THE HOST. The panic dump prints the CPU registers and RCX is 0x0000000000000280. RCX is the MSR index register for rdmsr/wrmsr and 0x280 is IA32_MC0_CTL2, the first CMCI control register -- which is what a function called enableInterruptForCorrectableMemoryCoreRegister touches. KVM dispatches 0x280-0x29F to get_msr_mce/set_msr_mce, which return 1 (NOT the KVM_MSR_RET_UNSUPPORTED sentinel) when MCG_CMCI_P is clear, so the #GP is injected without ignore_msrs ever being consulted and without any dmesg line. QEMU never sets MCG_CMCI_P. Since Linux commit 281b5278, first released in v6.0 on 2022-10-02. THE CONTROL THAT PROVES IT: the same overlay, the same OpenCore image, the same -cpu line, ONE variable -- -accel tcg instead of -accel kvm -- booted and answered SSH at 80 s, reporting sw_vers 10.9.5 and hw.model MacPro5,1. TCG emulates the MSR instead of delegating it. So this row is a property of KVM's machine-check emulation, not of Mavericks and not of this hardware. WHAT WOULD FALSIFY THE EXPLANATION: a host kernel older than 6.0 with ignore_msrs=1, where 0x280 still fell through to the ignore path -- MacPro5,1 should boot there and dmesg should name 0x280. No host in the fleet is old enough. See docs/configuration-register.md, docs/host-profile.md G14, docs/decisions/0010.
 "
 
 # The default as one phrase, so no caller spells it out by hand.

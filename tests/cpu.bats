@@ -51,9 +51,19 @@ setup() {
     [[ "$output" == *"no SSE4.2"* ]]
 }
 
+@test "Nehalem is BOOTED and the row says nothing was installed on it" {
+    run cpu_line_verdict Nehalem
+    [ "$status" -eq 0 ]
+    [[ "$output" == BOOTED* ]]
+    [[ "$output" == *"2026-09-21"* ]]
+    [[ "$output" == *"INSTALLED"* ]]
+    # The reason this row was worth booting: EPT, which G18 and 0005 wait on.
+    [[ "$output" == *"EPT"* ]]
+}
+
 @test "everything nobody has booted says NOT-TESTED" {
     local m
-    for m in Nehalem Westmere SandyBridge IvyBridge Haswell-noTSX host qemu64; do
+    for m in Westmere SandyBridge IvyBridge Haswell-noTSX host qemu64; do
         run cpu_line_verdict "$m"
         [ "$status" -eq 0 ]
         [[ "$output" == NOT-TESTED* ]] || {

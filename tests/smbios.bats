@@ -35,21 +35,41 @@ setup() {
     [ "$output" = "$MQG_SMBIOS_DEFAULT" ]
 }
 
-@test "MacPro5,1 is PANICKED, says it was observed twice, and says the explanation is untested" {
+@test "MacPro5,1 is PANICKED, dates every sighting, and now carries the measured cause" {
     run smbios_verdict MacPro5,1
     [ "$status" -eq 0 ]
     [[ "$output" == PANICKED* ]]
     [[ "$output" == *"AppleTyMCEDriver"* ]]
-    # The distinction the whole ADR is about: an observation that
-    # reproduced, and a cause nobody has measured.
-    [[ "$output" == *"THE EXPLANATION"* ]]
-    [[ "$output" == *"STILL UNTESTED"* ]]
-    [[ "$output" == *"only a Xeon host can test it"* ]]
-    # Both sightings, with their dates: a row that said only "it panics"
-    # would be the inherited, undated claim this project has been wrong
-    # about four times.
+    # Every sighting with its date: a row that said only "it panics" would
+    # be the inherited, undated claim this project has been wrong about
+    # four times.
     [[ "$output" == *"2026-09-17"* ]]
     [[ "$output" == *"2026-09-21"* ]]
+    [[ "$output" == *"2026-09-22"* ]]
+}
+
+# This test replaced one that asserted the explanation was STILL UNTESTED
+# and that "only a Xeon host can test it". Both were true until
+# 2026-09-22 and both are now false -- a Xeon panicked too, and the cause
+# was measured off the panic screen. The assertions below are what the
+# row has to keep saying instead, and they are deliberately specific: the
+# ONE number that settles it, and the ONE control that proves it.
+@test "the MacPro5,1 row names the MSR and the accelerator control" {
+    run smbios_verdict MacPro5,1
+    [ "$status" -eq 0 ]
+    # RCX = 0x280 = IA32_MC0_CTL2, read straight off the panic dump.
+    [[ "$output" == *"0x280"* ]]
+    [[ "$output" == *"IA32_MC0_CTL2"* ]]
+    # Why ignore_msrs cannot help: KVM returns 1, not the UNSUPPORTED
+    # sentinel, so the knob is never consulted.
+    [[ "$output" == *"MCG_CMCI_P"* ]]
+    [[ "$output" == *"ignore_msrs"* ]]
+    # The one-variable control, which is what makes it a measurement
+    # rather than a story.
+    [[ "$output" == *"tcg"* ]]
+    # And the falsifier, written down before anyone tries.
+    [[ "$output" == *"FALSIFY"* ]]
+    [[ "$output" == *"older than 6.0"* ]]
 }
 
 @test "an unknown model is UNLISTED, which is not a refusal" {
