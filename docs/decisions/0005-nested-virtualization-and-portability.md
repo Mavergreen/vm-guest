@@ -9,7 +9,7 @@ rather than remembered.
 
 ## 1. Nested virtualization
 
-The user wants to test **ModernMavericks/container-tools**, which provides
+The user wants to test **Mavergreen/container-tools**, which provides
 Docker tooling on top of **VMware Fusion**. That makes the Mavericks guest a
 hypervisor host: VMware Fusion inside our QEMU guest, with containers inside
 that.

@@ -289,7 +289,7 @@ fi
 # offers only ssh-rsa and ssh-dss host keys, which a 2026 client refuses
 # outright. Both cost a full install to find; see NOTES.md.
 #
-# ModernMavericks/openssh already builds current OpenSSH for 10.9. The
+# Mavergreen/openssh already builds current OpenSSH for 10.9. The
 # packages travel on the installer media and ./postinstall copied them to
 # $CONF_DIR/pkgs at install time -- read that file for why they are not
 # listed in OSInstall.collection.
@@ -321,7 +321,7 @@ fi
 # an Ed25519 host key the second defect above is only half fixed.
 #
 # EXIT CONDITION: delete write_sshd_keygen_wrapper when
-# ModernMavericks/openssh ships a sshd-keygen-wrapper of its own. Until
+# Mavergreen/openssh ships a sshd-keygen-wrapper of its own. Until
 # then this is a compensation for a sibling defect, stated as one.
 say "openssh: requested=$MQG_FB_OPENSSH tag=${MQG_FB_OPENSSH_TAG:-none}"
 

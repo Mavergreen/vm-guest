@@ -171,7 +171,7 @@ ingredient_list() {
     awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $1 != "" { print $1 "\t" $3 }' \
         "$SOURCES"
 
-    # components/<name>/version: whole-file pins on other ModernMavericks
+    # components/<name>/version: whole-file pins on other Mavergreen
     # products, the shape the family's Renovate managers expect.
     local v name
     for v in "$MQG_REPO_ROOT"/components/*/version; do

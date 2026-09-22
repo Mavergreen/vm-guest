@@ -88,17 +88,17 @@ and does not change this one.)
 
 | | Local worktree | Published |
 |---|---|---|
-| Host side | `mavericks-vm-host` | `ModernMavericks/vm-host` |
-| Guest side | `mavericks-vm-guest` | `ModernMavericks/vm-guest` |
+| Host side | `mavericks-vm-host` | `Mavergreen/vm-host` |
+| Guest side | `mavericks-vm-guest` | `Mavergreen/vm-guest` |
 
 So: **`mavericks-qemu-guest` → `mavericks-vm-guest`**, publishing as
-`ModernMavericks/vm-guest`.
+`Mavergreen/vm-guest`.
 
 The family's convention, confirmed against `openssh`, `golang` and
 `shipyard`, is that a local `mavericks-X` publishes as
-`ModernMavericks/X` — the organization name already carries "Mavericks",
+`Mavergreen/X` — the organization name already carries "Mavericks",
 so the repository name does not repeat it. That rules out the obvious
-short name: `mavericks-guest` would publish as `ModernMavericks/guest`,
+short name: `mavericks-guest` would publish as `Mavergreen/guest`,
 which says nothing. `vm-guest` survives the trip.
 
 `qemu-guest` fails for two further reasons. It names one backend, when
@@ -211,7 +211,7 @@ parameter.
 ## Consequences
 
 - **The transitional piece, with its exit condition.** Product B stays in
-  this repository for now. It **moves to `mavericks-vm-guest-additions` (publishing as `ModernMavericks/vm-guest-additions`) when a
+  this repository for now. It **moves to `mavericks-vm-guest-additions` (publishing as `Mavergreen/vm-guest-additions`) when a
   second guest-side component ships** — the tablet kext or the runner
   agent, whichever lands first. Stated because the family's own rule is
   that a transitional decision without an exit task is a permanent one.

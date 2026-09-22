@@ -90,7 +90,7 @@ say "script directory holds: $(ls -a "$(dirname "$0")" 2>&1 | tr '\n' ' ')"
 
 # EXTRA PACKAGES CARRIED ON THE MEDIA, COPIED ONTO THE TARGET VOLUME
 #
-# The guest's OpenSSH (ModernMavericks/openssh) ships as two real product
+# The guest's OpenSSH (Mavergreen/openssh) ships as two real product
 # archives -- Distribution, Bom, Payload, scripts -- not as the payload-free
 # script package this one is. Whether the OS installer will install such a
 # thing from OSInstall.collection during the install is UNPROVEN, and its

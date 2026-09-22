@@ -465,7 +465,7 @@ PY
     # a full 20-minute install to diagnose, and the workaround was to
     # refuse the key at build time.
     #
-    # The guest now installs ModernMavericks/openssh (image/fetch-openssh.sh,
+    # The guest now installs Mavergreen/openssh (image/fetch-openssh.sh,
     # default on), so the defect is gone rather than worked around. The
     # test stays; what it asserts is inverted.
     ssh-keygen -q -t ed25519 -N '' -C mqg-test \

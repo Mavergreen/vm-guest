@@ -209,7 +209,7 @@ make_repo() {
 import json
 cfg = json.load(open('$REPO/.claude/settings.json'))
 assert cfg['extraKnownMarketplaces']['modernmavericks']['source']['repo'] \
-    == 'ModernMavericks/shipyard', cfg
+    == 'Mavergreen/shipyard', cfg
 assert cfg['enabledPlugins']['modernmavericks@modernmavericks'] is True, cfg
 print('ok')
 "

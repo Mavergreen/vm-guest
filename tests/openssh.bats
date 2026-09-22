@@ -40,7 +40,7 @@ fetch() {
 
 @test "the OpenSSH version is pinned in a file, not in a workflow" {
     [ -f "$PIN" ]
-    # A release tag of ModernMavericks/openssh: <upstream>-mavericks.N.
+    # A release tag of Mavergreen/openssh: <upstream>-mavericks.N.
     # Renovate's manager captures exactly this shape (see renovate.json),
     # and the family gate requires a versioning that preserves the N --
     # default versioning coerces it away, every repackage then compares
@@ -62,7 +62,7 @@ mgrs = [m for m in cfg['customManagers']
 assert len(mgrs) == 1, mgrs
 m = mgrs[0]
 assert m['datasourceTemplate'] == 'github-releases', m
-assert m['depNameTemplate'] == 'ModernMavericks/openssh', m
+assert m['depNameTemplate'] == 'Mavergreen/openssh', m
 # The gate: a manager whose pin ends in -mavericks.N needs a regex:
 # versioning that captures N, or the pin never moves.
 assert m['versioningTemplate'].startswith('regex:'), m

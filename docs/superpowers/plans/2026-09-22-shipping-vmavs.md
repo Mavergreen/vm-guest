@@ -1860,7 +1860,7 @@ So P10 is conditional on the build VM being **adopted**, not merely attempted.
 - **Release notes** from `sh "$SHIPYARD_SCRIPTS/release-notes.sh" --tag "$TAG" --version "$FULL" --product <noun> --out dist/RELEASE_NOTES.md`, with **no `--min-os`** — this product is not a 10.9 `.pkg` and the install-floor line would be false. The `--product` noun is a per-repo decision and is not made here; it depends on the rename.
 - **`release-notes/README.md`** explaining that a `<full-version>.md` file is optional hand-written prose inserted after the generated title, and must not carry its own `## ` heading.
 - **Declared state**: `release-state-record.sh --notes-file dist/RELEASE_NOTES.md --digest "$(release-state.sh)"` in the build job, **before** packaging — never at publish time. Plus a ten-line `reconcile.yml` caller with its own `permissions: {contents: read, actions: write}`, because a called workflow may not ask for more than its caller grants.
-- **Publish** via `ModernMavericks/shipyard/.github/workflows/publish-release.yml@v1`.
+- **Publish** via `Mavergreen/shipyard/.github/workflows/publish-release.yml@v1`.
 - **No Sparkle, no `sign_and_appcast.sh`, no `scan-for-key.yml`.** The existing `sparkle-updater:` deviations in `INGREDIENTS.md` already cover this: Sparkle is a macOS framework and this tool's primary hosts are Linux and NetBSD.
 
 **One consequence to expect on the day `release.yml` lands:** `.github/workflows/conventions.yml` currently passes trivially, because the family gate's first act is to look for `release.yml` and exit early when there is none — its own header says so. The moment the file exists, every check fires at once. Budget for that being the interesting part of the task rather than a formality.

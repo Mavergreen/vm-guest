@@ -67,7 +67,7 @@ usage: $(basename "$0") [options]
   --hostname NAME  ComputerName/HostName/LocalHostName (default: $hostname)
   --no-autologin   Do not enable auto-login.
   --openssh-pkg PATH
-                   A ModernMavericks/openssh package the media carries.
+                   A Mavergreen/openssh package the media carries.
                    Pass both: the base package and the System-Replace one.
                    firstboot.sh installs them on the guest, which is what
                    lifts OpenSSH 6.2's Ed25519 and ssh-rsa limits. Without
@@ -191,7 +191,7 @@ esac
 # is "Permission denied (publickey)" from a server that is otherwise
 # working perfectly. That cost a full install to find.
 #
-# When the image carries ModernMavericks/openssh, the guest's sshd is
+# When the image carries Mavergreen/openssh, the guest's sshd is
 # current and an Ed25519 key is simply a key. So this is no longer a
 # property of "OS X 10.9"; it is a property of "an image built with
 # --no-openssh", which is the only shape that still needs the refusal.

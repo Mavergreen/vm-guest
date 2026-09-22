@@ -54,7 +54,7 @@ jobs:
       - name: Check out shipyard (for the gate script)
         uses: actions/checkout@v7
         with:
-          repository: ModernMavericks/shipyard
+          repository: Mavergreen/shipyard
           ref: v1
           path: .shipyard
 

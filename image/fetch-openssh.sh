@@ -12,7 +12,7 @@
 #   * 10.9's sshd offers ssh-rsa and ssh-dss host keys, both of which a
 #     2026 client refuses outright.
 #
-# `ModernMavericks/openssh` already solves this: it builds current OpenSSH
+# `Mavergreen/openssh` already solves this: it builds current OpenSSH
 # for 10.9 and publishes two product archives per release.
 #
 #   OpenSSH-<version>.pkg                 installs under /usr/local,
@@ -52,7 +52,7 @@ MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 
 # The repository the packages come from. A variable so the tests can point
 # the download at a local fixture instead of the network.
-OPENSSH_REPO=${MQG_OPENSSH_REPO:-ModernMavericks/openssh}
+OPENSSH_REPO=${MQG_OPENSSH_REPO:-Mavergreen/openssh}
 OPENSSH_BASE_URL=${MQG_OPENSSH_BASE_URL:-https://github.com/$OPENSSH_REPO/releases/download}
 
 PIN_FILE=$MQG_REPO_ROOT/components/openssh/version

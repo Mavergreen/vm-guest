@@ -75,7 +75,7 @@ ovmf|sha256 of the guest firmware (OVMF_CODE.fd)
 config|sha256 of boot/config/config.plist
 payload|sha256 of the first-boot payload package
 sshkey|fingerprint of the public key authorized in the image
-openssh|the ModernMavericks/openssh release the guest got, or none
+openssh|the Mavergreen/openssh release the guest got, or none
 updates|which post-10.9.5 updates the image carries
 nic|the network device the guest was installed and verified with
 accel|accelerator, machine, cpu, memory and disk size

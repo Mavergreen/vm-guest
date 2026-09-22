@@ -1,13 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>ModernMavericks/shipyard"],
+  "extends": ["github>Mavergreen/shipyard"],
   "customManagers": [
     {
       "customType": "regex",
-      "description": "The guest's OpenSSH. ModernMavericks/openssh publishes two product archives per release; image/fetch-openssh.sh reads their names out of the release's SHA256SUMS, so a renamed asset prefix cannot 404 across this bump.",
+      "description": "The guest's OpenSSH. Mavergreen/openssh publishes two product archives per release; image/fetch-openssh.sh reads their names out of the release's SHA256SUMS, so a renamed asset prefix cannot 404 across this bump.",
       "managerFilePatterns": ["/^components/openssh/version$/"],
       "matchStrings": ["^(?<currentValue>[0-9][^\\s#]*)\\s*$"],
-      "depNameTemplate": "ModernMavericks/openssh",
+      "depNameTemplate": "Mavergreen/openssh",
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)p(?<patch>\\d+)-mavericks\\.(?<build>\\d+)$"
     },

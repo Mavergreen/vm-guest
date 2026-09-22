@@ -1,4 +1,4 @@
-# msc.sh -- sourced by a ModernMavericks product's build scripts: locate shipyard's scripts as $SHIPYARD
+# msc.sh -- sourced by a Mavergreen product's build scripts: locate shipyard's scripts as $SHIPYARD
 # (and export SHIPYARD_SCRIPTS). CANONICAL COPY: shipyard's scripts/templates/msc.sh. The conventions
 # gate requires every product's copy to match it byte for byte -- change it there, not here.
 #

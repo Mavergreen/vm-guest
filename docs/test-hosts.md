@@ -174,7 +174,7 @@ in this design — P6 runs the same image pipeline under TCG.
 ### Mavericks itself, under `vm-host` — the recursive case
 
 The sibling project `mavericks-vm-host` (publishing as
-`ModernMavericks/vm-host`) back-ports Hypervisor.framework to 10.9, and
+`Mavergreen/vm-host`) back-ports Hypervisor.framework to 10.9, and
 is expected to ship a prepackaged QEMU alongside it, so that modern QEMU
 gets hardware acceleration *on* Mavericks. When it ships, this host
 becomes available: **Mavericks hosting Mavericks.**
@@ -275,7 +275,7 @@ bypassed and the macOS disk is the only artifact that crosses.
 
 | Target | Notes |
 |---|---|
-| **VMware Fusion / Workstation** | Free for personal use now, real macOS guest support on Apple hardware. Already required for the user's `ModernMavericks/container-tools` goal — see `decisions/0005`. |
+| **VMware Fusion / Workstation** | Free for personal use now, real macOS guest support on Apple hardware. Already required for the user's `Mavergreen/container-tools` goal — see `decisions/0005`. |
 | **VirtualBox** | Prior art exists: the perf brief's `VMQemuVGA` and `virtio-net-osx` measurements were taken under it. |
 | **Parallels** | macOS host only, commercial. |
 

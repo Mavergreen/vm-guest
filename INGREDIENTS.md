@@ -93,7 +93,7 @@ explicitly rather than omitting it silently, per the skill's instruction:
 
 | Ingredient | Pinned in | Renovate | On bump |
 |---|---|---|---|
-| **OpenSSH for the guest** (`ModernMavericks/openssh`, two product archives per release) | `components/openssh/version` (tag `<upstream>-mavericks.N`) | ✅ `github-releases` on `ModernMavericks/openssh`, with a `regex:` versioning that captures `N` — default versioning coerces `-mavericks.N` away, every release then compares equal and the pin never moves again (swift-runtime missed three toolchain releases exactly this way) | Future images install the new OpenSSH. No checksum to update: `image/fetch-openssh.sh` reads the asset names *and* their checksums out of the pinned release's own `SHA256SUMS`, so the bump is self-verifying and a renamed asset prefix cannot 404 across it |
+| **OpenSSH for the guest** (`Mavergreen/openssh`, two product archives per release) | `components/openssh/version` (tag `<upstream>-mavericks.N`) | ✅ `github-releases` on `Mavergreen/openssh`, with a `regex:` versioning that captures `N` — default versioning coerces `-mavericks.N` away, every release then compares equal and the pin never moves again (swift-runtime missed three toolchain releases exactly this way) | Future images install the new OpenSSH. No checksum to update: `image/fetch-openssh.sh` reads the asset names *and* their checksums out of the pinned release's own `SHA256SUMS`, so the bump is self-verifying and a renamed asset prefix cannot 404 across it |
 | **OpenCore** (`acidanthera/OpenCorePkg`, built from source — Tier 0) | `vendor/sources.tsv` `opencorepkg-src` | ✅ `github-tags` on `acidanthera/OpenCorePkg`. **Automerge off** — see below | Rebuilds the boot stack; invalidates existing goldens. The `sha256` column must be re-pinned in the same commit, which `bin/verify-changed-sources.sh` enforces |
 | **EDK II / audk** and its twelve submodules (Tier 0) | `vendor/sources.tsv` `audk-*` | ❌ **untrackable as pinned.** Each is a GitHub archive tarball of a bare commit with no ref beside it, so there is no `currentValue` for a `git-refs` manager to move, and a digest-only manager would rewrite the URL while leaving a checksum it cannot compute. **Compensates:** every one is checksummed, `boot/build-opencore.sh` refuses a URL naming a commit other than the one it declares, and they move only when the OpenCore pin does — `acidanthera/audk` is OpenCore's own build tree, not an independent upstream | Only ever bumped deliberately, together with OpenCore |
 | **ocbuild `efibuild.sh`** (Tier 0, build script) | `vendor/sources.tsv` `ocbuild-efibuild` | ❌ **untrackable.** A `raw.githubusercontent.com` URL at a commit on `master`; there are no releases and no tags to track. It used to be `curl`ed off `master` and `eval`ed, which is what the pin replaced. **Compensates:** pinned commit + checksum, and `boot/patches/0001-*` makes `build_oc.tool` source the pinned copy rather than fetch one | Deliberate, alongside OpenCore |
@@ -145,7 +145,7 @@ without one is indistinguishable from drift.
 No upstream release notes: this repository has no single upstream whose
 notes a release could link. Each ingredient's notes live with its own
 project — `acidanthera/OpenCorePkg`, `acidanthera/Lilu`,
-`acidanthera/VirtualSMC`, `ModernMavericks/openssh` — and the registry row
+`acidanthera/VirtualSMC`, `Mavergreen/openssh` — and the registry row
 above names each one, which is the closest thing to "what changed" that a
 product with a dozen upstreams can honestly offer.
 

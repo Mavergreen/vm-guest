@@ -3645,7 +3645,7 @@ same answer: something other than the build wrote to that file.
 ## 2026-09-19 — the guest gets the family's OpenSSH, and the repo joins the family
 
 Two jobs, and the first one made the second concrete: consume
-`ModernMavericks/openssh` the way the family's conventions say to consume a
+`Mavergreen/openssh` the way the family's conventions say to consume a
 sibling toolchain, then wire up the rest of the checklist — `INGREDIENTS.md`,
 Renovate, `build/msc.sh`, the marketplace registration, and the gates.
 
@@ -3658,7 +3658,7 @@ symptom is `Permission denied (publickey)` from a server that is otherwise
 working perfectly. And 6.2 offers only `ssh-rsa` and `ssh-dss` host keys,
 which a 2026 client refuses outright.
 
-`ModernMavericks/openssh` had already solved this: **OpenSSH 10.5p1**, built
+`Mavergreen/openssh` had already solved this: **OpenSSH 10.5p1**, built
 for 10.9, published as two product archives per release. The sibling's README
 still says 9.9p2; the tags are right and the prose is stale, which is worth
 knowing before you read it.
@@ -3730,7 +3730,7 @@ key the second P4 defect would be only half fixed.
 
 That is a **compensation for a sibling defect**, and it says so where it
 lives, with its exit condition: delete `write_sshd_keygen_wrapper` when
-`ModernMavericks/openssh` ships a wrapper of its own. **The sibling should be
+`Mavergreen/openssh` ships a wrapper of its own. **The sibling should be
 fixed; it is outside this directory, so it waits for the user.**
 
 Belt and braces beside it: after the replacement, `openssh_usable()` checks
