@@ -239,11 +239,25 @@ print(d['Target'] == '/Volumes/' + d['TargetName'])
     [ "$output" = "1" ]
 }
 
-@test "every network-touching step has a timeout" {
+@test "every network-touching or long-running step has a timeout" {
     # softwareupdate against Apple's 2026 servers can hang on a 2013 OS,
-    # and 10.9 has no timeout(1), so firstboot.sh carries its own.
-    run bash -c "grep -n 'softwareupdate' '$REPO/image/payload/firstboot.sh' | grep -vc 'timeout'"
+    # and 10.9 has no timeout(1), so firstboot.sh carries its own. So does
+    # every `installer` run: Security Update 2016-004 is 354 MB over 6,891
+    # files and rebuilds the kernel cache on its way out, and a wedged one
+    # would otherwise hang the install stage until ITS timeout, with
+    # nothing saying which step stopped.
+    #
+    # COMMENT LINES ARE NOT INVOCATIONS. The first version of this counted
+    # every line mentioning the word, and went red the moment firstboot.sh
+    # grew a paragraph explaining why it does NOT run softwareupdate --
+    # exactly the cried-wolf failure the authorized-key test above records.
+    run bash -c "grep -nE '^[[:space:]]*(softwareupdate|installer)[[:space:]]' \
+        '$REPO/image/payload/firstboot.sh' | grep -vc 'run_with_timeout'"
     [ "$output" = "0" ]
+    # Every invocation that IS there goes through the watchdog.
+    run bash -c "grep -cE 'run_with_timeout [0-9]+ (softwareupdate|installer)' \
+        '$REPO/image/payload/firstboot.sh'"
+    [ "$output" -ge 3 ]
 }
 
 @test "firstboot.sh removes its own LaunchDaemon so it runs exactly once" {

@@ -106,17 +106,31 @@ say "script directory holds: $(ls -a "$(dirname "$0")" 2>&1 | tr '\n' ' ')"
 # OSInstall.collection can name /System/Installation/Packages/...), and a
 # second candidate costs nothing next to an install that silently ships no
 # SSH.
+#
+# TWO DESTINATIONS, NOT ONE.
+#
+# The OpenSSH packages land in $CONF_DIR/pkgs and Apple's post-10.9.5
+# updates in $CONF_DIR/updates, because firstboot.sh's OpenSSH block finds
+# its two packages by globbing pkgs/*.pkg and classifying them by name. An
+# update package dropped in beside them would be classified as "the base
+# OpenSSH package" and handed to `installer` in its place. Separate
+# directories make that impossible rather than merely unlikely.
 if [ -r "$CONF_DIR/firstboot.conf" ]; then
     . "$CONF_DIR/firstboot.conf"
 fi
-if [ -n "${MQG_FB_EXTRA_PKGS:-}" ]; then
-    mkdir -p "$CONF_DIR/pkgs"
-    for pkgname in $MQG_FB_EXTRA_PKGS; do
+
+# carry_pkgs <destdir> <space-separated names> -- copy each named package
+# off the media into <destdir>, reporting every one that is not there.
+carry_pkgs() {
+    _dest=$1
+    shift
+    mkdir -p "$_dest"
+    for pkgname in $*; do
         copied=no
-        for dir in "$(dirname "${1:-/nonexistent}")" \
+        for dir in "$(dirname "${MQG_PKG_PATH:-/nonexistent}")" \
                    /System/Installation/Packages; do
             if [ -f "$dir/$pkgname" ]; then
-                if cp "$dir/$pkgname" "$CONF_DIR/pkgs/$pkgname"; then
+                if cp "$dir/$pkgname" "$_dest/$pkgname"; then
                     copied=yes
                     say "carried $pkgname from $dir"
                     break
@@ -125,7 +139,19 @@ if [ -n "${MQG_FB_EXTRA_PKGS:-}" ]; then
         done
         [ "$copied" = yes ] || say "NOT FOUND on the media: $pkgname"
     done
-    say "pkgs now: $(ls "$CONF_DIR/pkgs" 2>&1 | tr '\n' ' ')"
+    say "$_dest now: $(ls "$_dest" 2>&1 | tr '\n' ' ')"
+}
+
+# $1 is the full path to THIS package; carry_pkgs shifts its own arguments,
+# so it is captured here rather than read as $1 inside.
+MQG_PKG_PATH=${1:-/nonexistent}
+
+if [ -n "${MQG_FB_EXTRA_PKGS:-}" ]; then
+    carry_pkgs "$CONF_DIR/pkgs" $MQG_FB_EXTRA_PKGS
+fi
+if [ -n "${MQG_FB_UPDATE_PKGS:-}" ]; then
+    say "updates: ${MQG_FB_UPDATES:-none}"
+    carry_pkgs "$CONF_DIR/updates" $MQG_FB_UPDATE_PKGS
 fi
 
 chmod 755 "$CONF_DIR/firstboot.sh" 2>/dev/null

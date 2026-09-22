@@ -44,6 +44,13 @@ ssh_key=${MQG_FIRSTBOOT_SSH_KEY:-}
 # firstboot.sh knows what to install. See image/fetch-openssh.sh.
 openssh_pkgs=()
 openssh_tag=
+# Apple's post-10.9.5 updates, same arrangement as the OpenSSH packages
+# above and for the same reason: 354 MB (or 685 MB) of product archive does
+# not go inside a payload-free script package. They ride on the installer
+# media, ./postinstall copies them to the target volume, firstboot.sh
+# installs them. See image/fetch-updates.sh.
+update_pkgs=()
+updates=none
 out=
 describe=0
 
@@ -69,6 +76,15 @@ usage: $(basename "$0") [options]
   --openssh-tag TAG
                    The release tag those packages came from, recorded in
                    the conf file so the guest can say what it has.
+  --update-pkg PATH
+                   A post-10.9.5 update package the media carries.
+                   Repeatable, and ORDER MATTERS: they are installed in the
+                   order given, before the OpenSSH packages above, because
+                   Security Update 2016-004 replaces /usr/bin/ssh and
+                   /usr/sbin/sshd and would otherwise undo them.
+  --updates WHICH  Which selection those packages are (none, security,
+                   all), recorded in the conf file so the guest can say
+                   what it was asked to carry.
   --out PATH       Where to write the package
                    (default: \$MQG_IMAGE_DIR/payload/mqg-firstboot.pkg)
   --describe       Print what would be built and exit. Touches nothing.
@@ -90,6 +106,8 @@ while [ $# -gt 0 ]; do
         --no-autologin) autologin=0 ;;
         --openssh-pkg) openssh_pkgs+=("$2"); shift ;;
         --openssh-tag) openssh_tag=$2; shift ;;
+        --update-pkg) update_pkgs+=("$2"); shift ;;
+        --updates) updates=$2; shift ;;
         --out) out=$2; shift ;;
         --describe) describe=1 ;;
         -h|--help) usage; exit 0 ;;
@@ -130,6 +148,8 @@ first-boot payload package
                     /private/var/db/.AppleSetupDone
 
   openssh           ${openssh_tag:-none}$([ "${#openssh_pkgs[@]}" -gt 0 ] && printf ' (%s)' "$(for p in ${openssh_pkgs[@]+"${openssh_pkgs[@]}"}; do printf '%s ' "$(basename "$p")"; done)")
+  updates           $updates$([ "${#update_pkgs[@]}" -gt 0 ] && printf ' (%s)' "$(for p in ${update_pkgs[@]+"${update_pkgs[@]}"}; do printf '%s ' "$(basename "$p")"; done)")
+                    installed BEFORE OpenSSH, in the order listed
                     named in firstboot.conf, carried on the media by
                     media/build-installer-img.sh --extra-pkg, installed on
                     the guest by firstboot.sh
@@ -213,6 +233,30 @@ if [ "${#openssh_pkgs[@]}" -gt 0 ] && [ -z "$openssh_tag" ]; then
         "OpenSSH it was built with"
 fi
 
+# The same checks, for the same reason, on the update packages: their names
+# travel through a space-separated shell list in firstboot.conf.
+for pkg in ${update_pkgs[@]+"${update_pkgs[@]}"}; do
+    [ -f "$pkg" ] || die "no such --update-pkg: $pkg"
+    [ "$(head -c 4 "$pkg")" = "xar!" ] \
+        || die "$pkg is not a flat package (no xar magic)"
+    case $(basename "$pkg") in
+        *[[:space:]]*) die "--update-pkg name contains whitespace:" \
+                           "$(basename "$pkg")" ;;
+    esac
+done
+case $updates in
+    none|security|all) : ;;
+    *) die "unknown --updates '$updates': choose none, security or all" ;;
+esac
+if [ "${#update_pkgs[@]}" -gt 0 ] && [ "$updates" = none ]; then
+    die "--update-pkg was given but --updates says none;" \
+        "the image would carry packages it does not admit to"
+fi
+if [ "${#update_pkgs[@]}" -eq 0 ] && [ "$updates" != none ]; then
+    die "--updates $updates names no packages -- image/fetch-updates.sh" \
+        "should have produced some"
+fi
+
 mkdir -p "$(dirname "$out")" || die "cannot create $(dirname "$out")"
 
 # Two directories, not one. $staging becomes the package's Scripts archive
@@ -248,6 +292,21 @@ trap 'rm -rf "$staging" "$assembly"' EXIT
                    printf '%s ' "$(basename "$p")"; done)"
     else
         printf 'MQG_FB_OPENSSH=0\n'
+    fi
+    # WRITTEN ONLY WHEN THERE IS SOMETHING TO SAY.
+    #
+    # firstboot.sh defaults MQG_FB_UPDATES to none, so a `--updates none`
+    # image's conf file is BYTE-IDENTICAL to one built before this switch
+    # had a second value. That is deliberate: none is P5's baseline and
+    # every performance measurement compares against it.
+    if [ "${#update_pkgs[@]}" -gt 0 ]; then
+        printf 'MQG_FB_UPDATES=%q\n' "$updates"
+        # Space-separated basenames, IN INSTALL ORDER, read the same way
+        # MQG_FB_EXTRA_PKGS is. image/fetch-updates.sh gives every one an
+        # mqg-update-NN- prefix, so the order is legible in the names too.
+        printf 'MQG_FB_UPDATE_PKGS=%q\n' \
+            "$(for p in ${update_pkgs[@]+"${update_pkgs[@]}"}; do \
+                   printf '%s ' "$(basename "$p")"; done)"
     fi
     if [ -n "$secret" ]; then
         printf 'MQG_FB_PASSWORD=%q\n' "$secret"

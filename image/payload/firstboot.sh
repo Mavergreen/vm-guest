@@ -56,6 +56,13 @@ MQG_FB_OPENSSH_TAG=
 # defaults are all in one place and a hand run in a rescue shell has them.
 # shellcheck disable=SC2034
 MQG_FB_EXTRA_PKGS=
+# Apple's post-10.9.5 updates. `none` is the value a conf file that says
+# nothing about updates produces, and that is deliberate: a `--updates
+# none` image's conf file is byte-identical to one built before this
+# existed, so P5's baseline did not move when the default did.
+MQG_FB_UPDATES=none
+# shellcheck disable=SC2034
+MQG_FB_UPDATE_PKGS=
 
 [ -r "$CONF_DIR/firstboot.conf" ] && . "$CONF_DIR/firstboot.conf"
 
@@ -195,6 +202,81 @@ if [ -s "$CONF_DIR/authorized_keys" ]; then
     say "installed $(wc -l < "$CONF_DIR/authorized_keys") authorized key line(s)"
 else
     say "no authorized_keys in the package; SSH will accept no key"
+fi
+
+# --- Apple's post-10.9.5 updates ------------------------------------------
+#
+# WHY THESE ARE HERE AND NOT RUN BY `softwareupdate`
+#
+# `softwareupdate` would talk to Apple's servers from inside the guest, on
+# every first boot, in 2026. The answer would be whatever Apple serves that
+# day, the image would stop being reproducible, and a 2013 OS negotiating
+# with 2026 servers may hang. Every package installed below is a standalone
+# .pkg pinned by checksum in vendor/sources.tsv, carried on the installer
+# media and copied here by ./postinstall. See image/fetch-updates.sh.
+#
+# WHY BEFORE OPENSSH, WHICH IS NOT A STYLE CHOICE
+#
+# Security Update 2016-004's own Payload contains ./usr/bin/ssh and
+# ./usr/sbin/sshd -- read out of the package, not assumed. Installed after
+# the OpenSSH System-Replace package it would overwrite the symlinks that
+# package puts at those paths, and the guest would quietly fall back to
+# OpenSSH 6.2 -- or, if launchd's ssh job ended up pointing at something
+# that no longer resolved, answer nothing at all. So: updates first, the
+# family's OpenSSH second, and the openssh_usable check below then judges
+# the state the guest is actually left in.
+#
+# WHAT SUCCESS LOOKS LIKE, AND WHAT IT DOES NOT
+#
+# `sw_vers` still says 10.9.5 afterwards, because ProductVersion IS 10.9.5
+# -- 2016-004 is a security update, not a point release. A zero exit from
+# `installer` is not evidence either. The two witnesses this script records
+# are the ones that actually move:
+#
+#   * a RECEIPT: `pkgutil --pkgs` gains
+#     com.apple.pkg.update.security.2016-004Mavericks.13F1911
+#   * a BUILD NUMBER: the update carries SystemVersion.plist, so
+#     `sw_vers -buildVersion` goes 13F34 -> 13F1911
+#
+# Both are logged below, before and after, so the log says what happened
+# rather than what was attempted.
+#
+# A RESTART IS WANTED AND IS NOT TAKEN HERE
+#
+# 2016-004's PackageInfo declares postinstall-action="restart". This script
+# does not reboot: the install stage powers the guest down when SSH answers
+# and every later boot is a cold one, so the restart happens anyway, once,
+# without this script racing the thing that is watching for SSH.
+say "updates: $MQG_FB_UPDATES"
+say "updates: build before: $(sw_vers -buildVersion 2>&1)"
+
+if [ -n "$MQG_FB_UPDATE_PKGS" ]; then
+    _upd_count=0
+    _upd_missing=0
+    for _u in $MQG_FB_UPDATE_PKGS; do
+        if [ -f "$CONF_DIR/updates/$_u" ]; then
+            _upd_count=$((_upd_count + 1))
+            # 3600s: 2016-004 is 354 MB of package over 6891 files, and it
+            # rebuilds the kernel and dyld caches on the way out. The
+            # OpenSSH base package gets 900s and is 12 MB.
+            run_with_timeout 3600 installer -verbose \
+                -pkg "$CONF_DIR/updates/$_u" -target /
+        else
+            _upd_missing=$((_upd_missing + 1))
+            say "updates: NOT ON THE TARGET VOLUME: $_u"
+        fi
+    done
+    say "updates: installed $_upd_count package(s), $_upd_missing missing"
+    say "updates: build after: $(sw_vers -buildVersion 2>&1)"
+    say "updates: sw_vers still reports: $(sw_vers -productVersion 2>&1)" \
+        "(expected -- a security update is not a point release)"
+    say "updates: receipts: $(pkgutil --pkgs 2>/dev/null \
+        | grep -i -E 'update|safari|itunes' | tr '\n' ' ')"
+    # Keeping 685 MB of installed package on a 60 GB image would be the
+    # only trace of it that costs anything.
+    rm -rf "$CONF_DIR/updates"
+else
+    say "updates: none requested; this image is stock 10.9.5 (13F34)"
 fi
 
 # --- the family's own OpenSSH ---------------------------------------------
