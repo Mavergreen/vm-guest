@@ -253,13 +253,111 @@ a thing selected by the environment can be tested without the environment.
 
 | Backend | For |
 |---|---|
-| `native` | What happens today. The only path on a host with no accelerator, and the only path on arm64 (§8) |
-| `qemu-linux` | The build VM |
+| `native` | What happens today. The only path on a host with no accelerator, and — as this spec is currently written — the only path on arm64 (§8.3, §3.3.1) |
+| `qemu-linux` | The build VM, an **x86_64** guest under the host's accelerator |
 
 Keeping `native` is not hedging. It is forced by §8's arm64 finding and by
 the no-accelerator case, and it is what lets the two be compared at all —
 §7's whole experiment is `native` against `qemu-linux` with one variable
 changed.
+
+### 3.3.1 The unification this spec does not yet get to have
+
+`qemu-linux` as written above is an **x86_64 guest**, which is why arm64
+hosts fall out of it: an x86_64 VM on an arm64 host is emulated, and §8.3
+prices that at "a four-minute boot stack into hours". There is a shape that
+would remove the exception entirely, and it deserves stating with its
+evidence rather than being dismissed in a clause, which is what §8.3 did
+until 2026-09-22.
+
+| Host | Build VM | Toolchain EDK II invokes |
+|---|---|---|
+| x86_64 | x86_64 | `x86_64-linux-gnu-gcc` |
+| arm64 | **arm64** | **the same `x86_64-linux-gnu-gcc`** |
+
+Every VM runs its own host's ISA, so every VM runs under that host's own
+hardware accelerator and nothing is ever emulated. Both invoke a compiler
+that *targets* `x86_64-linux-gnu`, at the same pinned version, at the same
+fixed path, producing X64 PE firmware either way. EDK II cross-compiles by
+construction — the firmware is `-nostdlib`, freestanding, and targets a PE
+format no Linux host runs natively, so "cross" is what this build already
+is; the only thing that would change is the *host* of the cross-compiler.
+
+If it holds, three things follow, and they are the reason it is worth the
+scrutiny rather than a clause:
+
+- **One row in `lib/compiler.sh`'s range table covers every host**, instead
+  of one row per host architecture.
+- **`decisions/0004`'s "reproducible per toolchain and not across them"
+  could become a claim about hosts, not about toolchains** — a fixed
+  cross-toolchain at a fixed path is the missing half of the pair whose
+  other half (`MQG_BUILD_DIR`, §2.3) this spec already fixes.
+- **P6 is served**, and §8.3 item 3 moves off the "does not fix" list.
+
+**Status: untested, and split into three claims that must not be run
+together.** §3.3.2 separates them; §8.3 carries the finding; §9.4 carries
+the ledger entries. Nothing below is measured except where it says so.
+
+### 3.3.2 Three claims, not one
+
+The tempting mistake is to treat "a cross-compiler is host-independent" as a
+single proposition. It is three, with three different severities and three
+different ways of being tested.
+
+| # | Claim | Status |
+|---|---|---|
+| **(A)** | A gcc that targets `x86_64-linux-gnu` emits the same X64 code whether the compiler binary itself is x86_64 or aarch64, given the same version, flags and sources | **Untested here.** Plausible — it is the premise reproducible cross-builds rest on — but this project has been wrong before about things that were merely plausible, and "plausible" is not one of §0's four labels |
+| **(B)** | Debian's `gcc-13-x86-64-linux-gnu` package, built **for** an arm64 host, produces the same bytes as the same package built for an amd64 host | **Untested, and it needs arm64 hardware.** See below for why it cannot be approximated here |
+| **(C)** | EDK II **BaseTools** — `GenFw`, `GenFv`, `GenSec`, `VfrCompile`, `BrotliCompress`, `DevicePath` — emit the same PE images when the BaseTools binaries themselves are aarch64 rather than x86_64 | **Untested, and it is the one nobody named.** §8.3's old clause conflated it out of existence |
+
+(C) is the claim most likely to be false and the one with the worst failure
+mode. BaseTools does not compile the firmware; it **post-processes** it.
+`GenFw` performs the ELF→PE conversion and writes the debug-symbol path that
+§2.3 already proves is an input. Those are host programs, compiled for the
+VM's own architecture, and a green build with different bytes is exactly
+what they would produce if any of their output depended on the host — struct
+padding written to a file, an unstable sort, an iteration order. Both
+architectures are little-endian LP64, which is the reason to expect (C) to
+hold and is **not** a reason to assert it.
+
+**The falsifier for all three, written now:** build the boot stack twice at
+the same `MQG_BUILD_DIR` on the same UTC day, once in an x86_64 build VM and
+once in an arm64 build VM, both at the same pinned `gcc-13-x86-64-linux-gnu`
+version. **Eight identical checksums confirms (A), (B) and (C) together. Any
+difference refutes the unification in its strong form**, and the next
+question is which of the three did it — which `GenFw`'s output answers
+faster than the firmware does, because a differing `.efi` with an identical
+`.dll` intermediate is (C) and not (A).
+
+**Why this could not be settled on an x86_64 host, measured 2026-09-22.**
+The obvious cheap approximation — build once with `gcc`, once with
+`x86_64-linux-gnu-gcc`, compare — is **vacuous on a Debian-family x86_64
+host, and vacuous for a structural reason worth writing down**: Debian's
+multiarch toolchain scheme makes the native compiler *be* the cross
+compiler for its own triplet. On the primary host (Ubuntu 24.04, amd64):
+
+| Path | Resolves to | Owning package |
+|---|---|---|
+| `/usr/bin/gcc` → `gcc-13` → | `/usr/bin/x86_64-linux-gnu-gcc-13` | `gcc-13-x86-64-linux-gnu 13.3.0-6ubuntu2~24.04.1` |
+| `/usr/bin/x86_64-linux-gnu-gcc` → | `/usr/bin/x86_64-linux-gnu-gcc-13` | *the same file — same device:inode, `32:3353112`* |
+
+`gcc` and `gcc-x86-64-linux-gnu` are both version `4:13.2.0-7ubuntu1`, both
+from `gcc-defaults`, and neither ships a compiler binary: they ship
+symlinks. The same is true of every binutil the build uses — `/usr/bin/objcopy`,
+`ar`, `ld`, `nm`, `strip` all resolve to their `x86_64-linux-gnu-`-prefixed
+selves. So **there is exactly one compiler binary on this host, and the two
+names are two names for it.** Confirmed three ways, 2026-09-22 (**measured**,
+`NOTES.md`): identical device:inode; `-print-search-dirs` and
+`-print-prog-name=cc1` identical; and a freestanding `-std=gnu17 -O2 -c`
+compile of the same source through both names producing a byte-identical
+object, `dbde06fc…`. The only difference in `gcc -v` between the two is the
+`COLLECT_GCC=` line, which is an echo of `argv[0]`.
+
+Running the eight-artifact comparison through those two names would have
+produced eight matches and told us nothing, so **it was not run**, on the
+same grounds `NOTES.md` records for ccache: a comparison that cannot fail is
+not evidence. What (B) actually names is `gcc-13-x86-64-linux-gnu` built
+**for arm64** — a package that by definition does not exist on an amd64 host.
 
 ## 4. The image: which artifact, which tier, how it is pinned
 
@@ -470,6 +568,29 @@ ceiling moved on evidence first.
 and reinstated by one:** run step zero on both, and if the glibc candidate's
 archive turns out not to be durable while Alpine's is, the calculus changes.
 
+**§3.3.1 does not change this section's conclusion, and it is worth saying
+why, because it looks as though it should.** The decisive argument above is
+that the image should carry *our verified compiler*, and §3.3.1 proposes
+carrying a cross-toolchain instead — which sounds like a different compiler
+and therefore a new baseline with nothing to compare against. On a
+Debian-family image it is not a different compiler. **Measured on the
+primary host, 2026-09-22:** this project's one verified compiler, gcc 13.3.0
+(`13.3.0-6ubuntu2~24.04.1`), is shipped by the package
+**`gcc-13-x86-64-linux-gnu`** — the triplet-named one — and `gcc-13` and
+`gcc-x86-64-linux-gnu` are symlink packages over that single binary
+(§3.3.2). So "pin our verified compiler" and "pin an `x86_64-linux-gnu`
+cross-gcc" **name the same package at the same version**, and §7.2's
+experiment stays a comparison against `decisions/0004`'s existing table
+rather than becoming a new baseline.
+
+That is an argument *for* the glibc, Debian-family choice that §5.3 already
+reaches, and it is one this section did not have: the distribution whose
+archive is durable is also the one whose packaging makes the cross-toolchain
+and the verified toolchain the same artifact. **What it is not** is evidence
+for §3.3.2 (B). Being the same package on amd64 says nothing about whether
+that package, built for arm64, emits the same bytes. Keeping those apart is
+the whole of §3.3.2.
+
 ## 6. How the host talks to it, and what persists
 
 ### 6.1 Sizes, measured 2026-09-21 on the primary host
@@ -638,13 +759,46 @@ Honest list. Several of these are load-bearing.
 2. **`MacPro5,1` still does not work under KVM.** G14 is a guest-plus-KVM
    fact — `IA32_MC0_CTL2` at `RCX: 0x280`, a #GP that `ignore_msrs` cannot
    suppress. A build VM is not adjacent to it.
-3. **It does not serve P6, and P6 was one of the motivations.** P6 targets
-   GitHub's **arm64** macOS runners under TCG. An x86_64 Linux build VM there
-   would be emulated, turning a four-minute boot stack into hours
-   (**reasoned**; the ratio is untested). An arm64 Linux build VM would need
-   an x86_64-targeting cross-gcc — a third compiler, different bytes, a new
-   row in the range table. **Either way P6 must decide separately**, and this
-   spec does not decide for it.
+3. **It does not serve P6 as specified — but the reason it was said not to
+   was wrong, and the correction is §3.3.1.** P6 targets GitHub's **arm64**
+   macOS runners. An x86_64 Linux build VM there would be emulated, turning
+   a four-minute boot stack into hours (**reasoned**; the ratio is untested).
+   That part stands.
+
+   What does **not** stand is the sentence this item used to carry: that an
+   arm64 build VM "would need an x86_64-targeting cross-gcc — a third
+   compiler, different bytes, a new row in the range table." **"Different
+   bytes" was an assumption stated as a finding**, and it is the fifth
+   instance of the failure §0 exists to catch — an inherited claim nobody
+   checked, this time inherited from ourselves. A cross-compiler's output is
+   not obviously a function of the machine it runs on; that it is not is the
+   premise every reproducible cross-build rests on, and EDK II cross-compiles
+   by construction (the firmware is freestanding X64 PE, which no Linux host
+   runs natively).
+
+   Nor would it be "a third compiler". On a Debian-family host the
+   x86_64-targeting compiler **is** the native one: `/usr/bin/gcc` and
+   `/usr/bin/x86_64-linux-gnu-gcc` are the same file, same device:inode, both
+   from `gcc-13-x86-64-linux-gnu` (**measured**, primary host, 2026-09-22 —
+   §3.3.1, `NOTES.md`). Adopting the triplet-prefixed name changes nothing
+   about *which* compiler this project carries; it changes only which host
+   that package was built for.
+
+   So the honest statement of the item is narrower and more useful:
+
+   > **An arm64 build VM running an `x86_64-linux-gnu` cross-gcc would serve
+   > P6 and would unify the backend table (§3.3.1), if and only if claims
+   > (A), (B) and (C) of §3.3.2 hold. All three are UNTESTED, and none can be
+   > tested on an x86_64 host** — the cheap approximation is vacuous for a
+   > structural reason (§3.3.2), so the evidence needs arm64 hardware and
+   > nothing less.
+
+   The claim most likely to break it is **(C)**, EDK II's BaseTools, which
+   the old clause did not mention at all: BaseTools are host programs that
+   post-process the firmware, and their failure mode is a green build with
+   different bytes. **Either way P6 must still decide separately**, and this
+   spec does not decide for it — but it no longer tells P6 that the door is
+   closed, because it never established that.
 4. **It does not fix the 41 GNU-only call sites. It freezes them.** The
    portability problem becomes a pinning problem for the stages that move in
    — which is a real gain — but `vm/run.sh`, `vm/clone.sh`, `vm/golden.sh`,
@@ -738,16 +892,18 @@ gets its original struck and a new row added.
 | G10 (reflink), G11 (`chattr +C`) | Unchanged — golden promotion stays host-side. G11 now also applies to the work disk |
 | G17 (nested virt) | Unchanged, and **explicitly not required** (§3.1). Worth writing into the entry: the build VM was specified so as not to need it |
 | G20 (media corruption) | Unchanged and still portable. One writer, one lock, one post-unmount check against `media/apple-packages.sha256` |
-| ~~G22~~ (host C compiler unpinned) | **The big one. It splits.** The claim stays true of `native` and becomes false of `qemu-linux`. Struck original, plus a new row, plus the two new manifest lines (§4.2) so an image says which backend made it |
+| ~~G22~~ (host C compiler unpinned) | **The big one. It splits.** The claim stays true of `native` and becomes false of `qemu-linux`. Struck original, plus a new row, plus the two new manifest lines (§4.2) so an image says which backend made it. **It does not split a second time by host architecture** unless §3.3.2's claims fail: under §3.3.1 one pinned `x86_64-linux-gnu` toolchain is the pin on every host, and the new row says "pinned" without an architecture qualifier. **If (A), (B) or (C) fails, the new row needs that qualifier and the range table needs a row per host arch** — which is the cost §8.3 used to assert without evidence |
 | ~~G23~~, ~~G26~~ | Already resolved. Both become moot *inside* the VM and stay live for `native` |
 
 ### 9.4 New entries the change creates
 
 | New | Claim | What another host would need |
 |---|---|---|
-| **G27** | The host can run a Linux VM under a hardware accelerator, so the build VM is available at all | Any host without KVM/HVF/NVMM — or on arm64 — falls back to `native`. **Untested on HVF and NVMM** |
+| **G27** | The host can run a Linux VM **of its own ISA** under a hardware accelerator, so the build VM is available at all | Any host without KVM/HVF/NVMM falls back to `native`. **Untested on HVF and NVMM.** The arm64 exception that was here has moved to G30: an arm64 host can run an arm64 VM under HVF perfectly well — what is unsettled is the *toolchain* inside it, not the VM |
 | **G28** | The build VM's distribution and libc compile EDK II BaseTools | §5.2 step zero answers it in minutes. **Untested** |
 | **G29** | The pinned package archive still serves the pinned versions | §4.4's 90-day `curl`. **Untested by construction — it is a claim about the future** |
+| **G30** | An `x86_64-linux-gnu` cross-gcc emits the same X64 firmware bytes whether it runs on an x86_64 or an arm64 host — §3.3.2 (A) and (B) together | **An arm64 host, and nothing less.** The x86_64-only approximation is vacuous: `gcc` and `x86_64-linux-gnu-gcc` are one file on a Debian-family amd64 host (**measured**, 2026-09-22). If G30 holds, the backend table collapses to one row and §8.3 item 3 comes off the list. **Untested** |
+| **G31** | EDK II BaseTools emit the same PE images when built for aarch64 rather than x86_64 — §3.3.2 (C) | The same arm64 host, in the same run as G30, but it is a **separate claim with a separate falsifier**: compare the intermediate `.dll` against the final `.efi`, which tells G31 apart from G30 without a second build. This is the claim §8.3's old clause omitted entirely, and the one whose failure is silent. **Untested** |
 
 ## 10. Exit criteria
 
@@ -789,7 +945,12 @@ In addition to the standing list in §3 of the umbrella design:
   now. Whether it becomes unsupported rather than merely non-default is a
   later decision with its own evidence.
 - **P6.** §8.3 is a finding, not a plan. What an arm64 runner should do is
-  P6's decision.
+  P6's decision. §3.3.1's unification is the shape that would serve P6 and
+  collapse the backend table to one row; §3.3.2's three claims are what it
+  rests on, all **untested**, and **none of them testable without arm64
+  hardware** — the x86_64-only approximation was attempted on 2026-09-22 and
+  found vacuous, for a structural reason now recorded in `NOTES.md`. G30 and
+  G31 (§9.4) are where a host with that hardware would report.
 - **Whether the install could ever move in**, on a host with nesting. §3.1
   argues it should not, on grounds that are about measurement validity rather
   than feasibility. A future spec could revisit it; this one does not.
