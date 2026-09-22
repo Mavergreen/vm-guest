@@ -18,10 +18,14 @@ else
     # Tee, so the skip count can be reported. A skipped test is not a
     # passing test, and bats' own summary line does not distinguish them
     # in a way anyone reads at a glance -- "550 ok" looks identical
-    # whether fourteen of them ran or not. The suite has opt-in tests
-    # (tests/hfs.bats mounts on the host and pops desktop windows), and
-    # the whole point of making them opt-in is undone if their absence is
-    # silent.
+    # whether fourteen of them ran or not.
+    #
+    # It said exactly that about tests/hfs.bats, whose fourteen mounting
+    # tests were opt-in because they mount under /run/media/$USER and pop
+    # a desktop window each. Reporting the skips is what made it obvious
+    # they never ran, and they are now gone along with the functions they
+    # covered. The count should stay at zero; this stays because the next
+    # opt-in test should not get to hide.
     batslog=$(mktemp)
     if ! bats tests/ | tee "$batslog"; then
         status=1
