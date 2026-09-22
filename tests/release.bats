@@ -145,6 +145,42 @@ make_repo() {
     [[ "$output" == *"repository:"* ]]
 }
 
+@test "an ingredient the repository GAINED is reported as that, not as a moved pin" {
+    # The two are different news and the summary used to report both as "an
+    # ingredient this checkout no longer pins" -- which is the opposite of
+    # true when the checkout has gained one. It stopped being hypothetical
+    # the day vendor/sources.tsv gained Apple's update pins: every golden on
+    # disk suddenly "no longer matched" ingredients it could not have had.
+    dir="$(make_repo)"
+    {
+        printf 'name\tbefore-the-new-pin\n'
+        (cd "$dir" && ./bin/ingredient-fingerprint.sh --list) \
+            | sed 's/^/ingredient./'
+    } > "$BATS_TEST_TMPDIR/predates.manifest"
+    printf 'brand-new-thing\thttp://example.invalid/x.tar.gz\t%s\n' \
+        0000000000000000000000000000000000000000000000000000000000000001 \
+        >> "$dir/vendor/sources.tsv"
+    run bash -c "cd '$dir' && ./bin/image-staleness.sh '$BATS_TEST_TMPDIR/predates.manifest'"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"GAINED"* ]]
+    [[ "$output" == *"brand-new-thing"* ]]
+    [[ "$output" != *"MOVED"* ]]
+}
+
+@test "a pin that moved is still reported as having moved" {
+    dir="$(make_repo)"
+    {
+        printf 'name\tunder-a-moved-pin\n'
+        (cd "$dir" && ./bin/ingredient-fingerprint.sh --list) \
+            | sed 's/^/ingredient./'
+    } > "$BATS_TEST_TMPDIR/moved.manifest"
+    printf '10.5p1-mavericks.99\n' > "$dir/components/openssh/version"
+    run bash -c "cd '$dir' && ./bin/image-staleness.sh '$BATS_TEST_TMPDIR/moved.manifest'"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"MOVED"* ]]
+    [[ "$output" != *"GAINED"* ]]
+}
+
 @test "a manifest with no ingredients says so rather than passing" {
     # "I cannot tell" and "it is fine" must not be the same answer: that is
     # how a stale golden gets trusted.
@@ -197,7 +233,14 @@ print('ok')
 @test "no INGREDIENTS.md row is marked untracked without saying untrackable" {
     # The family gate's rule: a bare cross reads as an oversight rather
     # than a decision.
-    run bash -c "grep '^|' '$REPO/INGREDIENTS.md' | grep '❌' | grep -cv 'untrack\|not ingredients\|unpinnable\|deliberately untracked'"
+    #
+    # "no datasource" joined the list for Apple's update packages
+    # (docs/decisions/0011). They are not untrackABLE in the sense the
+    # other phrases mean -- the URL is stable and fetchable -- there is
+    # simply no feed to track and no newer version to find, because the
+    # product line was discontinued in 2016. That is a decision with a
+    # reason, which is all this gate is asking for.
+    run bash -c "grep '^|' '$REPO/INGREDIENTS.md' | grep '❌' | grep -cv 'untrack\|not ingredients\|unpinnable\|deliberately untracked\|no datasource'"
     [ "$output" = "0" ]
 }
 

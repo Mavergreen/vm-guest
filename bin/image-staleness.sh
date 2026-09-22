@@ -45,6 +45,14 @@ trap 'rm -f "$now"' EXIT
 "$MQG_REPO_ROOT/bin/ingredient-fingerprint.sh" --list > "$now"
 
 overall=0
+# Two different things make an image stop matching the checkout, and they
+# are not the same news. Tracked separately because a summary that reports
+# both as "an ingredient moved" is wrong for one of them -- and this stopped
+# being hypothetical the day vendor/sources.tsv gained Apple's update pins
+# (docs/decisions/0011): every golden on disk suddenly "no longer matched"
+# ingredients it could not possibly have had.
+any_moved=0
+any_added=0
 for manifest in "$@"; do
     [ -f "$manifest" ] || die "no such manifest: $manifest"
     name=$(awk -F'\t' '$1 == "name" { print $2; exit }' "$manifest")
@@ -77,14 +85,36 @@ for manifest in "$@"; do
             | sed 's/^/    image:      /' >&2
         LC_ALL=C comm -13 "$recorded" "$now" \
             | sed 's/^/    repository: /' >&2
+        # MOVED: a name both sides know, with different values under it.
+        # GAINED: a name only the repository knows -- the image predates
+        # the ingredient rather than disagreeing about it.
+        tab=$(printf '\t')
+        if LC_ALL=C join -t"$tab" -j1 -o 0,1.2,2.2 "$recorded" "$now" \
+            | awk -F'\t' '$2 != $3' | grep -q .; then
+            any_moved=1
+        fi
+        if LC_ALL=C comm -13 <(cut -f1 "$recorded") <(cut -f1 "$now") \
+            | grep -q .; then
+            any_added=1
+        fi
         overall=1
     fi
     rm -f "$recorded"
 done
 
-if [ "$overall" -ne 0 ]; then
-    warn "an image above was built from ingredients this checkout no longer" \
-        "pins. It still boots; it is simply no longer reproducible from" \
-        "HEAD. Rebuild it, or check out the commit its manifest names."
+if [ "$any_moved" -ne 0 ]; then
+    warn "a pin above MOVED under an image: it was built from an ingredient" \
+        "this checkout pins differently. It still boots; it is simply no" \
+        "longer reproducible from HEAD. Rebuild it, or check out the commit" \
+        "its manifest names."
+fi
+if [ "$any_added" -ne 0 ]; then
+    warn "an image above predates an ingredient this checkout has GAINED." \
+        "Nothing moved under it and nothing about it is wrong -- it was" \
+        "simply built before the repository had that input. Rebuilding it" \
+        "is how it starts recording one."
+fi
+if [ "$overall" -ne 0 ] && [ "$any_moved" -eq 0 ] && [ "$any_added" -eq 0 ]; then
+    warn "an image above could not be judged; see the lines above it."
 fi
 exit "$overall"
