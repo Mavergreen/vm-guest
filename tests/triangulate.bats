@@ -502,6 +502,97 @@ tri_report() {
     python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$BATS_TEST_TMPDIR/out.json"
 }
 
+# --- which code produced the result ----------------------------------------
+#
+# Runs have been made from an NFS working tree shared between hosts, where
+# a commit can land mid-run and an uncommitted edit from another machine is
+# picked up silently. A result that cannot be traced to a commit is worth
+# much less than one that can, so the commit and the dirty flag are facts
+# the report carries, like the kernel and the bash version.
+
+# A git that answers whatever this test needs it to answer. Cheaper and far
+# more controllable than building three real repositories.
+fake_git_dir() {
+    local mode=$1 bin="$BATS_TEST_TMPDIR/fakebin-$mode"
+    mkdir -p "$bin"
+    case $mode in
+        none)
+            printf '#!/bin/sh\nexit 1\n' > "$bin/git" ;;
+        clean)
+            cat > "$bin/git" <<'EOF'
+#!/bin/sh
+case "$*" in
+    *"rev-parse --git-dir"*) echo .git ;;
+    *"rev-parse HEAD"*) echo 1111111111111111111111111111111111111111 ;;
+    *"status --porcelain"*) : ;;
+    *) exit 1 ;;
+esac
+EOF
+            ;;
+        dirty)
+            cat > "$bin/git" <<'EOF'
+#!/bin/sh
+case "$*" in
+    *"rev-parse --git-dir"*) echo .git ;;
+    *"rev-parse HEAD"*) echo 2222222222222222222222222222222222222222 ;;
+    *"status --porcelain"*) printf ' M a\n?? b\n' ;;
+    *) exit 1 ;;
+esac
+EOF
+            ;;
+    esac
+    chmod +x "$bin/git"
+    printf '%s' "$bin"
+}
+
+@test "the report names the commit and calls a clean tree clean" {
+    local bin
+    bin=$(fake_git_dir clean)
+    cd "$BATS_TEST_TMPDIR"
+    PATH="$bin:$PATH" run "$REPO/bin/triangulate.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"1111111111111111111111111111111111111111 (clean)"* ]]
+    [[ "$output" != *"THE WORKING TREE WAS DIRTY"* ]]
+}
+
+@test "a dirty tree is said so prominently, with a count" {
+    local bin
+    bin=$(fake_git_dir dirty)
+    cd "$BATS_TEST_TMPDIR"
+    PATH="$bin:$PATH" run "$REPO/bin/triangulate.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"(DIRTY)"* ]]
+    [[ "$output" == *"THE WORKING TREE WAS DIRTY: 2 path(s)"* ]]
+}
+
+@test "no repository is 'unknown', which is not 'clean'" {
+    local bin
+    bin=$(fake_git_dir none)
+    cd "$BATS_TEST_TMPDIR"
+    PATH="$bin:$PATH" run "$REPO/bin/triangulate.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"(unknown)"* ]]
+    [[ "$output" == *"NO GIT REPOSITORY"* ]]
+    [[ "$output" != *"(clean)"* ]]
+}
+
+@test "the commit and the dirty flag are in the JSON too, not only the report" {
+    local bin
+    bin=$(fake_git_dir dirty)
+    cd "$BATS_TEST_TMPDIR"
+    PATH="$bin:$PATH" run "$REPO/bin/triangulate.sh" \
+        --json-out "$BATS_TEST_TMPDIR/out.json"
+    [ "$status" -eq 0 ]
+    python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+f = d["facts"]
+assert f["repo_commit"] == "2" * 40, f["repo_commit"]
+assert f["repo_dirty"] == "DIRTY", f["repo_dirty"]
+assert f["repo_uncommitted"] == "2", f["repo_uncommitted"]
+' "$BATS_TEST_TMPDIR/out.json"
+}
+
 @test "the probe leaves nothing behind in the repository" {
     local before after
     before=$(find "$REPO" -maxdepth 1 -name '.mqg-triangulate*' | wc -l)

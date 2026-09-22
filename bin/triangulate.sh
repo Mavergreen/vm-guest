@@ -785,6 +785,54 @@ done
 
 bash_version=${BASH_VERSION:-unknown}
 
+# --- which code produced this result ---------------------------------------
+#
+# Several of this project's triangulation runs have been made from a
+# working tree shared over NFS rather than from a clone: /home/schmonz/
+# trees/... on one host and /home/schmonz/Documents/trees/... on another
+# are the same files. Two things follow, and both have already happened.
+#
+#   * A run picks up whatever is on disk when it starts, including another
+#     machine's uncommitted mid-edit. That nearly happened on 2026-09-20,
+#     and on 2026-09-21 a commit landed DURING a run and changed its
+#     behaviour in flight -- helpfully that time, by accident.
+#   * docs/decisions/0006 claims a fresh clone reproduces the image. A run
+#     from the shared tree does not test that claim while looking exactly
+#     like a run that does.
+#
+# So the report records the commit and whether the tree was dirty, the same
+# kind of fact as the host and the kernel. A result that cannot be traced
+# to a particular state of the code is worth much less than one that can.
+#
+# Three answers, not two: 'clean', 'DIRTY', and 'unknown' for no git or no
+# repository -- which is the same distinction bin/image-staleness.sh makes
+# between "I cannot tell" and "it is fine", and for the same reason.
+repo_commit=unknown
+repo_dirty=unknown
+repo_changes=0
+if command -v git >/dev/null 2>&1 \
+   && git -C "$MQG_REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    repo_commit=$(git -C "$MQG_REPO_ROOT" rev-parse HEAD 2>/dev/null \
+        || echo unknown)
+    repo_status=$(git -C "$MQG_REPO_ROOT" status --porcelain 2>/dev/null \
+        || true)
+    if [ -z "$repo_status" ]; then
+        repo_dirty=clean
+    else
+        repo_dirty=DIRTY
+        repo_changes=$(printf '%s\n' "$repo_status" | grep -c . || true)
+    fi
+fi
+case $repo_dirty in
+    DIRTY)
+        warn "the working tree at $MQG_REPO_ROOT is DIRTY:" \
+            "$repo_changes path(s) differ from $repo_commit. This result" \
+            "will not be traceable to any committed state." ;;
+    unknown)
+        warn "no git repository at $MQG_REPO_ROOT, so which code produced" \
+            "this run cannot be determined. That is not the same as clean." ;;
+esac
+
 # --- levels beyond probe ----------------------------------------------------
 
 build_ok=unknown
@@ -1005,6 +1053,9 @@ tri_fact image_dir_exists "$image_dir_exists"
 tri_fact image_fs "$image_fs"
 tri_fact image_free_mib "$free_mib"
 tri_fact repo_root "$MQG_REPO_ROOT"
+tri_fact repo_commit "$repo_commit"
+tri_fact repo_dirty "$repo_dirty"
+tri_fact repo_uncommitted "$repo_changes"
 tri_fact repo_fs "$repo_fs"
 tri_fact repo_create_ms "$repo_ms"
 tri_fact image_create_ms "$local_ms"
@@ -1096,7 +1147,24 @@ say "========================================="
 say "level:     $level"
 say "generated: $started_at"
 say "host:      $host -- $os_name ($os $kernel $arch), bash $bash_version"
+say "code:      $repo_commit ($repo_dirty) in $MQG_REPO_ROOT ($repo_fs)"
 say ""
+case $repo_dirty in
+    DIRTY)
+        say "  !! THE WORKING TREE WAS DIRTY: $repo_changes path(s) differ from"
+        say "     HEAD. Nothing here is traceable to a commit anyone else can"
+        say "     check out. If this tree is shared -- an NFS export mounted at"
+        say "     a different path on another machine is still the same files --"
+        say "     another host may have been editing it while this ran. And a"
+        say "     run from a shared tree does not test the fresh clone that"
+        say "     docs/decisions/0006 is about, while looking like one that does."
+        say "" ;;
+    unknown)
+        say "  !! NO GIT REPOSITORY WAS FOUND HERE, so which code produced this"
+        say "     cannot be determined. That is a third answer, not a synonym"
+        say "     for clean."
+        say "" ;;
+esac
 say "## Host"
 say ""
 printf '%s\n' "$TRI_FACTS" | while IFS='	' read -r k v; do
