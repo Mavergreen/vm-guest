@@ -173,6 +173,41 @@ fails the gate):
 | Version scheme is not `<upstream>-mavericks.N` | There is no single upstream. OpenCore, EDK II, QEMU and 10.9.5 move independently, so the scheme has no slot to fill. Product A versions on its own, and `INGREDIENTS.md` carries which ingredient moved. |
 | Product A has no Sparkle updater | Sparkle is a macOS framework; Product A's primary hosts are Linux and NetBSD. Product B, which is a 10.9 `.pkg`, takes the family's Sparkle shape unchanged. |
 
+## A future want, recorded so it is not forgotten and not designed for
+
+**A later version of this product will also want to generate Snow Leopard
+and Tiger guests.** Noted 2026-09-22 by the user.
+
+It is written down here and **deliberately not designed for now**. The
+project's record on premature generality is poor in the opposite
+direction: four inherited claims turned out to be wrong precisely because
+they were stated broadly and tested narrowly, and the things that have
+held up — the CPU table, the SMBIOS table, the compiler range — say
+exactly what has been measured and nothing more.
+
+So the rule for now is: **do not add a 10.6 or 10.4 branch to anything
+until there is a 10.6 or 10.4 guest to test it against.** A parameter
+with one value is honest; a parameter with one value and a second branch
+nobody has run is a claim we cannot support.
+
+What *will* help when that day comes, and costs nothing extra now,
+is the shape already arrived at for different reasons:
+
+- **Tables with evidence per row** (`lib/cpu.sh`, `lib/smbios.sh`,
+  `lib/compiler.sh`). A new OS is a new column of evidence, not a fork.
+- **The stage pipeline is parameterised** — accelerator, CPU, SMBIOS,
+  NIC, RAM, disk, updates. Older releases will want different values of
+  the same knobs far more often than they will want new knobs.
+- **The generalization ledger asks "is this about the host or the
+  guest?"** of every finding. That question is exactly the one an older
+  guest re-opens, and the entries already answer it for 10.9.
+
+What will certainly NOT transfer, and should be expected to break:
+Tiger is PowerPC-era with an Intel edge case, Snow Leopard is the last
+32-bit-kernel release, and both predate the EFI and SMBIOS assumptions
+this entire boot stack is built on. That is a different bring-up, not a
+parameter.
+
 ## Consequences
 
 - **The transitional piece, with its exit condition.** Product B stays in
