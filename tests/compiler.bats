@@ -32,11 +32,17 @@ stub_gcc() {
 # docs/decisions/0004, INGREDIENTS.md and docs/host-profile.md G22, and a
 # change here that does not update those leaves a claim with nothing behind
 # it. If you are here because this test failed, that is the reminder.
-@test "the declared range is gcc 13-14, verified only at 13.3.0" {
+@test "the declared range is gcc 13-16, verified at three points" {
+    # Ceiling raised 14 -> 16 on 2026-09-22, a day after the evidence
+    # arrived: squirrel-zapper ran all eleven stages on gcc 16.2.1 and
+    # ap-juicer built the stack and installed a guest on 14.2.0.
     [ "$MQG_CC_FAMILY" = gcc ]
     [ "$MQG_CC_FLOOR" -eq 13 ]
-    [ "$MQG_CC_CEILING" -eq 14 ]
+    [ "$MQG_CC_CEILING" -eq 16 ]
     [ "$MQG_CC_VERIFIED" = 13.3.0 ]
+    [[ "$MQG_CC_VERIFIED_LIST" == *13.3.0* ]]
+    [[ "$MQG_CC_VERIFIED_LIST" == *14.2.0* ]]
+    [[ "$MQG_CC_VERIFIED_LIST" == *16.2.1* ]]
 }
 
 # The point of the whole option: the range must not imply a test that never
@@ -44,12 +50,20 @@ stub_gcc() {
 # version that MOTIVATED this work and is still unverified, so it is outside.
 @test "the range text says which version was actually verified" {
     run compiler_range_text
-    [[ "$output" == *"verified only at gcc 13.3.0"* ]]
+    [[ "$output" == *"verified at gcc 13.3.0, 14.2.0 and 16.2.1"* ]]
 }
 
-@test "gcc 15 is not claimed as supported until someone builds with it" {
+@test "gcc 15 is inside the range by interpolation, and says so" {
+    # 15 sits between two verified points and has never been seen. It is
+    # inside the range because 14 and 16 both work -- which is an
+    # interpolation, not a measurement, and lib/compiler.sh marks it as
+    # such. Keeping it outside would have claimed a failure nobody
+    # observed, which is the mirror of the error this file exists to
+    # prevent.
     run compiler_range_verdict gcc 15.1.1
-    [[ "$output" == ABOVE* ]]
+    [[ "$output" != ABOVE* ]]
+    grep -q 'NOT TESTED. Never seen' "$REPO/lib/compiler.sh"
+    grep -q 'interpolation, not a measurement' "$REPO/lib/compiler.sh"
 }
 
 # --- parsing ---------------------------------------------------------------
@@ -166,12 +180,15 @@ stub_gcc() {
 # --- detection, through a stub compiler ------------------------------------
 
 @test "detection reads the compiler on PATH" {
-    stub_gcc "gcc (GCC) 15.1.1 20250425"
+    # 17 rather than 15: 15 moved INSIDE the range on 2026-09-22 when the
+    # ceiling went to 16, so it no longer exercises the ABOVE branch. The
+    # point of this test is detection through $PATH, not any one version.
+    stub_gcc "gcc (GCC) 17.1.1 20270425"
     run env PATH="$STUB_BIN:$PATH" bash -c \
         ". '$REPO/lib/common.sh'; . '$REPO/lib/compiler.sh'; compiler_range_status"
     [ "$status" -eq 0 ]
     [[ "$output" == ABOVE* ]]
-    [[ "$output" == *15.1.1* ]]
+    [[ "$output" == *17.1.1* ]]
 }
 
 # "I cannot tell" is its own outcome: it names what it could not read.
@@ -229,7 +246,7 @@ stub_gcc() {
     [[ "$output" == *"NOT tested"* ]]
     [[ "$output" == *"nobody has ever tried"* ]]
     [[ "$output" == *"$(( MQG_CC_FLOOR - 1 )).4.0"* ]]
-    [[ "$output" == *"gcc 13 through 14"* ]]
+    [[ "$output" == *"gcc 13 through 16"* ]]
 }
 
 @test "an unknown compiler warns, names it, and proceeds" {

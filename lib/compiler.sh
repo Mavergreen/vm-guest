@@ -28,11 +28,44 @@
 #   gcc 13.3.0   VERIFIED. The primary host (docs/host-profile.md §1).
 #                Every checksum in decisions/0004 was produced by it,
 #                repeatedly, from cold trees.
-#   gcc 13, 14   EXPECTED, NOT VERIFIED. Nobody has built with 14. It is
-#                inside the range because it is the same compiler series
-#                as the verified point, defaults to the same C dialect
-#                (gnu17), and the dialect is now stated anyway.
-#   gcc 15, 16   NOT VERIFIED, and deliberately ABOVE the ceiling. 15 is
+#   gcc 14.2.0   VERIFIED 2026-09-21 on ap-juicer (Mac Pro 1,1, Debian 13):
+#                the whole boot stack built -- opencore 454 s, ovmf 333 s --
+#                and the pipeline went on to install a guest and answer
+#                SSH. Was "EXPECTED, NOT VERIFIED -- nobody has built with
+#                14" until 2026-09-22, three days after ap-juicer built
+#                with 14. The row was true when written and nobody
+#                revisited it when the evidence arrived, which is the same
+#                failure as g26_verdict printing a confident falsehood.
+#   gcc 16.2.1   VERIFIED 2026-09-21 on squirrel-zapper (EndeavourOS):
+#                ALL ELEVEN STAGES -- media 118 s, install 1332 s, verify,
+#                manifest -- a guest installed, booted without installer
+#                media and answered SSH. Both fixes this range was created
+#                for are therefore tested up here: the gnu17 dialect
+#                (without which OpenCorePkg 1.0.7 will not compile under a
+#                C23 default) and dropping EDK II's -Werror (without which
+#                gcc 16's new -Wunused-but-set-variable kills MdeModulePkg).
+#
+#                THE ARTIFACTS DIFFER FROM gcc 13's, AND THAT IS NOT A
+#                DEFECT. OVMF_CODE.fd is 195c4dcf... on 13.3.0 and
+#                e3d0c6f5... on 16.2.1. decisions/0004 already says the
+#                firmware is reproducible PER TOOLCHAIN and not ACROSS
+#                toolchains -- which means the promotion condition this
+#                file used to state ("if it builds and the artifact
+#                checksums match") was UNSATISFIABLE by construction: no
+#                different compiler can ever produce matching bytes, so
+#                that rule would have held the ceiling at 14 for ever. The
+#                condition that replaced it is the one the rest of this
+#                project uses: it builds, and the image it produces
+#                installs and answers SSH.
+#
+#   gcc 15       NOT TESTED. Never seen. It is INSIDE the range only
+#                because 14 and 16 are both verified and it sits between
+#                them -- which is an interpolation, not a measurement, and
+#                is marked as such. 15 is also the version that motivated
+#                this whole piece of work, being the first to default to
+#                -std=gnu23.
+#
+#   (historical) 15 and 16 were ABOVE the ceiling until 2026-09-22. 15 is
 #                the version that motivated this whole piece of work --
 #                it defaults to -std=gnu23, under which OpenCorePkg 1.0.7
 #                would not compile at all -- and that specific failure is
@@ -98,14 +131,19 @@
 
 MQG_CC_FAMILY=gcc
 MQG_CC_FLOOR=13
-MQG_CC_CEILING=14
+MQG_CC_CEILING=16
+# The canonical single point, used where ONE version is wanted (the
+# MQG_COMPILER override suggestion). The list below is what the range text
+# reports, because three versions are verified now and "verified only at
+# 13.3.0" became false on 2026-09-21.
 MQG_CC_VERIFIED=13.3.0
+MQG_CC_VERIFIED_LIST='13.3.0, 14.2.0 and 16.2.1'
 
 # The declared range as one phrase, so no caller spells it out by hand.
 compiler_range_text() {
-    printf '%s %s through %s, verified only at %s %s' \
+    printf '%s %s through %s, verified at %s %s' \
         "$MQG_CC_FAMILY" "$MQG_CC_FLOOR" "$MQG_CC_CEILING" \
-        "$MQG_CC_FAMILY" "$MQG_CC_VERIFIED"
+        "$MQG_CC_FAMILY" "$MQG_CC_VERIFIED_LIST"
 }
 
 # The first line of <cc> --version, or nothing at all.
