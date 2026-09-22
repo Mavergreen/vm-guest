@@ -14,8 +14,25 @@ if ! command -v bats >/dev/null 2>&1; then
     echo "bats not found. Install bats-core (e.g. 'sudo apt install bats'," \
         "or see https://github.com/bats-core/bats-core) and re-run." >&2
     status=1
-elif ! bats tests/; then
-    status=1
+else
+    # Tee, so the skip count can be reported. A skipped test is not a
+    # passing test, and bats' own summary line does not distinguish them
+    # in a way anyone reads at a glance -- "550 ok" looks identical
+    # whether fourteen of them ran or not. The suite has opt-in tests
+    # (tests/hfs.bats mounts on the host and pops desktop windows), and
+    # the whole point of making them opt-in is undone if their absence is
+    # silent.
+    batslog=$(mktemp)
+    if ! bats tests/ | tee "$batslog"; then
+        status=1
+    fi
+    skipped=$(grep -c '# skip' "$batslog" || true)
+    if [ "${skipped:-0}" -gt 0 ]; then
+        echo
+        echo "$skipped test(s) SKIPPED, not run:"
+        grep '# skip' "$batslog" | sed -e 's/^ok [0-9]* /  /' | sort -u
+    fi
+    rm -f "$batslog"
 fi
 
 echo

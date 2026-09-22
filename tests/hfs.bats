@@ -9,6 +9,25 @@ setup() {
     IMG="$BATS_TEST_TMPDIR/t.img"
 }
 
+# Attaching a loop device and mounting it is what these tests exercise,
+# and udisks2 mounts under /run/media/$USER -- exactly where desktop
+# handlers look. So on a desktop, every run of the suite throws a
+# notification and a file-manager window per mount, and the suite gets run
+# a dozen times in an evening.
+#
+# The PIPELINE no longer does this at all: media/build-installer-img.sh
+# assembles HFS+ inside the privops microVM and attaches nothing (G26).
+# What is left in lib/hfs.sh is used by media/content-digest.sh, a by-hand
+# diagnostic. So these tests cover a path nothing automatic takes.
+#
+# Opt-in rather than deleted, and SKIPPED LOUDLY rather than quietly: a
+# test that silently does not run is worse than one that is absent,
+# because the count still looks healthy. bin/run-tests.sh reports skips.
+needs_udisks() {
+    [ "${MQG_TEST_UDISKS:-0}" = 1 ] || \
+        skip "mounts on the host: set MQG_TEST_UDISKS=1 (pops desktop windows; the pipeline no longer takes this path -- see G26)"
+}
+
 teardown() {
     # Never leave a loop device behind, even if a test failed mid-way.
     if [ -n "${LOOPDEV:-}" ]; then
@@ -22,6 +41,7 @@ teardown() {
 }
 
 @test "hfs_create makes a mountable HFS+ image with the requested volume name" {
+    needs_udisks
     hfs_create "$IMG" 32 MQGTEST
     [ -f "$IMG" ]
     run file "$IMG"
@@ -48,6 +68,7 @@ teardown() {
 }
 
 @test "attach, mount, write, read back, unmount, detach" {
+    needs_udisks
     hfs_create "$IMG" 32 MQGTEST
     LOOPDEV=$(hfs_attach "$IMG")
     [[ "$LOOPDEV" == /dev/loop* ]]
@@ -68,6 +89,7 @@ teardown() {
 }
 
 @test "hfs_mount reports the real mountpoint, not a parse of the message" {
+    needs_udisks
     # A volume name containing " at " and a trailing period defeats the
     # obvious sed on udisksctl's "Mounted /dev/loopN at <path>" line.
     hfs_create "$IMG" 32 "Weird. at Name."
@@ -79,6 +101,7 @@ teardown() {
 }
 
 @test "hfs_with_mounted cleans up even when the body fails" {
+    needs_udisks
     hfs_create "$IMG" 32 MQGTEST
     body_that_fails() { return 3; }
     run hfs_with_mounted "$IMG" body_that_fails
@@ -89,6 +112,7 @@ teardown() {
 }
 
 @test "hfs_with_mounted passes the mountpoint to the body" {
+    needs_udisks
     hfs_create "$IMG" 32 MQGTEST
     body_writes() { printf 'ok\n' > "$1/written.txt"; }
     hfs_with_mounted "$IMG" body_writes
@@ -100,6 +124,7 @@ teardown() {
 }
 
 @test "hfs_with_mounted passes extra arguments through to the body" {
+    needs_udisks
     hfs_create "$IMG" 32 MQGTEST
     body_args() { printf '%s\n' "$2" > "$1/arg.txt"; }
     hfs_with_mounted "$IMG" body_args "a value with spaces"
@@ -110,6 +135,7 @@ teardown() {
 }
 
 @test "two images can be mounted at once, with the same volume name" {
+    needs_udisks
     # Task 3 mounts the ESD and the target at the same time, and two of the
     # volumes it handles are both called "OS X Base System".
     IMG2="$BATS_TEST_TMPDIR/t2.img"
@@ -133,6 +159,7 @@ teardown() {
 }
 
 @test "hfs_attach fails clearly for a file that is not an HFS+ image" {
+    needs_udisks
     printf 'not an image\n' > "$BATS_TEST_TMPDIR/bogus.img"
     run hfs_attach "$BATS_TEST_TMPDIR/bogus.img"
     # Attaching may succeed; mounting must not. Either way, no silent success.
@@ -144,12 +171,14 @@ teardown() {
 }
 
 @test "hfs_attach fails for a file that does not exist" {
+    needs_udisks
     run hfs_attach "$BATS_TEST_TMPDIR/absent.img"
     [ "$status" -ne 0 ]
     [[ "$output" == *"no such image"* ]]
 }
 
 @test "hfs_mount is idempotent: an already-mounted device is a success" {
+    needs_udisks
     # This host is a live desktop session: gvfs/udisks automounting races
     # every loop-setup, and whoever loses gets "already mounted". Winning
     # the race is not something we can arrange; being correct either way
@@ -182,6 +211,7 @@ teardown() {
 }
 
 @test "hfs_with_mounted_part mounts the partition inside a GPT image" {
+    needs_udisks
     # The whole-disk device is not mountable; partition 1 is. This is how
     # media/build-installer-img.sh writes into its target.
     hfs_create_gpt "$IMG" 32 "OS X Base System"
@@ -196,6 +226,7 @@ teardown() {
 }
 
 @test "hfs_with_mounted_part cleans up when the body fails" {
+    needs_udisks
     hfs_create_gpt "$IMG" 32 MQGTEST
     body_that_fails() { return 4; }
     run hfs_with_mounted_part "$IMG" 1 body_that_fails
@@ -205,6 +236,7 @@ teardown() {
 }
 
 @test "hfs_with_mounted_part fails clearly for a partition that is not there" {
+    needs_udisks
     hfs_create_gpt "$IMG" 32 MQGTEST
     body_never_runs() { printf 'should not happen\n' > "$1/nope.txt"; }
     run hfs_with_mounted_part "$IMG" 7 body_never_runs
@@ -214,6 +246,7 @@ teardown() {
 }
 
 @test "hfs_with_mounted cleans up when the body exits rather than returns" {
+    needs_udisks
     # `die` calls exit. A body that hits one must not take the cleanup down
     # with it: that is how the first real media build left three loop
     # devices and three mounts behind.
