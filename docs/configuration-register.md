@@ -37,19 +37,30 @@ the other axis. It asks of every setting, portable or not:
 This register **cross-references the ledger, it does not duplicate it.** Where
 a row says "G14" or "decisions/0009", that is where the argument lives.
 
-## The count
+## The count, and why it is not a table of numbers
 
-| | Rows |
-|---|---|
-| **MEASURED here** | 16 |
-| **INHERITED**, and since measured | 6 |
-| **INHERITED**, never tested here | 13 |
-| **REASONED**, never tested here | 11 |
-| **Sample default kept on purpose** (a choice, not an accident) | 5 |
+An earlier draft of this document had a tidy tally here — so many MEASURED,
+so many INHERITED, so many REASONED. **It was deleted, because it could not
+be verified.** Most rows carry more than one of those words (a setting can be
+inherited *and* since measured, or reasoned in one column and measured in
+another), so any single number would have been a summary nobody could check
+against the rows — which is the exact failure mode this register exists to
+catch. **The word in each row is the authority.**
 
-**Roughly half of what this project sets has never been tested.** That is not
-a scandal — most of it is cheap to be wrong about — but it is the reason for
-the cost ranking at the end.
+What can be said without counting anything:
+
+- **Roughly half of what this project sets has never been tested.** Section
+  12 ranks the half that matters.
+- **Column three says "nothing" often enough that it is worth having.** The
+  settings with no evidence behind them are not obscure ones — they include
+  `vmport=off`, five `Booter` quirks, `vgamem_mb=64`, and the memory and CPU
+  counts at install time.
+- **The three most load-bearing settings are all measured**: the `-cpu` line,
+  the SMBIOS model and the NIC each have an ADR, a table in `lib/`, and at
+  least one full install behind them.
+
+That is not a scandal — most untested settings are cheap to be wrong about —
+but it is the reason for the cost ranking at the end.
 
 ---
 
