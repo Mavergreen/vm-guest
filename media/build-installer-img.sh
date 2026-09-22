@@ -96,7 +96,25 @@ REFERENCE_PARTITION_BYTES=6550020096
 #
 # Overridable so the margin can be varied without editing this file.
 MARGIN_MIB=${MQG_MEDIA_MARGIN_MIB:-512}
-PART_MIB=$(( (REFERENCE_PARTITION_BYTES + 1048575) / 1048576 + MARGIN_MIB ))
+BASE_PART_MIB=$(( (REFERENCE_PARTITION_BYTES + 1048575) / 1048576 + MARGIN_MIB ))
+
+# ...and --extra-space-mib on top, for cargo nobody had measured when the
+# margin above was chosen.
+#
+# THE MARGIN IS NOT SPARE ROOM. It was measured against this media as it is
+# built today, ESD contents and OpenSSH included, and what it leaves is
+# 483.8 MiB free -- read out of the HFS+ volume header of the media sitting
+# on disk on 2026-09-22, not estimated. Security Update 2016-004 alone is
+# 353.8 MiB and `--updates all` is 685 MiB, so carrying updates inside the
+# existing margin would mean eating it whole and then overflowing.
+#
+# So the caller says how much room its extra cargo needs, and this stays
+# EXACTLY the old number when nothing extra is carried. `--updates none` has
+# to be bit-for-bit what it was -- P5 measures against it -- and a formula
+# that quietly grew the partition on every build would have changed the one
+# thing that must not change.
+extra_space_mib=0
+PART_MIB=$BASE_PART_MIB
 
 VOLUME_NAME="OS X Base System"
 
@@ -144,6 +162,12 @@ usage: $(basename "$0") [--describe] [--force] [--keep-work] [--autoinstall]
                  Distribution that declares <allowed-os-versions
                  min="10.9.5"/> -- a check whose answer mid-install is not
                  something to guess at. See image/payload/firstboot.sh.
+  --extra-space-mib N
+                 Enlarge the HFS+ partition by N MiB beyond the measured
+                 reference-plus-margin size, for extra packages the margin
+                 was never sized for. Default 0, which reproduces today's
+                 partition geometry exactly. image/build-image.sh passes
+                 the size of the --updates packages plus slack.
 EOF
 }
 
@@ -165,11 +189,18 @@ while [ $# -gt 0 ]; do
         --autoinstall) autoinstall=1 ;;
         --firstboot-pkg) firstboot_pkg=$2; autoinstall=1; shift ;;
         --extra-pkg) extra_pkgs+=("$2"); autoinstall=1; shift ;;
+        --extra-space-mib) extra_space_mib=$2; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
     esac
     shift
 done
+
+case $extra_space_mib in
+    ''|*[!0-9]*) die "--extra-space-mib wants a whole number of MiB," \
+                     "not '$extra_space_mib'" ;;
+esac
+PART_MIB=$(( BASE_PART_MIB + extra_space_mib ))
 
 MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 media_dir=$MQG_IMAGE_DIR/media
@@ -200,7 +231,8 @@ installer media layout
                       (the reference's is $REFERENCE_PARTITION_BYTES bytes,
                       rounded up to whole MiB -- HFS+ must fill its
                       partition exactly -- plus a $MARGIN_MIB MiB margin
-                      for the larger catalog a Linux-built copy needs)
+                      for the larger catalog a Linux-built copy needs,
+                      plus $extra_space_mib MiB of --extra-space-mib)
   disk size           $((PART_MIB + 2)) MiB = $(((PART_MIB + 2) * 1048576)) bytes
   volume name         $VOLUME_NAME
 
