@@ -44,13 +44,36 @@ Both are reproducible from pinned inputs, both are distinguishable by
 their manifests, and the golden/clone machinery already supports keeping
 two.
 
-### What still has to happen
+### Built, 2026-09-22
 
-The switch, the manifest field and the `OSInstall.collection` mechanism
-all exist — P4 built them precisely so this could be configuration rather
-than a rewrite. What is left is pinning the three packages in
-`vendor/sources.tsv`, recording them in `INGREDIENTS.md` with their
-Renovate status, and wiring `security` and `all` to install them.
+All of it, as configuration rather than a rewrite, exactly as P4 intended:
+the three packages are pinned in `vendor/sources.tsv` (seven rows — iTunes
+12.6.2 is one softwareupdate product made of five flat packages),
+`image/fetch-updates.sh` resolves a selection to an ordered package list,
+and they ride to the guest the way the OpenSSH packages already do.
+
+Three things the packages themselves settled, none of which was guessable
+from the outside:
+
+- **They install BEFORE the family's OpenSSH.** 2016-004's payload contains
+  `./usr/bin/ssh` and `./usr/sbin/sshd`, so the other order would have
+  undone the OpenSSH replacement and reintroduced the defect that cost a
+  full install to find in P4.
+- **`sw_vers` is not the witness.** `ProductVersion` stays 10.9.5. What
+  moves is the receipt
+  (`com.apple.pkg.update.security.2016-004Mavericks.13F1911`) and
+  `sw_vers -buildVersion`, **13F34 → 13F1911**, because the update carries
+  `SystemVersion.plist`.
+- **The media's 512 MiB margin is not spare room.** It leaves 483.8 MiB
+  free, measured off the HFS+ volume header; 2016-004 is 353.8 MiB and
+  `all` is 685 MiB. Hence `media/build-installer-img.sh --extra-space-mib`,
+  which defaults to 0 and so leaves `none` geometrically identical.
+
+`iBooksDelta-1.0.1` and `RemoteDesktopClient-3.8.4` are recorded in
+`INGREDIENTS.md` as an ingredient with a written reason and no pin, because
+there is no URL to pin.
+
+**Decision: `docs/decisions/0011-updates-in-the-default-image.md`.**
 
 ### Unchanged
 
