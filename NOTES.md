@@ -5764,3 +5764,107 @@ because `docs/test-hosts.md` wrote down what would falsify it before the
 hardware existed. An explanation nobody can test is a story; an
 observation with a named falsifier is an asset, even while the story
 attached to it keeps being wrong.
+
+## Nothing mounts on the host any more
+
+`lib/hfs.sh` had two halves. One writes plain files with `mkfs.hfsplus`,
+`sgdisk`, `dd` and `python3`. The other attached loop devices and mounted
+volumes through udisks2, which grants `loop-setup` to a user **at a
+seat** -- so it refused an SSH session to a headless host, and put a
+file-browser window and a notification on the screen of anyone who did
+have one, because `/run/media/$USER` is where desktop handlers look.
+
+The second half is gone, on 2026-09-21. `hfs_attach`, `hfs_mount`,
+`hfs_unmount`, `hfs_detach`, `hfs_partition_dev`, `hfs_with_mounted`,
+`hfs_with_mounted_part`, `hfs_backing_file` and `hfs_mountpoint`, with
+the fourteen tests that covered them. `hfs_create`, `hfs_create_gpt` and
+`hfs_mark_clean` stay: the media build calls all three and none of them
+mounts anything.
+
+**The last caller was not the by-hand diagnostic it was recorded as.**
+`lib/hfs.sh`'s own header and the G26 row both said `content-digest.sh`
+was a comparison tool no pipeline stage called. `image/build-image.sh`
+calls it -- `stage_manifest`, for the `mediacontent` line of every image
+manifest, with `2>/dev/null`. On a host with no seat that field came out
+**empty**, and nothing said why. The residue was real and it was in the
+pipeline.
+
+### What content-digest costs now
+
+The volume is mounted read-only inside the privops microVM and the
+per-file listing comes back on a raw disk -- the channel
+`BaseSystem.dmg` already travels, run the other way. The host checks its
+own sha256 of the file against the one the guest read back off the
+device, so a short or torn write is caught rather than digested.
+
+| | old (udisks mount) | new (microVM) |
+|---|---|---|
+| 6.4 GB, 39,415 files, warm cache | 19.0 s | 40.4 s |
+| needs a desktop seat | yes | no |
+| can alter the image | yes (rw mount rewrites the volume header) | no (`readonly=on`, `-o ro`) |
+| partition | hardcoded to 1 | largest HFS+ thing on the disk |
+
+The 21 seconds are busybox's `sha256sum`, which is about a third the
+speed of coreutils'. Nothing else moved: the two listings are
+**byte-identical except for one line out of 39,415**, and that line is
+the finding. The old path read as an ordinary user, so BaseSystem's
+`/.file` -- mode 0000, the marker OS X looks for to decide a volume has a
+filesystem on it -- came out `UNREADABLE-0` with no checksum. The microVM
+is uid 0 and reads it, so it gets a real sha256 and the unreadable
+category is structurally empty. **Digests taken before today do not
+compare with these.**
+
+The bulk-`xargs` lesson travelled with the walk, and matters more inside
+the guest rather than less: 39,000 separate `sha256sum` processes took
+five minutes where one `xargs` took twenty seconds, and busybox's
+per-process overhead has less to hide behind.
+
+What a file that cannot be read would do is now checked instead of
+assumed. The guest counts what `find` produced and what `sha256sum`
+hashed and prints both; the host refuses a digest whose two numbers
+disagree. An I/O error off a corrupt volume would otherwise have shrunk
+the digest's input silently.
+
+### Requirements that fell out
+
+`udisksctl`, `losetup`, `findmnt` and `lsblk` are out of
+`boot/prereqs.sh`. They were never in `bin/preconditions.sh` or
+`bin/triangulate.sh`, so the two lists the suite holds to each other did
+not have to move together after all -- `prereqs.sh` was the only place.
+
+`kpartx` went too, and it is the older mistake. It is from
+`eprigorodov/mkosxinstallusb`'s recipe, which maps an image's partitions
+with device-mapper and mounts them. This project never took that path --
+it went to udisks2 instead -- so `kpartx` sat in three requirement lists
+and **no call site, ever**. A requirements list is only worth reading if
+everything on it is used.
+
+### What holds it
+
+`tests/hfs.bats` now asserts it repository-wide: no `*.sh` file may
+invoke `udisksctl`, `losetup`, `findmnt`, `lsblk` or any of the deleted
+`hfs_` wrappers. Matched in command position rather than anywhere on a
+line, because the first version caught its own documentation -- the G26
+verdict names all four tools in the sentence it prints, which is exactly
+what a reader looking at a refusal needs to see.
+
+The skip count went from **14 to 0**. Those fourteen were opt-in behind
+`MQG_TEST_UDISKS` precisely because they popped desktop windows, which
+meant they had not run in the suite for some time. A test that does not
+run is not cover, however healthy the count looks -- and reporting the
+skip count in `bin/run-tests.sh` is what made that visible.
+
+One piece of cover is genuinely lost, and saying so beats papering over
+it: nothing checks the volume NAME `hfs_create` writes, because it lives
+in the catalog's root thread record and reading it takes an HFS+ reader
+-- which used to mean a udisks mount, whose mountpoint udisks names after
+the volume. It is still observed twice: the GPT partition label, which
+`hfs_create_gpt` sets from the same string, and
+`bin/privops-selftest.sh`, which mounts the volume inside the microVM.
+
+### The answer to the question
+
+Nothing mounts on the host. Not the media build, not content-digest, not
+the test suite. The only HFS+ mounts this project performs are inside the
+privops microVM, where we are genuinely root and where no polkit policy,
+no seat and no desktop handler has an opinion.
