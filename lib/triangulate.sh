@@ -575,8 +575,17 @@ g21_verdict() {
 # prompt, which is no use to an unattended pipeline.
 g26_verdict() {
     local media_failure=$1 media_built=$2
-    # The entry is RESOLVED: media/build-installer-img.sh assembles HFS+
-    # inside the privops microVM and asks udisks2 for nothing.
+    # The entry is RESOLVED, and as of 2026-09-21 it is resolved for the
+    # whole project rather than for the media build alone: lib/hfs.sh has
+    # no loop-and-mount half left, media/content-digest.sh reads its
+    # volume inside the privops microVM like everything else, and
+    # boot/prereqs.sh no longer asks a host for udisksctl, losetup,
+    # findmnt or lsblk.
+    #
+    # THE STATIC HALF OF THAT IS NOT MEASURED BY THIS RUN, and the wording
+    # below says so. A repository-wide assertion in tests/hfs.bats is what
+    # holds it: no *.sh file may invoke those four tools or the deleted
+    # hfs_ mount wrappers outside a comment.
     #
     # This function used to say "udisks2 granted loop-setup here" whenever
     # media built, which was true while the media build used udisks2 and
@@ -587,11 +596,11 @@ g26_verdict() {
     # ledger is where this project keeps what it believes.
     case "$media_failure" in
         *NotAuthorized*|*polkit*|*"loop-setup failed"*)
-            judge REFUTE "something still reached udisks2 and was refused. The media build should not: it assembles inside the microVM. Find the caller -- media/content-digest.sh and the test suite are the two that legitimately still use lib/hfs.sh" ;;
+            judge REFUTE "something still reached udisks2 and was refused. Nothing in this repository should be able to: the media build assembles inside the microVM, content-digest reads inside it, and lib/hfs.sh has no attach-or-mount functions left. So the caller is something this project does not control, or something added since -- find it, and see the repository-wide check in tests/hfs.bats, which should have caught the second case" ;;
     esac
     case "$media_built" in
-        yes)  judge CONFIRM "media built without asking udisks2 for anything -- no loop device, no mount, no seat. On a headless host this is the measurement that resolves the entry rather than a restatement of it" ;;
-        *)    judge CANNOT-SAY "no media was built at this level, so nothing here speaks to whether the seat requirement is really gone" ;;
+        yes)  judge CONFIRM "media built without asking udisks2 for anything -- no loop device, no mount, no seat. That is what this run measured. The broader claim, that NOTHING here needs a seat any more, is held by a repository-wide assertion in tests/hfs.bats rather than by this run, because a run that builds media exercises the media build and not every script" ;;
+        *)    judge CANNOT-SAY "no media was built at this level, so nothing here speaks to whether the seat requirement is really gone. The static half is still checked: tests/hfs.bats refuses any *.sh file that invokes udisksctl, losetup, findmnt or lsblk" ;;
     esac
 }
 
@@ -606,7 +615,16 @@ g19_verdict() {
 # tri_stage_result. `kind` is what kind of failure it was, when it failed:
 # see tri_media_failure_kind.
 #
-# REFUTE IS RESERVED FOR THE POST-UNMOUNT VERIFICATION FINDING CORRUPTION,
+# "POST-UNMOUNT" IS NOW "IN A FRESH GUEST", and the difference is in this
+# entry's favour rather than against it. The check used to re-mount the
+# finished media on the host and read it back; since G26 it boots a
+# microVM of its own, after the writing one has exited, so every byte
+# comes off the host's file through virtio into a kernel with no page
+# cache at all. The fault this entry is about -- a second writer, and a
+# verification that read the cache that wrote it -- is what that shape
+# exists to defeat.
+#
+# REFUTE IS RESERVED FOR THAT VERIFICATION FINDING CORRUPTION,
 # because that is the only outcome that is evidence about this entry. A
 # media stage that fell over for some other reason -- a missing privops
 # backend, a full disk, a tool this host does not have -- is a CANNOT-SAY
@@ -616,7 +634,7 @@ g19_verdict() {
 g20_verdict() {
     local built=$1 failed=${2:-} kind=${3:-unknown} reason=${4:-}
     case $built in
-        yes)    judge CONFIRM "media built here and verified against media/apple-packages.sha256 from a fresh mount: the verification the entry asks for ran, and passed" ;;
+        yes)    judge CONFIRM "media built here and verified against media/apple-packages.sha256 by a microVM of its own, booted after the one that wrote it had exited: the verification the entry asks for ran, and passed" ;;
         no)
             case $kind in
                 verification)
