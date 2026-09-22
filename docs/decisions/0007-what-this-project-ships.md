@@ -13,7 +13,7 @@ both will bake assumptions about what the artifact *is* into places that
 are expensive to change later.
 
 This repository is one of about forty `mavericks-*` projects. The family
-has conventions, held in the `modernmavericks-conventions` skill, and the
+has conventions, held in the `mavergreen-conventions` skill, and the
 governing rule is: **match the family unless the product genuinely
 differs — and when you deviate, say so.** A silent deviation reads as a
 mistake; a documented one reads as a decision.

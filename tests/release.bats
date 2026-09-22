@@ -208,9 +208,9 @@ make_repo() {
     run python3 -c "
 import json
 cfg = json.load(open('$REPO/.claude/settings.json'))
-assert cfg['extraKnownMarketplaces']['modernmavericks']['source']['repo'] \
+assert cfg['extraKnownMarketplaces']['mavergreen']['source']['repo'] \
     == 'Mavergreen/shipyard', cfg
-assert cfg['enabledPlugins']['modernmavericks@modernmavericks'] is True, cfg
+assert cfg['enabledPlugins']['mavergreen@mavergreen'] is True, cfg
 print('ok')
 "
     [ "$status" -eq 0 ]
