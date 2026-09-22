@@ -1305,6 +1305,17 @@ stage_verify() {
     # OpenSSL's sha256 takes the SSSE3 path on this
     # vintage, and a CPU model that boots but miscomputes would otherwise
     # look identical to one that works. It costs about a second.
+    # THE UPDATES DID NOT HAPPEN BECAUSE `installer` EXITED ZERO.
+    #
+    # `sw_vers` below already answers half of it: Security Update 2016-004
+    # carries SystemVersion.plist, so BuildVersion moves 13F34 -> 13F1911
+    # while ProductVersion stays 10.9.5 -- which is why reading
+    # ProductVersion and concluding "no update" would be wrong. `receipts`
+    # and `updatepkgs` are the other half, and the half that generalises:
+    # a receipt is what the package database in the guest says was
+    # installed, and every --updates selection produces them whether or not
+    # it happens to touch SystemVersion.plist. See docs/decisions/0011.
+    #
     # shellcheck disable=SC2016
     out=$(ssh_guest '
         sw_vers
@@ -1316,6 +1327,8 @@ stage_verify() {
         echo "cpuextfeatures=$(sysctl -n machdep.cpu.extfeatures)"
         echo "cpuleaf7=$(sysctl -n machdep.cpu.leaf7_features 2>/dev/null)"
         echo "sha256-64MiB=$(dd if=/dev/zero bs=1m count=64 2>/dev/null | openssl dgst -sha256)"
+        echo "receipts=$(pkgutil --pkgs 2>/dev/null | grep -icE "^com\.apple\.pkg\.(update|Safari|iTunes)") post-10.9.5 package(s)"
+        echo "updatepkgs=$(pkgutil --pkgs 2>/dev/null | grep -iE "^com\.apple\.pkg\.(update|Safari|iTunes)" | xargs echo)"
         echo "sshd=$(launchctl list | grep -c com.openssh.sshd) job(s)"
         echo "ssh=$(ssh -V 2>&1)"
         echo "hostkeys=$(ls /usr/local/etc/ssh_host_*_key /etc/ssh_host_*_key 2>/dev/null | xargs -n1 basename | xargs echo)"
