@@ -6069,3 +6069,142 @@ existed rather than by running anything:
 The pattern in all three: **the evidence was not missing, it was
 unread.** That is a cheaper failure to fix than a missing measurement, and
 a more embarrassing one to keep.
+
+---
+
+## 2026-09-22 — the cross-compiler idea, and the experiment that turned out to be vacuous
+
+`docs/superpowers/specs/2026-09-21-build-in-a-linux-vm-design.md` §8.3 said
+an arm64 build VM "would need an x86_64-targeting cross-gcc — a third
+compiler, **different bytes**, a new row in the range table", and used that
+to put P6 on the "what this does not fix" list.
+
+Nobody had measured "different bytes". It is an assumption, and it may well
+be false: a cross-compiler's output is not obviously a function of the
+machine it runs on — that it is not is the premise every reproducible
+cross-build rests on, and EDK II cross-compiles by construction, since the
+firmware is freestanding X64 PE and no Linux host runs that natively. If the
+assumption is false the design unifies: an x86_64 host runs an x86_64 VM, an
+arm64 host runs an **arm64** VM, both under their own hardware accelerator
+with no emulation anywhere, and both invoke the same `x86_64-linux-gnu`
+cross-gcc at the same pinned version at the same fixed path. One row in
+`lib/compiler.sh`'s range table for every host, and P6 served.
+
+### The experiment that was supposed to settle it, and why it was not run
+
+The plan was the shape `NOTES.md` already uses twice: two cold boot-stack
+builds on the primary host, same UTC day, **same `MQG_BUILD_DIR`** (the trap
+from the ccache comparison below — two builds at different paths agree on
+one of eight artifacts, because EDK II writes debug-symbol paths into the PE
+images), one with `gcc` and one with `x86_64-linux-gnu-gcc`, then compare
+all eight artifact checksums.
+
+**It was not run, because on this host it cannot fail.** `gcc` and
+`x86_64-linux-gnu-gcc` are the same file.
+
+Checked before spending ten minutes of compiling on it, and checked three
+ways rather than one:
+
+| Check | `gcc` | `x86_64-linux-gnu-gcc` |
+|---|---|---|
+| `readlink -f` | `/usr/bin/x86_64-linux-gnu-gcc-13` | `/usr/bin/x86_64-linux-gnu-gcc-13` |
+| `stat -c '%d:%i'` of the target | `32:3353112` | `32:3353112` |
+| `sha256sum` of the target | `1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26` | *same file* |
+| `--version` | `gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0` | identical |
+| `-dumpmachine` | `x86_64-linux-gnu` | `x86_64-linux-gnu` |
+| `-print-prog-name=cc1` | `/usr/libexec/gcc/x86_64-linux-gnu/13/cc1` | identical |
+| `-print-search-dirs` | | identical, `diff` clean |
+| `-v` | | identical except `COLLECT_GCC=`, which echoes `argv[0]` |
+
+Same device **and** same inode is stronger than equal checksums: it is not
+two identical files, it is one file under two names.
+
+### Why, structurally — this is the part worth keeping
+
+This is not an accident of this host's packaging. It is Debian's multiarch
+toolchain scheme: **the native compiler for an architecture *is* the cross
+compiler for that architecture's triplet**, and only one package ships a
+compiler binary.
+
+```
+gcc                        4:13.2.0-7ubuntu1   amd64   symlinks only
+gcc-x86-64-linux-gnu       4:13.2.0-7ubuntu1   amd64   symlinks only
+gcc-13                     13.3.0-6ubuntu2~24.04.1     symlink to the below
+gcc-13-x86-64-linux-gnu    13.3.0-6ubuntu2~24.04.1     /usr/bin/x86_64-linux-gnu-gcc-13  <- the one real binary
+```
+
+The binutils are the same story: `/usr/bin/objcopy`, `ar`, `ld`, `nm`,
+`objdump` and `strip` all resolve to their `x86_64-linux-gnu-`-prefixed
+selves, from `binutils-x86-64-linux-gnu`.
+
+So "Debian's cross package and Debian's native package produce identical
+bytes" is not merely untested here — **for the host's own architecture it is
+ill-posed.** There is one package. The claim that is actually interesting is
+about `gcc-13-x86-64-linux-gnu` built **for an arm64 host**, which by
+definition does not exist on an amd64 one.
+
+A side effect worth having: this project's one verified compiler, gcc 13.3.0,
+*is* shipped by the triplet-named package. So "pin our verified compiler"
+and "pin an `x86_64-linux-gnu` cross-gcc" name the same package at the same
+version, and the build VM's §5.3 argument is unchanged by the unification
+rather than undermined by it.
+
+### The two checksum sets that were taken
+
+Not the eight artifacts — the comparison those would have made is the
+vacuous one. What was taken instead is the smallest paired comparison that
+still has a byte in it: one freestanding translation unit, compiled through
+both names with the flags the firmware build uses, at the same path, same
+minute.
+
+```
+-ffreestanding -fno-stack-protector -mno-red-zone -mcmodel=small -std=gnu17 -O2 -c
+```
+
+| Compiled as | sha256 of the `.o` |
+|---|---|
+| `gcc` | `dbde06fc54178964c11093dfc6e8cb8f0cfde3616ca53e09fba7dcd644d82f91` |
+| `x86_64-linux-gnu-gcc` | `dbde06fc54178964c11093dfc6e8cb8f0cfde3616ca53e09fba7dcd644d82f91` |
+
+Identical, as one file compiled through two names must be. **This is
+evidence about `argv[0]` and about EDK II's `GCC_BIN` prefix seam — the
+driver relocates itself and picks `cc1` by its own name, so "same inode"
+does not by itself guarantee "same output" — and it is evidence about
+nothing else.** It is not evidence that a cross-compiler is
+host-architecture-independent, and reporting it as such would be the
+meaningless match this check existed to avoid.
+
+The precedent is three entries up: *"ccache is not installed here … the
+comparison this change deserves — a cache hit against a cold compile —
+**could not be run, and is not claimed**."* Same rule. A comparison that
+cannot fail is not a measurement.
+
+### What is now written down, and what still needs hardware
+
+The spec no longer dismisses the idea in a subordinate clause. §3.3.1 states
+the unification; §3.3.2 splits it into three claims that were being run
+together, all **untested**:
+
+- **(A)** a gcc targeting `x86_64-linux-gnu` emits the same X64 code whether
+  its own binary is x86_64 or aarch64.
+- **(B)** Debian's `gcc-13-x86-64-linux-gnu`, built for arm64, produces the
+  same bytes as the same package built for amd64.
+- **(C)** EDK II **BaseTools** emit the same PE images when the BaseTools
+  binaries are aarch64. §8.3's old clause did not mention BaseTools at all,
+  and this is the claim most likely to be false and the only one whose
+  failure is silent: `GenFw` does not compile the firmware, it
+  post-processes it — the ELF→PE conversion, and the debug-symbol path that
+  is already a known input. Both architectures are little-endian LP64, which
+  is a reason to *expect* (C) and not a reason to assert it.
+
+`docs/host-profile.md` would gain **G30** (A and B together) and **G31** (C)
+when someone runs it. The falsifier is one paired run on an arm64 host: same
+`MQG_BUILD_DIR`, same UTC day, same pinned toolchain version, eight
+checksums. Eight matches confirms all three. A difference is told apart by
+comparing the intermediate `.dll` against the final `.efi` — a differing
+`.efi` with an identical `.dll` is (C), not (A).
+
+**None of it is testable on an x86_64 host.** That is the finding, and it is
+a smaller one than either "identical" or "different" would have been — but
+it is the one the evidence supports, and §8.3's clause is no longer stating
+an outcome nobody measured.
