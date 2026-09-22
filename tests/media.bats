@@ -404,19 +404,58 @@ setup() {
     # guest boots it, with a fresh UUID in the directory name. That made two
     # media built from one ESD produce different digests while every one of
     # their 39,413 real files matched. See NOTES.md, P4 Task 8.
+    #
+    # The walk moved into the microVM payload when the host stopped
+    # mounting; the pruning had to move with it, which is the kind of thing
+    # that gets dropped in a rewrite.
     for d in .Spotlight-V100 .fseventsd .Trashes; do
-        run grep -c -- "$d" "$REPO/media/content-digest.sh"
+        run grep -c -- "$d" "$REPO/media/privops/content-digest.sh"
         [ "$output" -ge 1 ] || { echo "digest does not skip $d"; return 1; }
     done
 }
 
-@test "the content digest reports unreadable files rather than dying on them" {
-    # BaseSystem ships /.file at mode 0000 -- the marker OS X looks for to
-    # decide a volume has a filesystem on it. One sha256sum per file also
-    # took five minutes for 39,000 files, against twenty seconds for one
-    # xargs, so the bulk path has to stay.
-    run grep -c 'UNREADABLE' "$REPO/media/content-digest.sh"
+@test "the content digest hashes in bulk, not one process per file" {
+    # 39,000 separate sha256sum processes took five minutes here, against
+    # twenty seconds for one xargs. Inside the microVM that matters more,
+    # not less: busybox's sha256sum is about a third the speed of
+    # coreutils', so the per-process overhead has nothing to hide behind.
+    run grep -c 'xargs' "$REPO/media/privops/content-digest.sh"
     [ "$output" -ge 1 ]
-    run grep -c 'xargs' "$REPO/media/content-digest.sh"
-    [ "$output" -ge 1 ]
+}
+
+@test "the content digest counts the files it found and the files it hashed" {
+    # The old host-side walk listed a file it could not read rather than
+    # skipping it, because a digest that silently omits files is a digest
+    # of a different thing depending on who ran it. Inside the microVM we
+    # are uid 0 and BaseSystem's mode-0000 /.file reads fine, so that
+    # category is gone -- but an I/O error off a corrupt volume would still
+    # make sha256sum print nothing for a file and carry on. The two counts
+    # are what catches it.
+    grep -q 'MQG-DIGEST-FILES' "$REPO/media/privops/content-digest.sh"
+    grep -q 'MQG-DIGEST-HASHED' "$REPO/media/privops/content-digest.sh"
+    # And the host must refuse when they disagree, not merely print them.
+    grep -q '\[ "$files" = "$hashed" \]' "$REPO/media/content-digest.sh"
+}
+
+@test "the content digest mounts nothing on this host" {
+    # It used to reach the volume through a udisks loop device, which needs
+    # a desktop seat (G26) -- and image/build-image.sh calls this for every
+    # manifest's `mediacontent` line with stderr discarded, so on a
+    # headless host the field came out empty and nothing said why.
+    ! grep -qE '^[^#]*\b(udisksctl|losetup|findmnt|lsblk)\b' \
+        "$REPO/media/content-digest.sh"
+    ! grep -qE '^[^#]*\bhfs_(attach|mount|unmount|detach|with_mounted|partition_dev)' \
+        "$REPO/media/content-digest.sh"
+    # hfs_create stays: it writes a plain file with mkfs.hfsplus and needs
+    # no privilege and no mount. The microVM needs a target disk to mount.
+    grep -q 'hfs_create ' "$REPO/media/content-digest.sh"
+    grep -q 'privops_run' "$REPO/media/content-digest.sh"
+}
+
+@test "the content digest keeps the image read-only" {
+    # A digest that rewrites the volume header of the file it is reporting
+    # on is not a measurement. The old udisks mount was read-write and did
+    # exactly that; `ro:` is mounted -o ro off a readonly=on virtio disk.
+    grep -q '"ro:$img"' "$REPO/media/content-digest.sh"
+    ! grep -q '"raw:$img"' "$REPO/media/content-digest.sh"
 }
