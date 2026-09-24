@@ -59,10 +59,47 @@ setup() {
     # would let `ssh` pass by matching inside `ssh-keygen`, or `make`
     # pass by matching inside some unrelated word in prose. The `case`
     # below only matches a tool name bounded by spaces on both sides.
+    #
+    # `require_cmd curl unzip` names TWO tools, and a `require_cmd` line
+    # can name any number more. Fix round 1's extraction --
+    # `grep -oE 'require_cmd [a-zA-Z0-9._-]+'` -- had no space in its
+    # character class, so it captured only the FIRST argument of every
+    # declaration (curl, but not unzip; qemu-img, but not ssh or
+    # ssh-keygen or python3 or sha256sum) and silently dropped about ten
+    # tools from `reqcmd`. That test still passed, because
+    # boot/prereqs.sh happened to list the dropped tools too -- which
+    # defeats the entire point of require_cmd as an INDEPENDENT authority
+    # and is exactly the kind of silent narrowing this test exists to
+    # catch in vmavs_tools_for, just relocated one level up into the test
+    # itself. Fixed by matching the WHOLE declaration --
+    # `require_cmd( [a-zA-Z0-9._-]+)+`, one or more space-prefixed
+    # arguments -- and only on code lines: comment-only lines (first
+    # non-blank character `#`) are dropped first, both because a
+    # `require_cmd` mentioned in prose is not a declaration (this is also
+    # what kept fix round 1's near-miss -- boot/prereqs.sh's own comments
+    # saying "every `require_cmd`" -- from ever matching) and because
+    # dropping them is cheap insurance against the next comment that
+    # happens to say "require_cmd <lowercase words>".
     reqcmd=$(find "$REPO" -name '*.sh' ! -path "$REPO/lib/preconditions.sh" \
                  ! -path "$REPO/.git/*" -print0 \
-             | xargs -0 grep -hoE 'require_cmd [a-zA-Z0-9._-]+' 2>/dev/null \
+             | xargs -0 cat 2>/dev/null \
+             | grep -v '^[[:space:]]*#' \
+             | grep -oE 'require_cmd( [a-zA-Z0-9._-]+)+' \
              | sed 's/require_cmd //' | tr ' ' '\n' | grep -v '^$')
+    # A cheap guard against this exact regression recurring silently: pick
+    # a tool that appears ONLY as a non-first argument of some
+    # require_cmd line -- ssh-keygen, the third word of
+    # image/build-image.sh's `require_cmd qemu-img ssh ssh-keygen python3
+    # sha256sum` -- and assert it is in reqcmd BY ITSELF, before reqcmd is
+    # ever merged with prereqs/triangulate. A regex that regresses to
+    # first-argument-only drops ssh-keygen from reqcmd but the merged
+    # `known` set would still contain it (boot/prereqs.sh lists it too),
+    # so only checking reqcmd alone actually catches the regression.
+    case " $(printf '%s\n' "$reqcmd" | tr '\n' ' ') " in
+        *" ssh-keygen "*) : ;;
+        *) echo "reqcmd lost ssh-keygen -- require_cmd extraction regressed to first-argument-only"
+           false ;;
+    esac
     prereqs=$(sed -n 's/^\([a-z0-9._-]*\)|.*/\1/p' "$REPO/boot/prereqs.sh")
     tri=$(sed -n 's/^RUNTIME_TOOLS="\(.*\)"$/\1/p;s/^BUILD_TOOLS="\(.*\)"$/\1/p' \
               "$REPO/bin/triangulate.sh" | tr ' ' '\n')
