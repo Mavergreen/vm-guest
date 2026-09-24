@@ -79,6 +79,13 @@ version() {
         v=$(MAVERICKS_ROOT="$MQG_REPO_ROOT" sh "$MQG_REPO_ROOT/build/version.sh" auto \
             | sed -n 's/^FULL=//p')
     else
+        # No .git means no build/version.sh tags to query, so VERSION
+        # beside this file has to already be there -- packaging's job,
+        # not this script's. Check for it before reading it: under
+        # `set -euo pipefail` a missing file on the read side of `<`
+        # would otherwise abort with bash's own "No such file or
+        # directory" instead of this function's clearer message.
+        [ -f "$MQG_REPO_ROOT/VERSION" ] || die "no $MQG_REPO_ROOT/VERSION -- an installed copy must ship one"
         v=$(tr -d '[:space:]' < "$MQG_REPO_ROOT/VERSION")
     fi
     [ -n "$v" ] || die "cannot determine a version"

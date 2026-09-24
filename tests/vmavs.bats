@@ -5,6 +5,28 @@ setup() {
     VMAVS="$REPO/bin/vmavs"
 }
 
+teardown() {
+    # Crash-safe cleanup for the stale-VERSION test below: this runs even
+    # if that test fails partway through, so a bad run cannot leave a
+    # VERSION file sitting in the real checkout for the next test (or the
+    # next `git status`) to trip over. `rm -f` is a no-op for every other
+    # test here, which never creates this file.
+    rm -f "$REPO/VERSION"
+}
+
+# Builds a tree with no .git, holding only what vmavs needs to run: itself,
+# lib/common.sh (which it sources), and build/version.sh (present so the
+# tree looks like a real install, though the no-.git branch never calls
+# it). Sets ITREE and leaves $ITREE/bin/vmavs ready to run.
+setup_installed_tree() {
+    ITREE="$BATS_TEST_TMPDIR/installed"
+    mkdir -p "$ITREE/bin" "$ITREE/lib" "$ITREE/build"
+    cp "$REPO/bin/vmavs" "$ITREE/bin/vmavs"
+    cp "$REPO/lib/common.sh" "$ITREE/lib/common.sh"
+    cp "$REPO/build/version.sh" "$ITREE/build/version.sh"
+    chmod +x "$ITREE/bin/vmavs" "$ITREE/build/version.sh"
+}
+
 @test "vmavs help lists every subcommand decisions/0007 names" {
     run "$VMAVS" help
     [ "$status" -eq 0 ]
@@ -81,5 +103,37 @@ setup() {
     run "$VMAVS" version
     [ "$status" -eq 0 ]
     [ "${lines[0]}" != "19990101.1" ]
+    # Cleanup also happens in teardown() (crash-safe); doing it here too
+    # keeps other tests in this same run from seeing the stale file.
     rm -f "$REPO/VERSION"
+}
+
+@test "an installed tree (no .git) with a VERSION file prints its content" {
+    setup_installed_tree
+    printf '20260101.3\n' > "$ITREE/VERSION"
+    run "$ITREE/bin/vmavs" version
+    [ "$status" -eq 0 ]
+    [ "$output" = "20260101.3" ]
+}
+
+@test "an installed tree (no .git) with no VERSION file dies naming it, not a bare traceback" {
+    # This is the case the fix addresses: under `set -euo pipefail`, a
+    # naive `tr -d ... < "$MQG_REPO_ROOT/VERSION"` on a missing file fails
+    # the redirection itself and aborts with bash's own "No such file or
+    # directory" -- never reaching `die`, and never saying VERSION is what
+    # is missing. version() must check for the file first.
+    setup_installed_tree
+    run "$ITREE/bin/vmavs" version
+    [ "$status" -ne 0 ]
+    # Not just *a* mention of VERSION: the raw bash redirection failure
+    # this replaces ALSO mentions VERSION, because it is naming the path
+    # it could not open ("line N: /.../VERSION: No such file or
+    # directory") -- so a bare substring check on "VERSION" alone would
+    # pass against the bug this test exists to catch. What only the fixed
+    # `die` call produces is this project's own error prefix.
+    [[ "$output" == *"vmavs: error:"* ]]
+    [[ "$output" == *"VERSION"* ]]
+    [[ "$output" != *"No such file or directory"* ]]
+    # No bare/empty version line ever reached stdout.
+    ! printf '%s\n' "$output" | grep -qE '^[0-9]{8}\.[0-9]+$'
 }
