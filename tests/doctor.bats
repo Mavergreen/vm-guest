@@ -42,10 +42,38 @@ setup() {
     # section 9.1 warns about exactly this: there were three lists, they
     # disagreed, and a host stopped on `zip`. This is the fourth list;
     # it must not drift from the ones that already exist.
-    known=$(cat "$REPO/boot/prereqs.sh" "$REPO/bin/triangulate.sh" "$REPO/lib/preconditions.sh")
+    #
+    # `known` MUST NOT include lib/preconditions.sh, where vmavs_tools_for
+    # itself lives: doing so would let it check itself against itself --
+    # every tool it names would trivially satisfy the search, a typo'd or
+    # invented tool could never be caught, and this test would be unable
+    # to fail no matter what vmavs_tools_for said. So `known` is built
+    # only from independent sources: the require_cmd declarations in the
+    # rest of the repository's scripts (the authority; see
+    # tests/boot_scripts.bats), boot/prereqs.sh's package table, and
+    # bin/triangulate.sh's RUNTIME_TOOLS/BUILD_TOOLS -- the same three
+    # lists that drifted from each other in the incident this comment
+    # cites, deliberately never touching the fourth (this one).
+    #
+    # Matching is whole-word, not substring: `[[ "$known" == *"$t"* ]]`
+    # would let `ssh` pass by matching inside `ssh-keygen`, or `make`
+    # pass by matching inside some unrelated word in prose. The `case`
+    # below only matches a tool name bounded by spaces on both sides.
+    reqcmd=$(find "$REPO" -name '*.sh' ! -path "$REPO/lib/preconditions.sh" \
+                 ! -path "$REPO/.git/*" -print0 \
+             | xargs -0 grep -hoE 'require_cmd [a-zA-Z0-9._-]+' 2>/dev/null \
+             | sed 's/require_cmd //' | tr ' ' '\n' | grep -v '^$')
+    prereqs=$(sed -n 's/^\([a-z0-9._-]*\)|.*/\1/p' "$REPO/boot/prereqs.sh")
+    tri=$(sed -n 's/^RUNTIME_TOOLS="\(.*\)"$/\1/p;s/^BUILD_TOOLS="\(.*\)"$/\1/p' \
+              "$REPO/bin/triangulate.sh" | tr ' ' '\n')
+    known=" $(printf '%s\n%s\n%s\n' "$reqcmd" "$prereqs" "$tri" \
+                | grep -v '^$' | sort -u | tr '\n' ' ')"
     for c in doctor fetch boot-stack media install clone run ssh emit image; do
         for t in $(vmavs_tools_for "$c"); do
-            [[ "$known" == *"$t"* ]] || { echo "$c names $t, which no other list does"; false; }
+            case "$known" in
+                *" $t "*) : ;;
+                *) echo "$c names $t, which no other list does"; false ;;
+            esac
         done
     done
 }
