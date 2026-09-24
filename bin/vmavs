@@ -98,6 +98,7 @@ cmd=$1; shift
 case $cmd in
     help|-h|--help) usage; exit 0 ;;
     version|--version) version; exit 0 ;;
+    doctor) exec "$MQG_REPO_ROOT/bin/preconditions.sh" "$@" ;;
     *)
         if ! printf '%s\n' "$SUBCOMMANDS" | cut -d'|' -f1 | grep -qx "$cmd"; then
             printf 'vmavs: unknown subcommand: %s\n\n' "$cmd" >&2

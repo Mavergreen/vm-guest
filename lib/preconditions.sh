@@ -94,3 +94,86 @@ FAIL"*) return 1 ;;
     esac
     return 0
 }
+
+# What each subcommand needs, one list apiece.
+#
+# spec: docs/superpowers/plans/2026-09-22-shipping-vmavs.md Task 3
+#
+# One list per subcommand rather than one list for the repository: a host
+# with QEMU and no mkfs.hfsplus cannot build media and CAN run an image
+# somebody else built, and "NO-GO" tells that person nothing.
+#
+# A `case`, not an associative array: bash 3.2 is the floor and
+# `declare -A` is one of the constructs this project removed to keep it.
+#
+# Every tool named below is traced to a `require_cmd`-declared dependency
+# (or, for the compiler toolchain, to bin/triangulate.sh's BUILD_TOOLS,
+# which is where gcc/nasm/iasl are checked today -- boot/build-ovmf.sh
+# declares none of its own, and just fails mid-compile without one) in the
+# scripts each subcommand actually runs. (Note for anyone grepping this
+# file for the literal declaration form: the two words above are written
+# with a hyphen between them, on purpose, so this comment cannot be
+# mistaken by tooling for an actual declaration naming bogus tools.)
+#
+#   fetch      media/fetch-installesd.sh, image/fetch-openssh.sh,
+#              image/fetch-updates.sh
+#   boot-stack boot/fetch-edk2.sh, boot/fetch-opencorepkg.sh,
+#              boot/fetch-kexts.sh, boot/build-opencore.sh (the opencore
+#              stage), bin/triangulate.sh's BUILD_TOOLS (the ovmf stage,
+#              which declares no dependency of its own), boot/build-efi-image.sh
+#              (the efi stage)
+#   media      media/build-installer-img.sh, lib/hfs.sh, and the
+#              qemu-linux privops backend (lib/privops-qemu-linux.sh) that
+#              does the one privileged step inside a microVM
+#   install    image/build-image.sh's own top-level dependency line, plus
+#              the QEMU binary it boots (checked separately, right after)
+#   clone      vm/clone.sh, lib/golden.sh (qemu-img create / info)
+#   run        vm/run.sh (qemu-system-x86_64, hardcoded)
+#   ssh        the ssh client itself
+#   emit       python3 (image/payload/build-firstboot-pkg.sh's writer)
+#   image      the union of fetch, boot-stack, media and install -- every
+#               stage image/build-image.sh's pipeline runs
+#
+# Left out on purpose, as ubiquitous POSIX baseline present on every host
+# this project targets (Linux, macOS, NetBSD) even though a `require_cmd`
+# line somewhere names them: awk, tr, head, tail, dd, od, truncate. Naming
+# them here would not help anyone triangulate a missing tool; a host
+# without them cannot run bin/vmavs itself. 7z is left out too: it is
+# media/verify-installer-img.sh's tool, not anything image/build-image.sh's
+# media stage calls.
+#
+# tests/doctor.bats asserts that nothing named here is unknown to
+# boot/prereqs.sh or bin/triangulate.sh. That test exists because the
+# build-VM spec, section 9.1, records what happened when three tool lists
+# disagreed: a host stopped on `zip` 23 seconds into a build.
+vmavs_tools_for() {
+    case $1 in
+        doctor)     printf '%s\n' "" ;;
+        fetch)      printf '%s\n' "curl openssl xxd sha256sum" ;;
+        boot-stack) printf '%s\n' "gcc make git python3 nasm iasl mcopy mformat sgdisk curl tar unzip zip mmd mdir" ;;
+        media)      printf '%s\n' "dmg2img sgdisk mkfs.hfsplus tar sha256sum python3 qemu-system-x86_64 cpio busybox" ;;
+        install)    printf '%s\n' "qemu-system-x86_64 qemu-img ssh ssh-keygen python3 sha256sum" ;;
+        target)     printf '%s\n' "qemu-img" ;;
+        clone)      printf '%s\n' "qemu-img" ;;
+        run)        printf '%s\n' "qemu-system-x86_64" ;;
+        ssh)        printf '%s\n' "ssh" ;;
+        emit)       printf '%s\n' "python3" ;;
+        image)      printf '%s\n' "curl openssl xxd sha256sum gcc make git python3 nasm iasl mcopy mformat sgdisk tar unzip zip mmd mdir dmg2img mkfs.hfsplus qemu-system-x86_64 cpio busybox qemu-img ssh ssh-keygen" ;;
+        *) return 1 ;;
+    esac
+}
+
+# READY/BLOCKED for one subcommand, plus what is missing. Printed as
+# "<verdict>\t<subcommand>\t<detail>", the same tab shape the existing
+# verdict helpers use.
+vmavs_subcommand_verdict() {
+    local cmd=$1 missing="" t
+    for t in $(vmavs_tools_for "$cmd"); do
+        command -v "$t" >/dev/null 2>&1 || missing="$missing $t"
+    done
+    if [ -z "$missing" ]; then
+        printf '%s\t%s\t%s\n' READY "$cmd" "-"
+    else
+        printf '%s\t%s\tmissing:%s\n' BLOCKED "$cmd" "$missing"
+    fi
+}
