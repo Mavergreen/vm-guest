@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# vmavs -- run OS X 10.9 Mavericks in a VM.
+#
+# spec: docs/decisions/0007-what-this-project-ships.md
+#
+# This is a dispatcher, not an implementation. Every subcommand below is
+# a stage that already existed and was already tested before this file
+# did; what was missing was one name to type. The scripts stay where
+# they are (docs/superpowers/plans/2026-09-22-shipping-vmavs.md explains
+# why they did not move to libexec/), and an installed copy is the whole
+# tree under a libdir with one symlink to this file in bindir -- which is
+# what the symlink resolution below exists for.
+set -euo pipefail
+
+# platform: readlink -f is GNU. Mac OS X 10.9 and NetBSD -- two of the
+# three hosts this command targets -- do not have it, so resolve the
+# chain by hand with one-argument readlink, which is portable.
+_src=${BASH_SOURCE[0]}
+while [ -L "$_src" ]; do
+    _dir=$(cd -P "$(dirname "$_src")" && pwd)
+    _src=$(readlink "$_src")
+    case $_src in
+        /*) ;;
+        *) _src=$_dir/$_src ;;
+    esac
+done
+MQG_REPO_ROOT=$(cd -P "$(dirname "$_src")/.." && pwd)
+export MQG_REPO_ROOT
+unset _src _dir
+
+# shellcheck source=../lib/common.sh
+. "$MQG_REPO_ROOT/lib/common.sh"
+# shellcheck disable=SC2034  # read by log()/warn()/die() at call time
+MQG_LOG_PREFIX=vmavs
+
+SUBCOMMANDS="\
+doctor|What this host can do, subcommand by subcommand
+fetch|Fetch one pinned input: esd (Apple's installer), openssh, updates
+boot-stack|Build OpenCore, the guest firmware and the EFI image from pinned source
+media|Build bootable installer media from Apple's InstallESD.dmg
+install|Create the target disk and let Apple's installer run, unattended
+clone|Make a throwaway overlay on a golden image
+run|Boot a profile
+ssh|Open a shell in a running guest
+emit|Write an interop artifact for another tool (today: packer)
+image|The whole chain: fetch, build, install, verify, record"
+
+usage() {
+    cat <<EOF
+usage: vmavs <subcommand> [options]
+
+$(printf '%s\n' "$SUBCOMMANDS" | while IFS='|' read -r s d; do
+    printf '  %-11s %s\n' "$s" "$d"
+done)
+
+  version     Print this vmavs's version
+  help        This
+
+Every subcommand takes --help. Start with:
+
+  vmavs doctor        can this machine do it?
+  vmavs image         ~30 minutes, unattended, nobody watching
+  vmavs run p4-linuxmedia
+  vmavs ssh
+EOF
+}
+
+version() {
+    # A checkout (has .git) always recomputes via build/version.sh auto:
+    # that script writes VERSION on every call it makes, so if we trusted
+    # a pre-existing VERSION file in a checkout the way an installed tree
+    # does, the version would freeze at whatever was first computed and
+    # never move again as tags are added. An installed tree has no .git
+    # and no build/version.sh's git to query, so there VERSION beside
+    # this file is the only source of truth. Neither path is allowed to
+    # print an empty string: a version that is silently blank is how an
+    # artifact gets shipped labelled with nothing in front of the dot.
+    if [ -e "$MQG_REPO_ROOT/.git" ]; then
+        v=$(MAVERICKS_ROOT="$MQG_REPO_ROOT" sh "$MQG_REPO_ROOT/build/version.sh" auto \
+            | sed -n 's/^FULL=//p')
+    else
+        v=$(tr -d '[:space:]' < "$MQG_REPO_ROOT/VERSION")
+    fi
+    [ -n "$v" ] || die "cannot determine a version"
+    printf '%s\n' "$v"
+}
+
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+
+cmd=$1; shift
+case $cmd in
+    help|-h|--help) usage; exit 0 ;;
+    version|--version) version; exit 0 ;;
+    *)
+        if ! printf '%s\n' "$SUBCOMMANDS" | cut -d'|' -f1 | grep -qx "$cmd"; then
+            printf 'vmavs: unknown subcommand: %s\n\n' "$cmd" >&2
+            usage >&2
+            exit 2
+        fi
+        die "vmavs $cmd: not wired up yet"
+        ;;
+esac
