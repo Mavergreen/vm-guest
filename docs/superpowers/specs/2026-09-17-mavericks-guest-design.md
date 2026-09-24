@@ -232,7 +232,7 @@ rather than aspirational: a profile diff is the experiment.
 | P2 — Manual install | **complete** 2026-09-17 | 10.9.5 installed and rebooting; golden #1 (`p2-manual-install`) promoted and verified after being cloned from. |
 | P3 — Reproducible boot stack | **complete** 2026-09-17 | See below. |
 | P4 — Unattended pipeline | **complete** 2026-09-18 | `image/build-image.sh`: one command, clean checkout to a bootable, SSH-reachable image, no interaction. Media built on Linux without root; the install driven by Apple's own `rc.cdrom.local` / `minstallconfig.xml` / `OSInstall.collection` hooks; the first-boot payload installed as a flat package this project builds on Linux. See `decisions/0006` for what "reproducible" means here. **Q1 was answered 2026-09-22** — two images, `--updates none` as P5's baseline and `--updates security` as the default — and is being implemented now. **Still not delivered, and deliberately:** byte-identical images. `decisions/0006` says what is claimed instead. |
-| **P8 — `vmavs`, the front door** | **next** | The ten subcommands of `decisions/0007` over machinery that already works, a version the command can report, a README that is product documentation, and `emit packer`. Plan: `docs/superpowers/plans/2026-09-22-shipping-vmavs.md`. |
+| **P8 — `vmavs`, the front door** | **implemented** 2026-09-24; exit **not met** | `bin/vmavs` dispatches the ten subcommands of `decisions/0007`, plus a second tier (`triangulate`, `golden`, `compare`, `freshness`, `staleness`); `vmavs version` (`build/version.sh`, `YYYYMMDD.N`); a README that is product documentation; `emit packer`; and `bin/no-apple-bytes.sh <ref>`, the release gate, checking the tree a tag would archive rather than the index. **Still open:** no shipped command boots the image `vmavs image` builds — `decisions/0007`'s "`run` boots a clone" is unmet, so the exit below is not reached — and `emit packer`'s HCL2 schema has never been parsed by any Packer. Plan: `docs/superpowers/plans/2026-09-22-shipping-vmavs.md`. |
 | **P9 — Build in a controlled Linux VM** | **blocked on a decision** | Spec written 2026-09-21 and the *direction* approved; the *design* is not adopted and no plan exists. It carries its own abandon thresholds (§7.4: >1.5× cold, >60 s warm, >10 s freshness), so it may end as an optional backend rather than the default. Its headline number is why P10 waits for it: the host tool list goes from 36 to about 7. |
 | **P10 — Release packaging and distribution** | **blocked on P9** | `release.yml`, `release-notes/`, the artifact, and how a host installs it. Deliberately not decided while the dependency list is about to change by 5×. Shape and constraints: the shipping plan, Phase C. |
 | P5 — Interactive performance | **deferred by choice** | The user's call: the guest is working fine enough. Not waiting on anything — and `decisions/0007` says P5 measures Product A's `run`, so its baseline is better taken after P8 than before. Display work is now about *changing* modes, not reaching a usable one. |
@@ -244,6 +244,8 @@ P10, then P5, P6, P7**. Four status words are used and they mean different
 things: *not reached* (nothing blocks it but sequence), *deferred by choice*
 (the user postponed it; it waits on nothing), *blocked on a decision*
 (something must be settled before it can start), and *blocked on <phase>*.
+*Implemented, exit not met* is not one of them: the plan's work landed,
+but the phase's own exit criterion is still false, and says which part.
 
 ### P0 — Foundations
 
@@ -592,7 +594,7 @@ lost:
 Out of scope there and here: 3D acceleration (Quartz Extreme / Core Image),
 shared folders (use SMB, NFS, or sshfs), and a virtio block driver.
 
-### P8 — `vmavs`, the front door (the product decision) — **next**
+### P8 — `vmavs`, the front door (the product decision) — **implemented; exit not met**
 
 Added 2026-09-22, after `decisions/0007`. The four goals at the top of this
 document are about making something work. This phase is about making it
@@ -627,6 +629,13 @@ one of them maps onto a stage that already exists.
 **Exit:** `vmavs doctor`, `vmavs image`, `vmavs run` and `vmavs ssh` take
 someone from a clean checkout to a shell in a Mavericks guest; the README
 says so in its first thirty seconds; `./bin/run-tests.sh` green.
+
+**Where it stands, 2026-09-24:** everything above the exit landed. The exit
+itself does not hold: `vmavs run` boots only this project's development
+profiles, none of which points at the image `vmavs image` builds, so there
+is no shipped path from a clean checkout to a shell. The README says that
+plainly instead of claiming the exit. `emit packer`'s schema is REASONED
+from Packer's documentation; no Packer has parsed its output.
 
 Plan: `docs/superpowers/plans/2026-09-22-shipping-vmavs.md`.
 
