@@ -117,6 +117,13 @@ verdict_of() {
     [[ "$output" == *"ci@127.0.0.1"* ]]
 }
 
+@test "vmavs ssh --port with no value says so, not bash's unbound variable" {
+    run "$REPO/bin/vmavs" ssh --dry-run --key /dev/null --port
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--port needs a value"* ]]
+    [[ "$output" != *"unbound variable"* ]]
+}
+
 @test "vmavs ssh passes everything after -- to ssh" {
     run "$REPO/bin/vmavs" ssh --dry-run --key /dev/null -- uname -a
     [[ "$output" == *"uname -a"* ]]

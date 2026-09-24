@@ -38,9 +38,11 @@ dry=0
 
 while [ $# -gt 0 ]; do
     case $1 in
-        --port) port=$2; shift ;;
-        --user) user=$2; shift ;;
-        --key)  key=$2; shift ;;
+        # Guarded the way emit/packer.sh guards its own: without it, a
+        # trailing --port died with bash's "$2: unbound variable".
+        --port) [ $# -ge 2 ] || die "--port needs a value"; port=$2; shift ;;
+        --user) [ $# -ge 2 ] || die "--user needs a value"; user=$2; shift ;;
+        --key)  [ $# -ge 2 ] || die "--key needs a value"; key=$2; shift ;;
         --dry-run) dry=1 ;;
         --) shift; break ;;
         -h|--help)
