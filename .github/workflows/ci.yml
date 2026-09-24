@@ -2,7 +2,8 @@ name: ci
 
 # What this repository can check without a Mac, a KVM host or 6 GB of
 # Apple's media: the whole test suite, the shell floor, the Tier 0/1/2
-# provenance gate, and the three checks that guard the ingredient registry.
+# provenance gate, the three checks that guard the ingredient registry,
+# and that `vmavs emit packer`'s template validates against real Packer.
 #
 # What it deliberately does NOT check: that an image builds. That needs
 # nested virtualization, an InstallESD this project must never publish, and
@@ -72,3 +73,40 @@ jobs:
       # decisions/0007.
       - name: Declared deviations all carry a reason
         run: sh .shipyard/scripts/deviations.sh .
+
+  # `vmavs emit packer` writes a template this project never builds from.
+  # Validating it here is the one check it can get without Apple's media:
+  # packer validate resolves every field name, nesting and type against
+  # the real qemu and vagrant plugins. The first run of this (by hand,
+  # 2026-09-24, NOTES.md) found two defects no reading of the docs had.
+  # It proves the template parses, not that a build works.
+  packer-validate:
+    runs-on: ubuntu-latest
+    env:
+      PACKER_VERSION: "1.16.1"
+      # packer init fetches plugins through the GitHub API; unauthenticated
+      # it shares the runner's rate limit.
+      PACKER_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-packer@v3.4.0
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      # Every profile, not one: the values and the drive mapping come from
+      # the profile, so each one is a different template. --check supplies
+      # placeholder variables and a throwaway key, which is what validate
+      # needs; it does not run init itself, because it will not download.
+      - name: Every profile's Packer template validates
+        run: |
+          set -eu
+          for f in vm/profiles/*.args; do
+              p=$(basename "$f" .args)
+              out="$RUNNER_TEMP/$p.pkr.hcl"
+              echo "::group::$p"
+              ./bin/vmavs emit packer --profile "$p" --out "$out"
+              packer init "$out"
+              ./bin/vmavs emit packer --profile "$p" --out "$out" --check
+              echo "::endgroup::"
+          done

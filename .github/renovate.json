@@ -42,6 +42,15 @@
       "autoReplaceStringTemplate": "https://github.com/acidanthera/VirtualSMC/releases/download/{{{newValue}}}/VirtualSMC-{{{newValue}}}-RELEASE.zip",
       "depNameTemplate": "acidanthera/VirtualSMC",
       "datasourceTemplate": "github-releases"
+    },
+    {
+      "customType": "regex",
+      "description": "The Packer that CI validates `vmavs emit packer`'s templates against. A CI tool, not an ingredient: nothing a user builds depends on it. The packer-validate job is its own test, so a bump that breaks a template shows up red on the PR.",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": ["PACKER_VERSION: \"(?<currentValue>[0-9][^\"]*)\""],
+      "depNameTemplate": "hashicorp/packer",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.*)$"
     }
   ],
   "packageRules": [
