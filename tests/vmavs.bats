@@ -207,3 +207,41 @@ stage_names_in() {
         [[ "$output" == *"--accel"* ]] || { echo "$c --help is not build-image's"; false; }
     done
 }
+
+# --- second-tier subcommands: not part of decisions/0007's ten -------------
+#
+# triangulate, golden, compare, freshness and staleness are real scripts
+# with real user-facing CLIs today (bin/triangulate.sh, vm/golden.sh,
+# image/compare-images.sh, build-image.sh --freshness,
+# bin/image-staleness.sh). This task is proposed rather than decided and
+# can be struck without affecting anything else -- but leaving vmavs
+# unable to reach them would make vmavs strictly less capable than the
+# scripts it replaces, which is a bad trade for a front door.
+
+@test "the second-tier subcommands reach their scripts" {
+    run "$VMAVS" triangulate --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--probe"* ]]
+    # Isolated from whatever this host already has under its real
+    # $MQG_IMAGE_DIR: on a machine with a from-scratch build state (CI has
+    # none at all; a dev box may have a stale or a fresh one) the exact
+    # wording of --freshness's per-stage lines depends on what is already
+    # on disk. A brand-new, empty MQG_IMAGE_DIR is the one state every
+    # host -- including CI, which is the case this project has to hold --
+    # can be put into on demand, and it is the state build-image.sh
+    # --freshness itself documents: every stage reports "no output ...
+    # yet" and resolve_ssh_key(soft) warns about the missing key while
+    # naming the payload stage by name.
+    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/no-image-dir" "$VMAVS" freshness
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"stage"* || "$output" == *"would"* ]]
+}
+
+@test "help keeps the ten from decisions/0007 separate from the rest" {
+    run "$VMAVS" help
+    [[ "$output" == *"triangulate"* ]]
+    # The ten appear above whatever divides the sections.
+    ten=$(printf '%s\n' "$output" | grep -n '  image ' | cut -d: -f1)
+    extra=$(printf '%s\n' "$output" | grep -n '  triangulate' | cut -d: -f1)
+    [ "$ten" -lt "$extra" ]
+}

@@ -130,7 +130,12 @@ FAIL"*) return 1 ;;
 #   clone      vm/clone.sh, lib/golden.sh (qemu-img create / info)
 #   run        vm/run.sh (qemu-system-x86_64, hardcoded)
 #   ssh        the ssh client itself
-#   emit       python3 (image/payload/build-firstboot-pkg.sh's writer)
+#   emit       emit/packer.sh reads a profile through lib/profile.sh and
+#              writes text; it calls out to git for commit provenance in
+#              its --describe/header output, but only ever with
+#              `command -v git` guarding it first, so a host without git
+#              gets a template with less provenance, not a failure. There
+#              is genuinely nothing this subcommand requires -- see below.
 #   image      the union of fetch, boot-stack, media and install -- every
 #               stage image/build-image.sh's pipeline runs
 #
@@ -146,6 +151,35 @@ FAIL"*) return 1 ;;
 # boot/prereqs.sh or bin/triangulate.sh. That test exists because the
 # build-VM spec, section 9.1, records what happened when three tool lists
 # disagreed: a host stopped on `zip` 23 seconds into a build.
+#
+# SECOND-TIER SUBCOMMANDS (docs/superpowers/plans/2026-09-22-shipping-vmavs.md
+# Task 7; not part of decisions/0007's ten):
+#
+#   triangulate bin/triangulate.sh declares no `require_cmd` dependency of
+#               its own -- its default level, --probe, is a survey that
+#               only ever ASKS `command -v` about tools
+#               (RUNTIME_TOOLS/BUILD_TOOLS), which is data-gathering, not
+#               a dependency. --build/--full go on to need everything
+#               boot-stack/media/install do, but those are reported by
+#               triangulate's OWN probe output, not by doctor -- an
+#               honest empty list here, not an omission.
+#   golden      vm/golden.sh declares no `require_cmd` dependency of its
+#               own; lib/golden.sh calls `qemu-img` directly (create/info)
+#               for every subcommand that touches an image.
+#   compare     image/compare-images.sh's own top-level dependency line.
+#   freshness   build-image.sh --freshness exits before the script's own
+#               `require_cmd` declaration is ever reached, and
+#               resolve_ssh_key(soft) only globs $HOME/.ssh and
+#               $MQG_IMAGE_DIR/keys (lib/sshkey.sh) -- no external tool
+#               either way. Once a stage's inputs are compared (anything
+#               beyond "no output yet"), the digest underneath is
+#               sha256sum (bin/ingredient-fingerprint.sh), so that is
+#               what is named here: the empty-image-dir case
+#               (a from-scratch host, which is what CI is) never reaches
+#               it, but a host with a build in progress does.
+#   staleness   bin/image-staleness.sh always calls
+#               bin/ingredient-fingerprint.sh --list, which always hashes
+#               boot/config/config.plist with sha256sum.
 vmavs_tools_for() {
     case $1 in
         doctor)     printf '%s\n' "" ;;
@@ -157,8 +191,13 @@ vmavs_tools_for() {
         clone)      printf '%s\n' "qemu-img" ;;
         run)        printf '%s\n' "qemu-system-x86_64" ;;
         ssh)        printf '%s\n' "ssh" ;;
-        emit)       printf '%s\n' "python3" ;;
+        emit)       printf '%s\n' "" ;;
         image)      printf '%s\n' "curl openssl xxd sha256sum gcc make git python3 nasm iasl mcopy mformat sgdisk tar unzip zip mmd mdir dmg2img mkfs.hfsplus qemu-system-x86_64 cpio busybox qemu-img ssh ssh-keygen" ;;
+        triangulate) printf '%s\n' "" ;;
+        golden)      printf '%s\n' "qemu-img" ;;
+        compare)     printf '%s\n' "ssh qemu-img python3" ;;
+        freshness)   printf '%s\n' "sha256sum" ;;
+        staleness)   printf '%s\n' "sha256sum" ;;
         *) return 1 ;;
     esac
 }

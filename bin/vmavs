@@ -45,6 +45,17 @@ ssh|Open a shell in a running guest
 emit|Write an interop artifact for another tool (today: packer)
 image|The whole chain: fetch, build, install, verify, record"
 
+# The rest: real scripts with real user-facing CLIs today, but not part of
+# decisions/0007's ten. This section is proposed rather than decided and
+# can be struck without affecting anything else -- it exists so `vmavs`
+# never ends up LESS capable than the scripts it is a front door for.
+SUBCOMMANDS_EXTRA="\
+triangulate|Probe this host, or measure it building/installing/booting (ledger-grade)
+golden|Promote, list, verify, or locate golden disk images
+compare|Compare two images build-image.sh built
+freshness|Say, per stage, whether the next build would run it and why
+staleness|Check a built image's manifest against the checkout's current pins"
+
 usage() {
     cat <<EOF
 usage: vmavs <subcommand> [options]
@@ -55,6 +66,13 @@ done)
 
   version     Print this vmavs's version
   help        This
+
+Not part of decisions/0007's ten, but real scripts with real CLIs -- see
+docs/superpowers/plans/2026-09-22-shipping-vmavs.md Task 7:
+
+$(printf '%s\n' "$SUBCOMMANDS_EXTRA" | while IFS='|' read -r s d; do
+    printf '  %-11s %s\n' "$s" "$d"
+done)
 
 Every subcommand takes --help. Start with:
 
@@ -146,6 +164,11 @@ case $cmd in
             packer) exec "$MQG_REPO_ROOT/emit/packer.sh" "$@" ;;
             *) die "no such emit target: $target (today: packer). One Packer template reaches QEMU, VirtualBox, VMware and Proxmox -- see docs/test-hosts.md" ;;
         esac ;;
+    triangulate) exec "$MQG_REPO_ROOT/bin/triangulate.sh" "$@" ;;
+    golden)      exec "$MQG_REPO_ROOT/vm/golden.sh" "$@" ;;
+    compare)     exec "$MQG_REPO_ROOT/image/compare-images.sh" "$@" ;;
+    freshness)   exec "$BUILD_IMAGE" --freshness "$@" ;;
+    staleness)   exec "$MQG_REPO_ROOT/bin/image-staleness.sh" "$@" ;;
     *)
         if ! printf '%s\n' "$SUBCOMMANDS" | cut -d'|' -f1 | grep -qx "$cmd"; then
             printf 'vmavs: unknown subcommand: %s\n\n' "$cmd" >&2
