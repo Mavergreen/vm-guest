@@ -16,7 +16,8 @@ is the identity; the URL is only how to get it.
 
 A release is the realisation of a declared state, not the side effect of a
 push. These are the inputs whose movement should cut one. Deliberately a
-SUBSET of the registry table above: `bats` moving must never cut a release.
+SUBSET of the full ingredient registry (`## The registry`, below): `bats`
+moving must never cut a release.
 
 - upstream: UPSTREAM_VERSION
 - pins: vendor/sources.tsv
@@ -128,8 +129,8 @@ one.
   no caller. It is wired now so that the day a caller lands, the gate is
   already watching it.
 
-The Sparkle deviation two lines below this section is untouched by any of
-this — it was never an argument about publishing.
+The `sparkle-updater:` deviations in `## Conformance deviations` below are
+untouched by any of this — they were never an argument about publishing.
 
 ## The registry
 
@@ -173,13 +174,15 @@ a repo to state a reason wherever it restricts that. Ours:
 ## Conformance deviations
 
 Transcribed from `docs/decisions/0007-what-this-project-ships.md`, which is
-where the reasoning lives. Scoped to filename globs, each with a reason --
+where the sparkle-updater reasoning lives; the version-scheme reasoning
+lives in `docs/decisions/0012-version-scheme.md`, which narrows what 0007
+originally said. Scoped to filename globs, each with a reason --
 `deviations.sh` rejects an entry that has no reason, because an exception
 without one is indistinguishable from drift.
 
 - version-scheme:bin/vmavs: this product is its own upstream, not a repackage of somebody else's release, so it takes the family's SELF-UPSTREAM shape (`YYYYMMDD.N`, as `mavericks-porthole` does) rather than `<upstream>-mavericks.N`. The suffix means "our Nth repackage of someone else's thing" and there is no such thing here; `docs/decisions/0012-version-scheme.md` has the reasoning
-- version-scheme:image/build-image.sh: same product, same reason, scoped the same way so a deviation on one file cannot quietly license the rest to drift
-- version-scheme:vm/*.sh: same product, same reason, scoped the same way so a deviation on one file cannot quietly license the rest to drift
+- version-scheme:image/build-image.sh: same product, same SELF-UPSTREAM `YYYYMMDD.N` shape, scoped the same way so a deviation on one file cannot quietly license the rest to drift
+- version-scheme:vm/*.sh: same product, same SELF-UPSTREAM `YYYYMMDD.N` shape, scoped the same way so a deviation on one file cannot quietly license the rest to drift
 - sparkle-updater:image/build-image.sh: Sparkle is a macOS framework and the host-side tool's primary hosts are Linux and NetBSD. The guest-side payload, which IS a 10.9 .pkg, takes the family's Sparkle shape unchanged
 - sparkle-updater:vm/*.sh: same product, same reason, scoped the same way
 

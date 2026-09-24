@@ -22,9 +22,12 @@ external upstream — and stopped there. The skill answers the second case
 itself: a self-upstream repository drops the `-mavericks` suffix and
 versions itself directly, with `YYYYMMDD.N` named as the family's date
 form "precisely because it is not a port". `mavericks-porthole` is the
-date instance; `mavericks-magic-trackpad2` is the semver instance. Read
-directly from `mavericks-porthole/UPSTREAM_VERSION` (`20260802`) and its
-`release.yml` `ver` step, 2026-09-22.
+date instance; `mavericks-magic-trackpad2` is the semver instance.
+**INHERITED**, not re-measured here: `docs/superpowers/plans/2026-09-22-shipping-vmavs.md`
+already read this directly from `mavericks-porthole/UPSTREAM_VERSION`
+(`20260802`) and its `release.yml` `ver` step, 2026-09-22, before this ADR
+existed. This ADR carries that finding forward rather than re-verifying
+it against the sibling repository a second time.
 
 `bin/vmavs` is this product's own upstream — there is no external project
 whose releases it repackages — so it takes that branch rather than sitting
@@ -93,11 +96,12 @@ inline YAML cannot be tested, and this repository tests things
   one entry named `upstream` pointing at `UPSTREAM_VERSION` — deliberately
   a subset of the full ingredient registry, so that `bats` moving never
   cuts one.
-- **This changes what `## repackage-on-ingredient-bump: not applicable`
-  means**, and that section is rewritten for the same reason this ADR
-  exists: the argument it made was correct for a world with no release,
-  and a release is now a declared state away rather than an abstraction.
-  See `INGREDIENTS.md` for the rewrite.
+- **This is why `INGREDIENTS.md`'s `repackage-on-ingredient-bump` section
+  ("no caller declared, and a narrower reason than it used to be") no
+  longer says the caller does not apply here.** The argument it used to
+  make was correct for a world with no release, and a release is now a
+  declared state away rather than an abstraction. See `INGREDIENTS.md`
+  for the rewrite.
 - **Nothing here schedules `release.yml`.** It does not exist yet — Phase C
   (release packaging and distribution) is designed but deliberately
   unscheduled, and P10 is blocked on P9, which is itself blocked on a

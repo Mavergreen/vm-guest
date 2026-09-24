@@ -107,12 +107,14 @@ make_repo() {
     [ "$status" -eq 0 ]
 }
 
-@test "an unknown ref is a failure, never a pass" {
+@test "an unknown ref is a failure, never a pass, and names the ref" {
     # Cannot-verify is a FAILURE. A release gate that green-lights because
-    # it could not find the tag is worse than no gate.
+    # it could not find the tag is worse than no gate. It should also say
+    # WHICH ref it could not find, not just that something failed.
     dir="$(make_repo)"
     run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh 19700101.1"
     [ "$status" -ne 0 ]
+    [[ "$output" == *"19700101.1"* ]]
 }
 
 @test "a violation on a TAG is caught even though the same file was removed from the index afterward" {
@@ -131,6 +133,175 @@ make_repo() {
     run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh 20260922.2"
     [ "$status" -ne 0 ]
     [[ "$output" == *"InstallESD.dmg"* ]]
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -eq 0 ]
+}
+
+# --- fix round 1: C-quoting, pipefail/SIGPIPE, and unreadable blobs -------
+#
+# A stronger-model review found that all three checks above can be made to
+# PASS on bytes `git archive <tag>` would package, in both modes. Each
+# defect below was reproduced against the pre-fix script before it was
+# fixed (see task-10-11-report.md's "Fix round 1" section for the
+# side-by-side RED evidence); these tests are the GREEN half.
+
+@test "a disk image named with a non-ASCII byte is caught in ref mode" {
+    # Without -z, `git ls-tree`/`git ls-files` C-quote a non-ASCII path:
+    # é.dmg becomes the literal characters "\303\251.dmg" on stdout, which
+    # matches none of the *.dmg patterns and is not a path `git show` can
+    # open either.
+    dir="$(make_repo)"
+    printf 'not really\n' > "$dir/é.dmg"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    git -C "$dir" tag t1
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+}
+
+@test "a disk image named with a non-ASCII byte is caught in index mode" {
+    dir="$(make_repo)"
+    printf 'not really\n' > "$dir/é.dmg"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -ne 0 ]
+}
+
+@test "a large blob named with a non-ASCII byte is caught in ref mode" {
+    dir="$(make_repo)"
+    head -c 3000000 /dev/zero > "$dir/ü"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    git -C "$dir" tag t1
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+}
+
+@test "a large blob named with a non-ASCII byte is caught in index mode" {
+    dir="$(make_repo)"
+    head -c 3000000 /dev/zero > "$dir/ü"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -ne 0 ]
+}
+
+@test "a filename holding a double quote is caught, not silently C-quoted away" {
+    dir="$(make_repo)"
+    printf 'not really\n' > "$dir/a\"b.dmg"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -ne 0 ]
+}
+
+@test "a Mach-O file well over a pipe buffer is still caught by its bytes, in ref mode" {
+    # `head -c 4` exits the instant it has its four bytes. Without
+    # `set +o pipefail` scoped to just that capture, the upstream `git
+    # show` -- which can be streaming a multi-megabyte blob -- gets
+    # SIGPIPE, dies with 141, and the script's own `set -o pipefail` fails
+    # the whole pipeline, so anything past a pipe buffer's worth (~64 KiB)
+    # silently skipped this check no matter what its header said. 200 KB
+    # is comfortably past that and comfortably under the 2 MiB size gate,
+    # so this exercises the byte check specifically, not the size check.
+    dir="$(make_repo)"
+    { printf '\xcf\xfa\xed\xfe'; head -c 200000 /dev/zero; } > "$dir/innocuous.bin"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    git -C "$dir" tag t1
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Mach-O"* ]]
+}
+
+@test "a Mach-O file well over a pipe buffer is still caught by its bytes, in index mode" {
+    dir="$(make_repo)"
+    { printf '\xcf\xfa\xed\xfe'; head -c 200000 /dev/zero; } > "$dir/innocuous.bin"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Mach-O"* ]]
+}
+
+@test "a blob that cannot be read is a failure, not a silent skip" {
+    # Cannot-verify must never read as clean. Commit a file, tag it, then
+    # delete its own loose object so nothing can actually read the blob
+    # back -- the corruption case the readability check exists to catch.
+    dir="$(make_repo)"
+    printf 'whatever\n' > "$dir/plugin.bin"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    git -C "$dir" tag t1
+    sha=$(git -C "$dir" rev-parse "t1:plugin.bin")
+    obj="$dir/.git/objects/${sha:0:2}/${sha:2}"
+    [ -f "$obj" ]
+    rm -f "$obj"
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"plugin.bin"* ]]
+    [[ "$output" == *"cannot be read"* ]]
+}
+
+@test "a path holding a space is checked correctly in ref mode" {
+    dir="$(make_repo)"
+    mkdir -p "$dir/docs"
+    printf 'not really\n' > "$dir/docs/install esd.dmg"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    git -C "$dir" tag t1
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"install esd.dmg"* ]]
+}
+
+@test "the byte check runs in ref mode against the ref's own content, not the index" {
+    # A flat package planted, tagged, then git-rm'd -- same shape as the
+    # index-vs-ref test above, but for section 2 (magic bytes) rather than
+    # section 1 (name).
+    dir="$(make_repo)"
+    mkdir -p "$dir/docs"
+    printf 'xar!payload\n' > "$dir/docs/notes.txt"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    git -C "$dir" tag t1
+    git -C "$dir" rm -q docs/notes.txt
+    git -C "$dir" -c commit.gpgsign=false commit -qm removed
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"xar!"* ]]
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "the size check runs in ref mode against the ref's own content, not the index" {
+    dir="$(make_repo)"
+    head -c 3000000 /dev/zero > "$dir/docs-appendix"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    git -C "$dir" tag t1
+    git -C "$dir" rm -q docs-appendix
+    git -C "$dir" -c commit.gpgsign=false commit -qm removed
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"docs-appendix"* ]]
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -eq 0 ]
+}
+
+@test "the registry check runs in ref mode against the ref's own vendor/sources.tsv" {
+    dir="$(make_repo)"
+    printf 'apple-bogus\t/not/a/url\tdeadbeef\n' >> "$dir/vendor/sources.tsv"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    git -C "$dir" tag t1
+    git -C "$dir" checkout -q HEAD~1 -- vendor/sources.tsv
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm reverted
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"apple-bogus"* ]]
     run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
     [ "$status" -eq 0 ]
 }
@@ -342,10 +513,17 @@ print('ok')
              | sed -n 's/^- [a-z-]*: //p' | cut -d: -f1)
 }
 
-@test "the version-scheme deviation names the self-upstream shape, not a bare refusal" {
-    run bash -c "sed -n '/^## Conformance deviations/,/^## /p' '$REPO/INGREDIENTS.md' \
-        | grep '^- version-scheme' | grep -ci 'self-upstream'"
-    [ "$output" -ge 1 ]
+@test "every version-scheme deviation names the self-upstream shape, not a bare refusal" {
+    # Fix round 1 tightened this: it used to be enough for ONE of the
+    # three version-scheme lines to say "self-upstream" and the other two
+    # to ride on "same product, same reason" -- which a reader hits
+    # without ever seeing the words that explain what the reason IS.
+    total=$(sed -n '/^## Conformance deviations/,/^## /p' "$REPO/INGREDIENTS.md" \
+        | grep -c '^- version-scheme')
+    named=$(sed -n '/^## Conformance deviations/,/^## /p' "$REPO/INGREDIENTS.md" \
+        | grep '^- version-scheme' | grep -ci 'self-upstream')
+    [ "$total" -ge 1 ]
+    [ "$named" = "$total" ]
 }
 
 @test "every declared deviation still carries a reason" {

@@ -31,6 +31,9 @@
 # A ref that does not resolve is a FAILURE, not a pass: cannot-verify is
 # not the same answer as verified-clean, and a release gate that
 # green-lights because it could not find the tag is worse than no gate.
+# The same rule applies one level down, per file: a blob this script
+# cannot read (a stripped loose object, a listing command that itself
+# failed) is flagged rather than silently skipped -- see check 0 below.
 #
 #   usage: bin/no-apple-bytes.sh [ref]     (default: the working tree's index)
 set -euo pipefail
@@ -48,24 +51,21 @@ git rev-parse --git-dir >/dev/null 2>&1 \
     || die "not a git repository -- a release is what git would archive," \
            "so there is nothing to check here"
 
-MQG_NAB_REF=${1:-}
-if [ -n "$MQG_NAB_REF" ]; then
-    git rev-parse --verify --quiet "${MQG_NAB_REF}^{commit}" >/dev/null \
-        || die "no such ref: $MQG_NAB_REF -- cannot verify a release that" \
+# Resolved to a full SHA once, up front, rather than re-resolved by every
+# `git show`/`git cat-file` call below -- a tag or branch given as $1 could
+# otherwise move mid-run and every check would not be looking at the same
+# tree throughout.
+ref_arg=${1:-}
+MQG_NAB_REF=""
+if [ -n "$ref_arg" ]; then
+    MQG_NAB_REF=$(git rev-parse --verify --quiet "${ref_arg}^{commit}") \
+        || die "no such ref: $ref_arg -- cannot verify a release that" \
                "does not resolve, which is a failure, never a pass"
 fi
 
 # The three primitives, switched once on whether a ref was given, so every
 # check below reads the same regardless of mode. Ref mode is exactly what
 # `git archive` packages; no-ref mode is the index, today's behavior.
-list_tracked() {
-    if [ -n "$MQG_NAB_REF" ]; then
-        git ls-tree -r --name-only "$MQG_NAB_REF"
-    else
-        git ls-files
-    fi
-}
-
 blob_show() {  # $1 = path -- the committed content, never the working tree
     if [ -n "$MQG_NAB_REF" ]; then
         git show "$MQG_NAB_REF:$1" 2>/dev/null
@@ -82,6 +82,45 @@ blob_size() {  # $1 = path
     fi
 }
 
+blob_exists() {  # $1 = path -- true only if the blob can actually be read
+    if [ -n "$MQG_NAB_REF" ]; then
+        git cat-file -e "$MQG_NAB_REF:$1" 2>/dev/null
+    else
+        git cat-file -e ":$1" 2>/dev/null
+    fi
+}
+
+# The tracked-file list, built once into a scratch file rather than piped
+# straight into each `while read`, for two reasons:
+#
+#   1. `-z` (NUL-delimited), not the default newline-delimited listing.
+#      Without it, `git ls-tree`/`git ls-files` C-QUOTES any path holding a
+#      non-ASCII byte, a double quote, a backslash or a tab -- `é.dmg`
+#      comes back as the literal eleven characters `"\303\251.dmg"`, which
+#      matches none of section 1's `*.dmg` patterns, and is not a path
+#      `git show`/`git cat-file` can open either (they want the real
+#      bytes, not their octal-escaped spelling). `-z` sidesteps quoting
+#      entirely, and `read -r -d ''` on the reading end handles it --
+#      both bash 3.0-era features.
+#   2. The listing command's OWN exit status is checked, not `|| true`'d
+#      away. A `git ls-tree`/`git ls-files` that fails outright would
+#      otherwise print nothing, every `while read` loop below would then
+#      iterate zero times, and the script would exit 0 having "checked" an
+#      empty list -- cannot-verify reading as clean, same failure mode as
+#      the unresolved-ref case above, one layer down.
+MQG_NAB_TMPDIR=$(mktemp -d) || die "cannot create a scratch directory"
+trap 'rm -rf "$MQG_NAB_TMPDIR"' EXIT
+MQG_NAB_LIST=$MQG_NAB_TMPDIR/tracked
+if [ -n "$MQG_NAB_REF" ]; then
+    git ls-tree -r -z --name-only "$MQG_NAB_REF" > "$MQG_NAB_LIST" \
+        || die "git ls-tree failed for $MQG_NAB_REF -- cannot verify," \
+               "which is a failure, never a pass"
+else
+    git ls-files -z > "$MQG_NAB_LIST" \
+        || die "git ls-files failed -- cannot verify, which is a failure," \
+               "never a pass"
+fi
+
 status=0
 flag() {
     printf 'APPLE-DERIVED  %s\n' "$1" >&2
@@ -89,13 +128,27 @@ flag() {
     status=1
 }
 
+# 0. Readability. Every check below reads a blob by path. If the blob is
+#    gone -- a stripped loose object, a corrupt pack -- `git cat-file`
+#    fails, and left unhandled that failure looks exactly like "nothing to
+#    flag here": cannot-verify passing as clean, the one failure mode this
+#    whole script exists to refuse. Checked once, explicitly, before
+#    sections 1-3 read a single byte, so a read failure downstream can be
+#    treated as already-handled rather than re-litigated three times with
+#    three different `|| continue`s that would otherwise swallow it.
+while IFS= read -r -d '' f; do
+    [ -n "$f" ] || continue
+    blob_exists "$f" \
+        || flag "$f" "cannot be read -- cannot verify is a failure, never a pass"
+done < "$MQG_NAB_LIST"
+
 # 1. Shapes. A disk image, an installer package or a kext bundle in the
 #    tracked tree is, in this project, almost certainly Apple's -- and the
 #    one package we DO build (image/payload/) is built at runtime into
 #    $MQG_IMAGE_DIR, never committed. The exceptions list is deliberately
 #    empty; an entry here would need a reason in INGREDIENTS.md's
 #    deviations block, like any other.
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
     case $f in
         *.dmg|*.DMG|*.sparseimage|*.sparsebundle)
@@ -109,7 +162,7 @@ while IFS= read -r f; do
         *InstallESD*|*BaseSystem*|*OSInstall.mpkg*)
             flag "$f" "named after part of Apple's installer" ;;
     esac
-done < <(list_tracked)
+done < "$MQG_NAB_LIST"
 
 # 2. Bytes. A renamed blob defeats the list above, so look at the first
 #    few bytes of every tracked file that is not plainly text. These are
@@ -120,9 +173,20 @@ done < <(list_tracked)
 #    file whose working copy was cleaned up but whose committed version is
 #    a 6 GB dmg still ships one -- and in ref mode, "committed" means AT
 #    THAT REF, which may differ from what the index holds today.
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
-    head4=$(blob_show "$f" | head -c 4 | od -An -tx1 | tr -d ' \n') || continue
+    # `set +o pipefail` here, scoped to this command substitution's own
+    # subshell only -- it does not leak to the rest of the script. Without
+    # it: `head -c 4` reads its four bytes and exits; `blob_show` (a
+    # `git show` that may be streaming a multi-gigabyte blob) is still
+    # writing and gets SIGPIPE, dying with 141; under the script's own
+    # `set -o pipefail` that 141 fails the whole pipeline; and `|| continue`
+    # then skipped the file -- so anything past a pipe buffer's worth
+    # (~64 KiB) silently passed this check no matter what its first four
+    # bytes were. Section 0 above already turned an unreadable blob into a
+    # flag, so nothing here needs to notice that case again; an empty
+    # `$head4` simply matches none of the patterns below.
+    head4=$(set +o pipefail; blob_show "$f" | head -c 4 | od -An -tx1 | tr -d ' \n')
     case $head4 in
         # "koly" is the HFS+ disk-image trailer, but an Apple .dmg starts
         # with either the UDIF header or zlib; check for the ones that are
@@ -136,20 +200,20 @@ while IFS= read -r f; do
         cafebabe|cffaedfe|cefaedfe)  # Mach-O, fat or thin
             flag "$f" "is a Mach-O binary -- this repository ships source, not binaries" ;;
     esac
-done < <(list_tracked)
+done < "$MQG_NAB_LIST"
 
 # 3. Size. Nothing legitimate here is large, and every Apple artifact is.
 #    A 6 GB blob under another name and with a scrubbed header is still a
 #    6 GB blob, and this catches it without knowing what it is.
 MAX_TRACKED_BYTES=${MQG_MAX_TRACKED_BYTES:-2097152}
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
     size=$(blob_size "$f") || continue
     if [ "$size" -gt "$MAX_TRACKED_BYTES" ]; then
         flag "$f" "$size bytes -- nothing this project authors is that large;" \
              "if it is genuinely ours, raise MQG_MAX_TRACKED_BYTES with a reason"
     fi
-done < <(list_tracked)
+done < "$MQG_NAB_LIST"
 
 # 4. The registry's own statement. vendor/sources.tsv names Apple's
 #    InstallESD as a URL fetched at runtime. If it ever named a path
@@ -175,7 +239,8 @@ EOF
 fi
 
 if [ "$status" -eq 0 ]; then
-    log "no Apple-derived bytes in the tracked tree ($(list_tracked | wc -l) files)"
+    nfiles=$(tr -cd '\0' < "$MQG_NAB_LIST" | wc -c)
+    log "no Apple-derived bytes in the tracked tree ($nfiles files)"
 else
     die "the tracked tree carries Apple-derived bytes. A release of this" \
         "project is a RECIPE: it fetches Apple's media at runtime, on the" \
