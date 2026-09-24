@@ -248,3 +248,37 @@ print('ok')
     run grep -c '^No upstream release notes: .' "$REPO/INGREDIENTS.md"
     [ "$output" = "1" ]
 }
+
+# --- Task 9: the README as product documentation ---------------------------
+
+@test "the README leads with what the tool does, not with the host it was built on" {
+    run head -12 "$REPO/README.md"
+    [[ "$output" == *"vmavs"* ]]
+    [[ "$output" != *"Mac mini 2018"* ]]
+    [[ "$output" != *"Linux Mint"* ]]
+}
+
+@test "the README shows the quickstart commands, honestly" {
+    run head -30 "$REPO/README.md"
+    [[ "$output" == *"vmavs doctor"* ]]
+    [[ "$output" == *"vmavs image"* ]]
+    # vmavs run p4-linuxmedia forwards SSH on host port 2223; vmavs ssh
+    # defaults to 2222. Pairing them as a bare "run then ssh" quickstart
+    # would document a path that fails to connect, so if the README
+    # mentions that pairing at all, the line right after it must not be a
+    # bare, defaultport `vmavs ssh`.
+    run bash -c "grep -A1 'vmavs run p4-linuxmedia' '$REPO/README.md' | tail -1"
+    [ "$output" != "vmavs ssh" ]
+}
+
+@test "the README states the never-publish rule above the fold" {
+    run head -45 "$REPO/README.md"
+    [[ "$output" == *"never"* ]]
+    [[ "$output" == *"Apple"* ]]
+}
+
+@test "the README carries no unread-by-a-human marker" {
+    # publish-release.yml refuses a first release while that line stands.
+    run grep -c 'not been read or edited by a human' "$REPO/README.md" || true
+    [ "$output" = "0" ]
+}

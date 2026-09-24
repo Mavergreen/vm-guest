@@ -64,6 +64,7 @@ verify_sha256() {
 # exists so the hint is testable despite that.
 vmavs_hint() {
     [ "${VMAVS_FORCE_HINT:-0}" = 1 ] || [ -t 2 ] || return 0
+    # shellcheck disable=SC2016
     printf 'note: `vmavs %s` is the documented way to do this.\n' "$*" >&2
 }
 

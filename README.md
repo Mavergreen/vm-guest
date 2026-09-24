@@ -1,34 +1,109 @@
-# mavericks-qemu-guest
+# vm-guest
 
-Running OS X 10.9 Mavericks as a KVM-accelerated guest on Linux, with a
-reproducible and fully unattended install pipeline — and, eventually, as a
-GitHub Actions runner under TCG on arm64 macOS runners.
-
-The host is a Mac mini 2018 running Linux Mint, which makes this the case
-Apple's license contemplates: virtualizing OS X on Apple hardware.
-
-## Building an image
-
-One command, from a clean checkout to a bootable, SSH-reachable image, with
-nobody watching:
+Run **OS X 10.9 Mavericks** in a virtual machine, built unattended from
+Apple's own installer -- nobody has to sit and watch it. `vmavs` is the one
+command that does it.
 
 ```sh
-vmavs image
+vmavs doctor            # can this machine do it?
+vmavs image --describe  # show the plan; touches nothing
+vmavs image             # build it, from Apple's installer, unattended
 ```
 
-It fetches Apple's `InstallESD.dmg`, builds OpenCore and the guest firmware
-from pinned source, builds installer media on Linux without root, boots it,
-lets Apple's own installer install unattended, and lets a first-boot payload
-create the account and authorize your SSH key. It takes about half an hour
-on this host, is resumable stage by stage, and writes a manifest recording
-every input. `--describe` prints the plan without doing anything.
+That takes roughly 15-20 minutes once the boot stack is already built --
+longer on a cold checkout, which also compiles OpenCore and OVMF from
+source and waits on a download from Apple. The image lands at
+`~/.local/share/mavericks-qemu-guest/images/` as a qcow2, with a manifest
+beside it naming every input that went into it. The target disk is 60 GB,
+but sparse: a finished install has measured at under 11 GiB actually
+written.
 
-The key it authorizes is yours: `--ssh-key PATH`, defaulting to the first of
-`~/.ssh/id_*.pub`. No key is generated into an image, and none is committed.
+**Booting that image is not yet its own `vmavs` subcommand.** `vmavs run`
+today boots one of this project's own named development profiles --
+`p4-linuxmedia`, headless, is the one most builds are tested against --
+rather than the image `vmavs image` just built. `decisions/0007` names
+this as the gap `run` is meant to close. Until then, what exists is:
 
-`vmavs compare A B` says in what sense two images are the same;
-`docs/decisions/0006-image-pipeline-reproducibility.md` says what that
-claim is.
+```sh
+vmavs run p4-linuxmedia   # boot the profile most builds are tested against
+vmavs ssh --port 2223     # p4-linuxmedia forwards SSH to a non-default port
+```
+
+`vmavs ssh` on its own assumes the default port, 2222; `p4-linuxmedia`
+forwards a different one, so the two are shown together on purpose.
+`vmavs clone` and `vmavs golden` are the other pieces of getting from a
+built image to something bootable today.
+
+## Two rules this project does not bend
+
+- **The operating system comes from Apple, and only from Apple.** Firmware
+  and bootloaders may be third-party; macOS disk images may not. No
+  prebuilt third-party macOS image is used, ever.
+- **The guest image is never published.** Not as a release asset, not as a
+  package, not anywhere reachable without authentication. `vmavs` ships a
+  recipe; you build your own image on your own machine, from Apple's
+  bytes, which never enter this repository. `bin/no-apple-bytes.sh` is the
+  gate that keeps that true rather than merely intended -- it checks what
+  a release would actually contain, not just what anyone meant to commit.
+
+Every host this has actually run on is Apple hardware, which is the case
+Apple's own EULA contemplates: virtualizing OS X on an Apple-branded
+machine. A non-Apple host is outside that license -- a legal constraint,
+not a technical one -- and is also, so far, untested.
+
+## Will it work on my machine?
+
+`vmavs doctor` answers per subcommand: a host with QEMU and no
+`mkfs.hfsplus`, say, can `run` an image and cannot `media`. Measured so
+far: **Linux with KVM, on Apple hardware, works end to end** -- a 2018 Mac
+mini, a 2015 MacBook Air and a 2006 Mac Pro have each built and booted a
+guest. **macOS and NetBSD have never been tried**; `decisions/0007` names
+them as targets. `docs/test-hosts.md` tracks what has actually been run
+where, and `vmavs triangulate --probe` writes the same kind of report
+about a machine that isn't in that table yet.
+
+## What you get, and what you don't
+
+Today's shipped path is a **headless guest reached over SSH** -- there is
+no shipped profile that opens a window. `vmavs install`'s unattended
+pipeline creates your account and authorizes your SSH key on first boot;
+from there, networking, DNS and SSH all work with no configuration.
+
+A graphical desktop has been reached in this project's own manual testing
+(`docs/install-log.md`), including absolute mouse positioning that needs
+no third-party kext, contrary to what older prior art claims -- but that
+testing used a profile that is now archived, and the headless profiles
+this project ships and tests against today don't exercise a display at
+all. Sound is off by default; resolution is fixed. None of that is
+re-verified by `vmavs image`'s own `verify` stage, which checks that the
+guest answers SSH and identifies itself correctly, not what a screen looks
+like.
+
+## Commands
+
+| | |
+|---|---|
+| `vmavs doctor` | What this host can do, subcommand by subcommand |
+| `vmavs fetch` | Fetch one pinned input: Apple's installer, OpenSSH, updates |
+| `vmavs boot-stack` | Build OpenCore, the guest firmware and the EFI image from pinned source |
+| `vmavs media` | Build bootable installer media from Apple's InstallESD.dmg |
+| `vmavs install` | Create the target disk and let Apple's installer run, unattended |
+| `vmavs clone` | Make a throwaway overlay on a golden image |
+| `vmavs run` | Boot a profile |
+| `vmavs ssh` | Open a shell in a running guest |
+| `vmavs emit` | Write an interop artifact for another tool (today: packer) |
+| `vmavs image` | The whole chain: fetch, build, install, verify, record |
+
+`vmavs help` also lists a second tier -- `triangulate`, `golden`,
+`compare`, `freshness`, `staleness` -- for probing a new host and managing
+images once you have more than one. Every subcommand takes `--help`.
+
+## Installing
+
+Not yet packaged. Clone the repository and put `bin/vmavs` on your `PATH`;
+everything else is found relative to it, including through a symlink. The
+packaging question is deliberately open -- see
+`docs/superpowers/plans/2026-09-22-shipping-vmavs.md`, Phase C.
 
 ## Where things are
 
@@ -36,19 +111,19 @@ claim is.
 |---|---|
 | `docs/superpowers/specs/` | Design documents. Start with the umbrella design. |
 | `docs/superpowers/plans/` | Implementation plans. |
+| `docs/decisions/` | Decision records: what we chose, the evidence, what we rejected. |
+| `docs/configuration-register.md` | Every knob, and whether it was measured, inherited or reasoned. |
 | `docs/prior-art.md` | Every source worth reading, and what each one gives us. |
 | `docs/host-profile.md` | What this host is, and every host-specific assumption we've made. |
-| `docs/decisions/` | Decision records: what we chose, the evidence, what we rejected. |
+| `docs/test-hosts.md` | Which machine can settle which open question. |
 | `NOTES.md` | The lab log. Every attempt, including the ones that failed. |
 
 ## Ground rules
 
-- **The OS comes from Apple only.** Firmware and bootloaders may be
-  third-party; macOS disk images may not.
-- **Never publish the guest image.**
 - **No unreproducible blobs in the shipped boot path.** Everything is Tier 0
   (built from pinned source) or Tier 1 (vanilla upstream, pinned and
   checksummed). Tier 2 blobs live under `$MQG_VENDOR_DIR` (local disk, not
-  the repo — see `docs/decisions/0003-vm-images-on-local-btrfs.md`) and are
-  de-risking scaffolding only.
+  the repo -- see `docs/decisions/0003-vm-images-on-local-btrfs.md`) and are
+  de-risking scaffolding only. `bin/tier-check.sh --strict` enforces this on
+  every test run.
 - **Write down the failures.** `NOTES.md` is append-only.
