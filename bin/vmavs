@@ -92,6 +92,22 @@ version() {
     printf '%s\n' "$v"
 }
 
+BUILD_IMAGE=$MQG_REPO_ROOT/image/build-image.sh
+
+# Run one or more build-image.sh stages, joined into a single --stage list
+# so a multi-stage subcommand (boot-stack, media, install) is ONE
+# invocation of the script -- one freshness check, not three -- rather
+# than one process per stage. --describe and --help are pass-through and
+# must reach the script without a stage being forced in front of them, or
+# `vmavs media --help` would print a plan instead of a help.
+stages() {
+    local list=$1; shift
+    case " $* " in
+        *" --help "*|*" -h "*) exec "$BUILD_IMAGE" --help ;;
+    esac
+    exec "$BUILD_IMAGE" --stage "$list" "$@"
+}
+
 [ $# -gt 0 ] || { usage >&2; exit 2; }
 
 cmd=$1; shift
@@ -99,6 +115,26 @@ case $cmd in
     help|-h|--help) usage; exit 0 ;;
     version|--version) version; exit 0 ;;
     doctor) exec "$MQG_REPO_ROOT/bin/preconditions.sh" "$@" ;;
+    fetch)
+        what=esd
+        case ${1:-} in
+            esd|openssh) what=$1; shift ;;
+            updates) shift; exec "$MQG_REPO_ROOT/image/fetch-updates.sh" "$@" ;;
+            -*|'') ;;
+            *) die "no such input: $1 (esd, openssh, updates)" ;;
+        esac
+        stages "$what" "$@" ;;
+    boot-stack) stages "opencore,ovmf,efi" "$@" ;;
+    media)
+        # media consumes payload's own output: build-installer-img.sh dies
+        # ("no first-boot package at ...") if --firstboot-pkg is not
+        # already on disk, so `vmavs media` on its own the first time
+        # would otherwise fail with a confusing error rather than building
+        # what it needs. One --stage list covers both, in pipeline order,
+        # as one build-image.sh invocation.
+        stages "payload,media" "$@" ;;
+    install) stages "target,install" "$@" ;;
+    image) exec "$BUILD_IMAGE" "$@" ;;
     *)
         if ! printf '%s\n' "$SUBCOMMANDS" | cut -d'|' -f1 | grep -qx "$cmd"; then
             printf 'vmavs: unknown subcommand: %s\n\n' "$cmd" >&2

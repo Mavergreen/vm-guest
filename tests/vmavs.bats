@@ -137,3 +137,73 @@ setup_installed_tree() {
     # No bare/empty version line ever reached stdout.
     ! printf '%s\n' "$output" | grep -qE '^[0-9]{8}\.[0-9]+$'
 }
+
+# --- pipeline subcommands: fetch, boot-stack, media, install, image --------
+#
+# These forward to image/build-image.sh's own --describe, whose "stages, in
+# order" section is followed by a "manifest fields" section that names an
+# "InstallESD.dmg" and an "installer media" -- so a substring check against
+# the WHOLE output can pass or fail for a reason that has nothing to do
+# with which stages ran. Scoped to just the stages section instead, the
+# same way tests/image.bats checks --stage's own filtering of --describe.
+
+stages_section() {
+    printf '%s\n' "$1" | sed -n '/today)/,/^$/p'
+}
+
+stage_names_in() {
+    stages_section "$1" | sed -n 's/^    \([a-z]*\)[[:space:]].*/\1/p' | xargs
+}
+
+@test "vmavs image passes its arguments through to build-image.sh" {
+    run "$VMAVS" image --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = \
+        "esd opencore ovmf efi openssh payload media target install verify manifest" ]
+}
+
+@test "vmavs media runs the payload and media stages, and only those" {
+    # media consumes payload's output directly -- build-installer-img.sh
+    # dies if --firstboot-pkg does not already exist on disk -- so this is
+    # --stage payload,media, not --stage media alone. --describe touches
+    # nothing, so this asserts the plan, not a build.
+    run "$VMAVS" media --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = "payload media" ]
+}
+
+@test "vmavs boot-stack covers opencore, ovmf and efi, and only those" {
+    run "$VMAVS" boot-stack --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = "opencore ovmf efi" ]
+}
+
+@test "vmavs fetch defaults to Apple's installer and takes a named input" {
+    run "$VMAVS" fetch --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = "esd" ]
+    run "$VMAVS" fetch openssh --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = "openssh" ]
+}
+
+@test "vmavs fetch refuses an input it does not have" {
+    run "$VMAVS" fetch xcode
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"xcode"* ]]
+    [[ "$output" == *"esd"* ]]
+}
+
+@test "vmavs install covers target then install, and only those" {
+    run "$VMAVS" install --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = "target install" ]
+}
+
+@test "every pipeline subcommand forwards --help to the script behind it" {
+    for c in image media boot-stack install fetch; do
+        run "$VMAVS" "$c" --help
+        [ "$status" -eq 0 ] || { echo "$c --help failed"; false; }
+        [[ "$output" == *"--accel"* ]] || { echo "$c --help is not build-image's"; false; }
+    done
+}
