@@ -229,7 +229,12 @@ usage: $(basename "$0") [options]
                        virtio-net-pci has no driver in 10.9 and produces an
                        image with no network -- see docs/open-questions.md Q2.
   --from STAGE         Start at this stage, skipping earlier ones
-  --stage STAGE        Run only this stage
+  --stage LIST         Run only these stages: one name, or several joined
+                       by commas (--stage opencore,ovmf,efi). Listed in any
+                       order, they still run in pipeline order -- the order
+                       above, not the order typed. Overrides --from: when
+                       both are given, --stage wins and --from is ignored
+                       (unchanged from single-stage behavior).
   --force              Redo stages whose outputs already exist
   --keep-running       Leave the VM running after the install stage
   --install-timeout S  Give up on the install after S seconds (default: $install_timeout)
@@ -341,8 +346,14 @@ smbios_wellformed "$smbios" \
            "config.plist. --smbios-models lists the ones with evidence."
 [ -z "$from_stage" ] || is_stage "$from_stage" \
     || die "no such stage '$from_stage'; stages are: $(stage_names | tr '\n' ' ')"
-[ -z "$only_stage" ] || is_stage "$only_stage" \
-    || die "no such stage '$only_stage'; stages are: $(stage_names | tr '\n' ' ')"
+# --stage takes a comma-separated list (a single name is the same list of
+# one), validated element by element so a typo in the third stage of five
+# is named, not swallowed into "no such stage 'opencore,ovmf,efy'".
+for _s in ${only_stage//,/ }; do
+    is_stage "$_s" \
+        || die "no such stage '$_s'; stages are: $(stage_names | tr '\n' ' ')"
+done
+unset _s
 
 name=${name:-mavericks-$(date -u +%Y%m%d)}
 
@@ -474,7 +485,21 @@ image pipeline
   stages, in order (each skipped when the inputs it recorded still match --
   ask --freshness which ones those are today)
 EOF
+    # --stage filters this listing to the stages selected, in pipeline
+    # order (not the order they were typed in). Said explicitly, in the
+    # listing itself, so `vmavs media --describe` reads as a plan for
+    # "media and what it needs" rather than as the whole eleven-stage
+    # pipeline with no explanation for why only two lines appear.
+    if [ -n "$only_stage" ]; then
+        printf '  --stage selected only: %s\n' "${only_stage//,/, }"
+    fi
     printf '%s\n' "$STAGES" | while IFS='|' read -r s d; do
+        if [ -n "$only_stage" ]; then
+            case " ${only_stage//,/ } " in
+                *" $s "*) : ;;
+                *) continue ;;
+            esac
+        fi
         printf '    %-9s %s\n' "$s" "$d"
     done
     cat <<EOF
@@ -512,10 +537,12 @@ skip_before=0
 [ -n "$from_stage" ] && skip_before=1
 
 should_run() {
-    local s=$1
+    local s=$1 t
     if [ -n "$only_stage" ]; then
-        [ "$s" = "$only_stage" ]
-        return
+        for t in ${only_stage//,/ }; do
+            [ "$s" = "$t" ] && return 0
+        done
+        return 1
     fi
     if [ "$skip_before" -eq 1 ]; then
         if [ "$s" = "$from_stage" ]; then

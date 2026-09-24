@@ -105,6 +105,60 @@ setup() {
     [ "$status" -ne 0 ]
 }
 
+# The stage lines of a --describe listing, and nothing else -- not the
+# manifest-fields section below it, which names an "InstallESD.dmg" and an
+# "installer media" and would make a naive substring check for "install"
+# pass or fail for the wrong reason regardless of --stage.
+stages_section() {
+    printf '%s\n' "$1" | sed -n '/today)/,/^$/p'
+}
+
+# Just the stage-name tokens listed in a stages_section, one per line: the
+# leading word of each 4-space-indented row. The header line and the
+# (when present) "--stage selected only" note are 2-space indented and
+# never match, so this is immune to a stage's own description mentioning
+# another stage's name as a substring -- e.g. the "media" stage's
+# description says "installer", which a raw `!= *install*` check would
+# trip on for the wrong reason even once --describe correctly hid the
+# "install" stage's own row.
+stage_names_in() {
+    stages_section "$1" | sed -n 's/^    \([a-z]*\)[[:space:]].*/\1/p' | xargs
+}
+
+@test "--stage takes a comma-separated list and runs only those stages" {
+    run "$BUILD" --stage opencore,ovmf,efi --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = "opencore ovmf efi" ]
+}
+
+@test "--stage with a comma list still refuses an unknown stage, and names it" {
+    run "$BUILD" --stage opencore,bogus,efi --describe
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"bogus"* ]]
+}
+
+@test "a single --stage name still works exactly as before" {
+    run "$BUILD" --stage esd --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = "esd" ]
+}
+
+@test "--describe honors --stage: the stages section lists only what was selected" {
+    run "$BUILD" --stage media --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = "media" ]
+    # The filter is named, not silent -- the whole point of this ruling.
+    [[ "$(stages_section "$output")" == *"--stage selected only"* ]]
+}
+
+@test "--describe with no --stage still lists the whole pipeline, unfiltered" {
+    run "$BUILD" --describe
+    [ "$status" -eq 0 ]
+    [ "$(stage_names_in "$output")" = \
+        "esd opencore ovmf efi openssh payload media target install verify manifest" ]
+    [[ "$(stages_section "$output")" != *"--stage selected only"* ]]
+}
+
 @test "the software-update question is answered, and all three answers work" {
     # docs/open-questions.md Q1, answered 2026-09-22: two images. The
     # switch P4 left behind was the whole point of leaving it, and it now
