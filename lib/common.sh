@@ -62,7 +62,14 @@ verify_sha256() {
 # Silent unless stderr is a terminal, which is why the suite stayed green
 # when this landed -- bats captures stderr through a pipe. VMAVS_FORCE_HINT
 # exists so the hint is testable despite that.
+#
+# Silent, too, when bin/vmavs is what ran the script: vmavs execs these
+# scripts, so without VMAVS_DISPATCHED a human who typed `vmavs run` at a
+# terminal was told that `vmavs run` is the documented way to do it.
+# Checked before VMAVS_FORCE_HINT on purpose: forcing the hint must not
+# bring that back, or the test that proves it gone could not be written.
 vmavs_hint() {
+    [ "${VMAVS_DISPATCHED:-0}" != 1 ] || return 0
     [ "${VMAVS_FORCE_HINT:-0}" = 1 ] || [ -t 2 ] || return 0
     # shellcheck disable=SC2016
     printf 'note: `vmavs %s` is the documented way to do this.\n' "$*" >&2

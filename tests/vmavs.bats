@@ -256,3 +256,21 @@ stage_names_in() {
     extra=$(printf '%s\n' "$output" | grep -n '  triangulate' | cut -d: -f1)
     [ "$ten" -lt "$extra" ]
 }
+
+@test "vmavs does not tell the human to type the vmavs form they just typed" {
+    # Final review, MEASURED: at a terminal, `vmavs run` printed "note:
+    # `vmavs run` is the documented way to do this." vmavs execs the
+    # script, and the script's vmavs_hint could not tell who ran it.
+    # VMAVS_FORCE_HINT stands in for the terminal (bats pipes stderr).
+    # run and image are representative: both die or print usage before
+    # touching QEMU, so this needs no host tools.
+    for c in run image; do
+        run env VMAVS_FORCE_HINT=1 "$VMAVS" "$c" --help
+        [[ "$output" != *"note:"* ]] || { echo "vmavs $c hinted: $output"; false; }
+    done
+    # The control: the direct script still points at vmavs.
+    run env VMAVS_FORCE_HINT=1 "$REPO/vm/run.sh" --help
+    [[ "$output" == *'note: `vmavs run`'* ]]
+    run env VMAVS_FORCE_HINT=1 "$REPO/image/build-image.sh" --help
+    [[ "$output" == *'note: `vmavs image`'* ]]
+}

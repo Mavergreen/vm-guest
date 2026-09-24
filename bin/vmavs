@@ -33,6 +33,11 @@ unset _src _dir
 # shellcheck disable=SC2034  # read by log()/warn()/die() at call time
 MQG_LOG_PREFIX=vmavs
 
+# Tells lib/common.sh's vmavs_hint that the human already typed the vmavs
+# form, so the script this execs must not suggest it back to them.
+VMAVS_DISPATCHED=1
+export VMAVS_DISPATCHED
+
 SUBCOMMANDS="\
 doctor|What this host can do, subcommand by subcommand
 fetch|Fetch one pinned input: esd (Apple's installer), openssh, updates

@@ -126,6 +126,14 @@ setup() {
     [[ "$output" == *"vmavs image"* ]]
 }
 
+@test "vmavs_hint stays silent under bin/vmavs, even when forced" {
+    # bin/vmavs sets VMAVS_DISPATCHED before it execs a script; the human
+    # already typed the vmavs form and must not be told to type it.
+    run bash -c "source '$REPO/lib/common.sh'; VMAVS_DISPATCHED=1 VMAVS_FORCE_HINT=1 vmavs_hint image"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
 @test "every script vmavs dispatches to calls vmavs_hint" {
     for s in image/build-image.sh bin/triangulate.sh vm/run.sh vm/clone.sh \
              vm/golden.sh image/compare-images.sh; do
