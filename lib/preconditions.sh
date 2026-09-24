@@ -187,7 +187,6 @@ vmavs_tools_for() {
         boot-stack) printf '%s\n' "gcc make git python3 nasm iasl mcopy mformat sgdisk curl tar unzip zip mmd mdir" ;;
         media)      printf '%s\n' "dmg2img sgdisk mkfs.hfsplus tar sha256sum python3 qemu-system-x86_64 cpio busybox" ;;
         install)    printf '%s\n' "qemu-system-x86_64 qemu-img ssh ssh-keygen python3 sha256sum" ;;
-        target)     printf '%s\n' "qemu-img" ;;
         clone)      printf '%s\n' "qemu-img" ;;
         run)        printf '%s\n' "qemu-system-x86_64" ;;
         ssh)        printf '%s\n' "ssh" ;;

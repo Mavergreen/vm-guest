@@ -115,12 +115,45 @@ setup() {
     done
 }
 
-@test "doctor prints one row per subcommand with a verdict" {
-    run "$VMAVS" doctor
-    for c in run boot-stack media image; do
-        [[ "$output" == *"$c"* ]]
+# A PATH holding exactly what doctor itself runs (real), a stub lscpu
+# that reports an Intel CPU, and an executable that does nothing for every
+# tool `vmavs image` needs -- minus any names passed as arguments. bats is
+# never in it. With CPUINFO and KVM_DEVICE pointed at files this test
+# owns, every host fact is known, so the verdict depends only on what the
+# test chose -- the same on a CI runner with no QEMU and no /dev/kvm as
+# here. Sets STUB.
+stub_host() {
+    STUB="$BATS_TEST_TMPDIR/stubhost"
+    mkdir -p "$STUB"
+    for t in bash env uname dirname awk grep cat; do
+        ln -s "$(command -v "$t")" "$STUB/$t"
     done
-    [[ "$output" == *"READY"* || "$output" == *"BLOCKED"* ]]
+    printf '#!/bin/sh\necho "Vendor ID:  GenuineIntel"\n' > "$STUB/lscpu"
+    chmod +x "$STUB/lscpu"
+    for t in $(vmavs_tools_for image); do
+        case " $* " in *" $t "*) continue ;; esac
+        [ -e "$STUB/$t" ] && continue
+        printf '#!/bin/sh\nexit 0\n' > "$STUB/$t"
+        chmod +x "$STUB/$t"
+    done
+    printf 'flags\t\t: fpu vmx sse2\n' > "$BATS_TEST_TMPDIR/cpuinfo"
+    : > "$BATS_TEST_TMPDIR/kvm"
+}
+
+run_stub_doctor() {
+    run env PATH="$STUB" CPUINFO="$BATS_TEST_TMPDIR/cpuinfo" \
+        KVM_DEVICE="${KVM:-$BATS_TEST_TMPDIR/kvm}" \
+        OVMF_DIR="$BATS_TEST_TMPDIR/no-ovmf" "$VMAVS" doctor
+}
+
+@test "doctor prints one row per subcommand with a verdict" {
+    # Matched as a whole row, not a substring: "run" is also inside
+    # "triangulate", which doctor prints on its own line.
+    run "$VMAVS" doctor
+    for c in fetch boot-stack media install clone run ssh emit image; do
+        printf '%s\n' "$output" | grep -qE "^(READY|BLOCKED) +$c( |\$)" \
+            || { echo "no verdict row for $c"; false; }
+    done
 }
 
 @test "doctor names the missing tool, not just the failure" {
@@ -141,7 +174,51 @@ setup() {
         ln -s "$(command -v "$t")" "$STUB/$t"
     done
     run env PATH="$STUB" "$VMAVS" doctor
-    [[ "$output" == *"qemu-system-x86_64"* ]]
+    # The row, not the tool name: the tool table above it prints
+    # "tool:qemu-system-x86_64" on every host, so a bare substring match
+    # passed whether or not the run row said anything.
+    printf '%s\n' "$output" \
+        | grep -qE '^BLOCKED +run +missing:.* qemu-system-x86_64( |$)' \
+        || { echo "no BLOCKED run row naming qemu-system-x86_64:"; echo "$output"; false; }
+}
+
+@test "a host with everything vmavs needs but bats gets GO, exit 0" {
+    # Final review, MEASURED: bats was in doctor's gating list, so a user
+    # with every subcommand READY was told NO-GO. bats runs tests/; it is
+    # a developer's tool, reported as INFO and never gating.
+    stub_host
+    run_stub_doctor
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    printf '%s\n' "$output" | grep -qE '^INFO +tool:bats +not installed' \
+        || { echo "no INFO row for bats"; false; }
+    [[ "$output" == *"doctor: GO -- ready: fetch boot-stack media install clone run ssh emit image"* ]]
+    [[ "$output" != *"NO-GO"* ]]
+}
+
+@test "a host missing a tool only image's pipeline needs gets NO-GO, naming it" {
+    # Final review, MEASURED: nasm is not in the flat tool table, so the
+    # old verdict said GO right under "BLOCKED image". The last line now
+    # sums up the subcommand table.
+    stub_host nasm
+    run_stub_doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"doctor: NO-GO -- ready: fetch media install clone run ssh emit; blocked: boot-stack image (missing: nasm)"* ]] \
+        || { echo "$output"; false; }
+}
+
+@test "a host fact that FAILs is NO-GO even with every tool present" {
+    # The rule: exit 0 iff image is READY and no host-fact row FAILs.
+    stub_host
+    KVM="$BATS_TEST_TMPDIR/no-such-kvm" run_stub_doctor
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"NO-GO"*"host FAIL: kvm-device"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor --help is a usage, not a probe" {
+    run "$VMAVS" doctor --help
+    [ "$status" -eq 0 ]
+    [[ "${lines[0]}" == "usage: vmavs doctor"* ]]
+    [[ "$output" != *"STATUS"* ]]
 }
 
 @test "on a host this project has never probed, doctor says so instead of guessing" {
