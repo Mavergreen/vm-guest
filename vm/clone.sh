@@ -26,9 +26,17 @@ export GOLDEN_DIR
 WORK_DIR=${WORK_DIR:-$MQG_IMAGE_DIR/work}
 export WORK_DIR
 
-usage() {
-    die "usage: vm/clone.sh [--verify] <golden-name> [clone-name]"
+usage_text() {
+    printf '%s\n' "usage: vm/clone.sh [--verify] <golden-name> [clone-name]"
 }
+
+usage() {
+    die "$(usage_text)"
+}
+
+case ${1:-} in
+    -h|--help) usage_text; exit 0 ;;
+esac
 
 verify=0
 if [ "${1:-}" = "--verify" ]; then

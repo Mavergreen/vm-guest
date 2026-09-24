@@ -274,3 +274,43 @@ stage_names_in() {
     run env VMAVS_FORCE_HINT=1 "$REPO/image/build-image.sh" --help
     [[ "$output" == *'note: `vmavs image`'* ]]
 }
+
+@test "every subcommand vmavs help lists takes --help: exit 0 and a usage line" {
+    # Final review, MEASURED: help said "Every subcommand takes --help",
+    # and six did not -- doctor ran the whole probe, run/clone/staleness
+    # took --help for a profile/golden/manifest name, golden printed its
+    # usage but exited 1, emit called it an unknown target. Both tiers,
+    # read off the help itself so a new row cannot skip this. Every
+    # --help exits before any tool is run, so this needs no QEMU.
+    run "$VMAVS" help
+    cmds=$(printf '%s\n' "$output" | sed -n 's/^  \([a-z-]*\)  *[A-Z].*/\1/p')
+    [ "$(printf '%s\n' "$cmds" | wc -l)" -ge 17 ] || { echo "parsed: $cmds"; false; }
+    for c in $cmds; do
+        run "$VMAVS" "$c" --help
+        [ "$status" -eq 0 ] || { echo "vmavs $c --help: exit $status: $output"; false; }
+        printf '%s\n' "$output" | grep -qi '^usage' \
+            || { echo "vmavs $c --help: no usage line: $output"; false; }
+    done
+}
+
+@test "vmavs run --help lists the profiles" {
+    run "$VMAVS" run --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"p4-linuxmedia"* ]]
+}
+
+@test "help's footer is the README's quickstart, and sends nobody to an internal plan" {
+    # Final review: the footer still advertised `vmavs run p4-linuxmedia`
+    # and a bare `vmavs ssh` after the README stopped offering them (the
+    # profile boots a development disk nothing shipped creates, on a port
+    # the bare ssh does not use), and pointed strangers at a plan's task.
+    run "$VMAVS" help
+    [[ "$output" == *"vmavs doctor"* ]]
+    [[ "$output" == *"vmavs image --describe"* ]]
+    [[ "$output" != *"p4-linuxmedia"* ]]
+    [[ "$output" != *"docs/superpowers"* ]]
+    [[ "$output" != *"~30 minutes"* ]]
+    if printf '%s\n' "$output" | grep -qE '^ +vmavs ssh *$'; then
+        echo "help offers a bare vmavs ssh"; false
+    fi
+}

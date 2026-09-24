@@ -20,12 +20,22 @@ export MQG_IMAGE_DIR
 GOLDEN_DIR=${GOLDEN_DIR:-$MQG_IMAGE_DIR/golden}
 export GOLDEN_DIR
 
-usage() {
-    die "usage: vm/golden.sh promote <image> <name> <description>
+usage_text() {
+    cat <<'EOF'
+usage: vm/golden.sh promote <image> <name> <description>
        vm/golden.sh list
        vm/golden.sh verify <name>
-       vm/golden.sh path <name>"
+       vm/golden.sh path <name>
+EOF
 }
+
+usage() {
+    die "$(usage_text)"
+}
+
+case ${1:-} in
+    -h|--help) usage_text; exit 0 ;;
+esac
 
 [ $# -ge 1 ] || usage
 

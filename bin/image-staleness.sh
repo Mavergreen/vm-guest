@@ -38,6 +38,9 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck disable=SC2034  # read by log()/warn()/die() at call time
 MQG_LOG_PREFIX=image-staleness
 
+case ${1:-} in
+    -h|--help) printf 'usage: %s <manifest> [...]\n' "$(basename "$0")"; exit 0 ;;
+esac
 [ $# -ge 1 ] || die "usage: $(basename "$0") <manifest> [...]"
 
 now=$(mktemp) || die "cannot create a temp file"

@@ -21,11 +21,22 @@ MQG_VENDOR_DIR=${MQG_VENDOR_DIR:-$MQG_IMAGE_DIR/vendor-reference}
 export MQG_VENDOR_DIR
 PROFILE_DIR=${PROFILE_DIR:-$MQG_REPO_ROOT/vm/profiles}
 
-if [ $# -lt 1 ]; then
-    die "usage: vm/run.sh <profile> [extra qemu args...]
+usage() {
+    cat <<EOF
+usage: vm/run.sh <profile> [extra qemu args...]
 
 Available profiles:
-$(PROFILE_DIR="$PROFILE_DIR" profile_list 2>/dev/null | sed 's/^/  /')"
+$(PROFILE_DIR="$PROFILE_DIR" profile_list 2>/dev/null | sed 's/^/  /')
+EOF
+}
+
+# Asked for, the usage is the answer and goes to stdout with status 0;
+# given nothing, it is still an error, as it always was.
+case ${1:-} in
+    -h|--help) usage; exit 0 ;;
+esac
+if [ $# -lt 1 ]; then
+    die "$(usage)"
 fi
 
 profile=$1

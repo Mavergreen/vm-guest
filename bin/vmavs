@@ -72,8 +72,8 @@ done)
   version     Print this vmavs's version
   help        This
 
-Not part of decisions/0007's ten, but real scripts with real CLIs -- see
-docs/superpowers/plans/2026-09-22-shipping-vmavs.md Task 7:
+More, for probing a new host and for managing images once you have more
+than one:
 
 $(printf '%s\n' "$SUBCOMMANDS_EXTRA" | while IFS='|' read -r s d; do
     printf '  %-11s %s\n' "$s" "$d"
@@ -81,10 +81,9 @@ done)
 
 Every subcommand takes --help. Start with:
 
-  vmavs doctor        can this machine do it?
-  vmavs image         ~30 minutes, unattended, nobody watching
-  vmavs run p4-linuxmedia
-  vmavs ssh
+  vmavs doctor            can this machine do it?
+  vmavs image --describe  show the plan; touches nothing
+  vmavs image             build it, from Apple's installer, unattended
 EOF
 }
 
@@ -136,7 +135,11 @@ stages() {
 cmd=$1; shift
 case $cmd in
     help|-h|--help) usage; exit 0 ;;
-    version|--version) version; exit 0 ;;
+    version|--version)
+        case ${1:-} in
+            -h|--help) echo "usage: vmavs version"; exit 0 ;;
+        esac
+        version; exit 0 ;;
     doctor) exec "$MQG_REPO_ROOT/bin/preconditions.sh" "$@" ;;
     fetch)
         what=esd
@@ -166,6 +169,12 @@ case $cmd in
         [ -n "$target" ] || die "usage: vmavs emit packer [options]"
         shift
         case $target in
+            -h|--help)
+                echo "usage: vmavs emit <target> [options]"
+                echo
+                echo "targets:"
+                echo "  packer      one HCL2 template from one profile (vmavs emit packer --help)"
+                exit 0 ;;
             packer) exec "$MQG_REPO_ROOT/emit/packer.sh" "$@" ;;
             *) die "no such emit target: $target (today: packer). One Packer template reaches QEMU, VirtualBox, VMware and Proxmox -- see docs/test-hosts.md" ;;
         esac ;;
