@@ -139,11 +139,13 @@ make_repo() {
 
 # --- fix round 1: C-quoting, pipefail/SIGPIPE, and unreadable blobs -------
 #
-# A stronger-model review found that all three checks above can be made to
-# PASS on bytes `git archive <tag>` would package, in both modes. Each
-# defect below was reproduced against the pre-fix script before it was
-# fixed (see task-10-11-report.md's "Fix round 1" section for the
-# side-by-side RED evidence); these tests are the GREEN half.
+# Three defects each let the checks above PASS on bytes `git archive
+# <tag>` would package, in both modes: a path git C-quotes (non-ASCII, a
+# double quote) matched no pattern and could not be opened; `head -c 4`
+# SIGPIPEd a large blob's `git show` under pipefail, so the byte check
+# skipped anything past a pipe buffer; and an unreadable blob was
+# skipped rather than flagged. Each was reproduced against the pre-fix
+# script before it was fixed; these tests hold the fixes in place.
 
 @test "a disk image named with a non-ASCII byte is caught in ref mode" {
     # Without -z, `git ls-tree`/`git ls-files` C-quote a non-ASCII path:
@@ -242,6 +244,50 @@ make_repo() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"plugin.bin"* ]]
     [[ "$output" == *"cannot be read"* ]]
+}
+
+@test "index mode with nothing in the index is a failure, not a pass on 0 files" {
+    # "no Apple-derived bytes in the tracked tree (0 files)" was a pass.
+    # Checking nothing is cannot-verify, which is never a pass. A fresh
+    # repository has no index file at all; `git rm --cached` leaves an
+    # empty one. Both.
+    dir="$BATS_TEST_TMPDIR/empty"
+    mkdir -p "$dir/bin" "$dir/lib"
+    cp "$REPO/bin/no-apple-bytes.sh" "$dir/bin/"
+    cp "$REPO/lib/common.sh" "$dir/lib/"
+    git -C "$dir" init -q
+    [ ! -e "$dir/.git/index" ]
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot verify"* ]]
+    [[ "$output" != *"no Apple-derived bytes"* ]]
+
+    dir="$(make_repo)"
+    git -C "$dir" rm -rq --cached .
+    [ -e "$dir/.git/index" ]
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"cannot verify"* ]]
+}
+
+@test "index mode reads the file named 0:evil, not stage 0 of evil" {
+    # `git show ":$f"` parses ":0:evil" as stage 0 of "evil". With a benign
+    # "evil" beside it, the byte check read the wrong blob and the
+    # Mach-O in "0:evil" passed (MEASURED, final review). ":0:$f" names
+    # stage 0 explicitly, so the rest is the path, whatever it holds.
+    dir="$(make_repo)"
+    printf 'plain text\n' > "$dir/evil"
+    printf '\xcf\xfa\xed\xfe\x00\x00\x00\x00' > "$dir/0:evil"
+    git -C "$dir" add -A
+    git -C "$dir" -c commit.gpgsign=false commit -qm planted
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"0:evil"*"Mach-O"* ]]
+    # Ref mode already read "<sha>:0:evil" as a path; it still does.
+    git -C "$dir" tag t1
+    run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"0:evil"*"Mach-O"* ]]
 }
 
 @test "a path holding a space is checked correctly in ref mode" {

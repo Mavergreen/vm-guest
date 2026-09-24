@@ -66,11 +66,18 @@ fi
 # The three primitives, switched once on whether a ref was given, so every
 # check below reads the same regardless of mode. Ref mode is exactly what
 # `git archive` packages; no-ref mode is the index, today's behavior.
+#
+# Index mode spells stage 0 out -- ":0:$1", not ":$1". Git reads ":0:evil"
+# as stage 0 of "evil", so a tracked file NAMED "0:evil" was never read:
+# with a benign "evil" beside it, the byte check looked at the wrong blob
+# and a Mach-O in "0:evil" passed (MEASURED, final review). With the stage
+# given, everything after the second colon is the path. Ref mode's
+# "<sha>:<path>" never had that ambiguity and is unchanged.
 blob_show() {  # $1 = path -- the committed content, never the working tree
     if [ -n "$MQG_NAB_REF" ]; then
         git show "$MQG_NAB_REF:$1" 2>/dev/null
     else
-        git show ":$1" 2>/dev/null
+        git show ":0:$1" 2>/dev/null
     fi
 }
 
@@ -78,7 +85,7 @@ blob_size() {  # $1 = path
     if [ -n "$MQG_NAB_REF" ]; then
         git cat-file -s "$MQG_NAB_REF:$1" 2>/dev/null
     else
-        git cat-file -s ":$1" 2>/dev/null
+        git cat-file -s ":0:$1" 2>/dev/null
     fi
 }
 
@@ -86,7 +93,7 @@ blob_exists() {  # $1 = path -- true only if the blob can actually be read
     if [ -n "$MQG_NAB_REF" ]; then
         git cat-file -e "$MQG_NAB_REF:$1" 2>/dev/null
     else
-        git cat-file -e ":$1" 2>/dev/null
+        git cat-file -e ":0:$1" 2>/dev/null
     fi
 }
 
@@ -120,6 +127,16 @@ else
         || die "git ls-files failed -- cannot verify, which is a failure," \
                "never a pass"
 fi
+
+# Nothing listed is nothing checked. An empty or missing index (a fresh
+# `git init`, or everything `git rm --cached`) used to end in "no
+# Apple-derived bytes in the tracked tree (0 files)" and exit 0 -- a pass
+# on a check that looked at nothing. Applied in both modes: a ref whose
+# tree is empty is not a release anyone can have meant either.
+nfiles=$(tr -cd '\0' < "$MQG_NAB_LIST" | wc -c | tr -d ' ')
+[ "$nfiles" -gt 0 ] \
+    || die "no tracked files to check -- cannot verify, which is a failure," \
+           "never a pass"
 
 status=0
 flag() {
@@ -239,7 +256,6 @@ EOF
 fi
 
 if [ "$status" -eq 0 ]; then
-    nfiles=$(tr -cd '\0' < "$MQG_NAB_LIST" | wc -c)
     log "no Apple-derived bytes in the tracked tree ($nfiles files)"
 else
     die "the tracked tree carries Apple-derived bytes. A release of this" \
