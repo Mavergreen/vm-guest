@@ -12,6 +12,17 @@ worse than an honest blank.
 The pin registry is `vendor/sources.tsv`: name, URL, sha256. The checksum
 is the identity; the URL is only how to get it.
 
+## Declared state
+
+A release is the realisation of a declared state, not the side effect of a
+push. These are the inputs whose movement should cut one. Deliberately a
+SUBSET of the registry table above: `bats` moving must never cut a release.
+
+- upstream: UPSTREAM_VERSION
+- pins: vendor/sources.tsv
+- openssh: components/openssh/version
+- opencore-config: boot/config/config.plist
+
 ## What a bump does here is not what it does in a sibling
 
 **This is the one place this repository genuinely differs from the family,
@@ -74,20 +85,51 @@ by the third one. `image-staleness.sh` is cheap to call from a wrapper, a
 pipeline or a shell prompt if that turns out to be wanted; the mechanism
 does not presuppose the policy.
 
-### `repackage-on-ingredient-bump`: not applicable, and why
+### `repackage-on-ingredient-bump`: no caller declared, and a narrower reason than it used to be
 
-The family's caller **does not apply to this repository.** Recording that
-explicitly rather than omitting it silently, per the skill's instruction:
+**The old argument, and why it was right for the world it was written in.**
+This section used to say the family's caller does not apply here at all:
+its whole job is to dispatch a release so a **new artifact** ships with the
+bumped ingredient, and we publish no artifact for an ingredient to get
+baked into — there was nothing to repackage. That was written when there
+was no release mechanism of any kind, and for that world it was correct.
 
-- The caller's whole job is to dispatch `release.yml` so a **new artifact**
-  ships with the new ingredient. We publish no artifact for an ingredient
-  to get baked into. There is nothing to repackage.
-- Its companion version axis, `-mavericks.N`, we do not use either — see
-  the deviations block below.
+**What changed is not the product. It is what "artifact" means once a
+release exists.** `docs/decisions/0012-version-scheme.md` gives the
+version scheme a release actually cuts on, and once that exists, what gets
+published is the **recipe** — `bin/vmavs` and everything it drives —
+never the image, per `bin/no-apple-bytes.sh`. A moved pin is exactly what
+changes what that recipe builds. Someone who installs `vmavs` at last
+month's release runs last month's OpenCore pin from then on, silently,
+which is staleness in the only sense a published recipe can have it. That
+is precisely the case the family's caller exists to catch, so "does not
+apply" was too broad a claim; "no caller is declared yet" is the accurate
+one.
+
+**What is still true, unchanged by any of this:**
+
+- The manifest mechanism in the section above is the actual fix, and it
+  does not depend on whether anything is published: every pin lands in
+  the manifest (1), `image/compare-images.sh` names what differs between
+  two images (2), and `bin/image-staleness.sh` (3) answers whether a
+  built image still matches the repository — a question worth asking
+  whether or not a release exists.
+- **A moved pin invalidates every golden image already on disk regardless
+  of publishing.** That was true before this file existed and stays true
+  whether or not a release ever ships.
+- **No caller exists to be declared yet, because no `release.yml` exists
+  yet.** Phase C — release packaging and distribution — is designed but
+  deliberately unscheduled (`docs/superpowers/plans/2026-09-22-shipping-vmavs.md`);
+  P10 is blocked on P9, and P9 is itself blocked on a decision. Nothing
+  here should be read as claiming a caller or a release workflow is
+  wired up.
 - `check-ingredient-pins.sh` runs in CI anyway
-  (`.github/workflows/ci.yml`). It passes trivially for a repo with no
-  caller. It is wired now so that the day P6 adds `release.yml` and a
-  caller becomes meaningful, the gate is already watching.
+  (`.github/workflows/ci.yml`). It passes trivially for a repo declaring
+  no caller. It is wired now so that the day a caller lands, the gate is
+  already watching it.
+
+The Sparkle deviation two lines below this section is untouched by any of
+this — it was never an argument about publishing.
 
 ## The registry
 
@@ -135,8 +177,9 @@ where the reasoning lives. Scoped to filename globs, each with a reason --
 `deviations.sh` rejects an entry that has no reason, because an exception
 without one is indistinguishable from drift.
 
-- version-scheme:image/build-image.sh: there is no single upstream to name. OpenCore, EDK II, QEMU and Apple's 10.9.5 move independently, so `<upstream>-mavericks.N` has no slot to fill; the host-side tool versions on its own and this file carries which ingredient moved
-- version-scheme:vm/*.sh: same reason -- the host-side tool is one product across these files, and a deviation scoped to only one of them would quietly license the rest to drift
+- version-scheme:bin/vmavs: this product is its own upstream, not a repackage of somebody else's release, so it takes the family's SELF-UPSTREAM shape (`YYYYMMDD.N`, as `mavericks-porthole` does) rather than `<upstream>-mavericks.N`. The suffix means "our Nth repackage of someone else's thing" and there is no such thing here; `docs/decisions/0012-version-scheme.md` has the reasoning
+- version-scheme:image/build-image.sh: same product, same reason, scoped the same way so a deviation on one file cannot quietly license the rest to drift
+- version-scheme:vm/*.sh: same product, same reason, scoped the same way so a deviation on one file cannot quietly license the rest to drift
 - sparkle-updater:image/build-image.sh: Sparkle is a macOS framework and the host-side tool's primary hosts are Linux and NetBSD. The guest-side payload, which IS a 10.9 .pkg, takes the family's Sparkle shape unchanged
 - sparkle-updater:vm/*.sh: same product, same reason, scoped the same way
 

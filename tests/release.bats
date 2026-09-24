@@ -307,6 +307,55 @@ print('ok')
     [ "$output" = "1" ]
 }
 
+# --- Task 11: declared state, and a narrower version-scheme deviation -----
+
+@test "INGREDIENTS.md declares a release state, with exactly one upstream entry" {
+    run bash -c "sed -n '/^## Declared state/,/^## /p' '$REPO/INGREDIENTS.md' \
+        | grep -c '^- upstream: '"
+    [ "$output" = "1" ]
+}
+
+@test "the declared upstream is the file build/version.sh reads" {
+    # release-state.sh exits 2 when these disagree, nightly, from its
+    # first run. Catch it here instead.
+    run bash -c "sed -n '/^## Declared state/,/^## /p' '$REPO/INGREDIENTS.md' \
+        | sed -n 's/^- upstream: //p'"
+    [ "$output" = "UPSTREAM_VERSION" ]
+    [ -f "$REPO/UPSTREAM_VERSION" ]
+}
+
+@test "no prose line in the declared-state section starts with a dash and a colon" {
+    # A dash-line containing a colon is parsed as an entry. If the text
+    # after the colon happens to name a real file, the digest silently
+    # gains an entry nobody intended -- the failure mode the whole design
+    # exists to prevent.
+    run bash -c "sed -n '/^## Declared state/,/^## /p' '$REPO/INGREDIENTS.md' \
+        | grep '^- ' | grep -cvE '^- (upstream|pins|openssh|opencore-config): '"
+    [ "$output" = "0" ]
+}
+
+@test "every declared-state path exists" {
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        [ -e "$REPO/$p" ] || { echo "declared but absent: $p"; false; }
+    done < <(sed -n '/^## Declared state/,/^## /p' "$REPO/INGREDIENTS.md" \
+             | sed -n 's/^- [a-z-]*: //p' | cut -d: -f1)
+}
+
+@test "the version-scheme deviation names the self-upstream shape, not a bare refusal" {
+    run bash -c "sed -n '/^## Conformance deviations/,/^## /p' '$REPO/INGREDIENTS.md' \
+        | grep '^- version-scheme' | grep -ci 'self-upstream'"
+    [ "$output" -ge 1 ]
+}
+
+@test "every declared deviation still carries a reason" {
+    run bash -c "
+        sed -n '/^## Conformance deviations/,/^## /p' '$REPO/INGREDIENTS.md' \
+        | grep '^- ' \
+        | grep -cvE '^- [a-z][a-z0-9_-]*(:[^ :]+)?: +\\S'"
+    [ "$output" = "0" ]
+}
+
 # --- Task 9: the README as product documentation ---------------------------
 
 @test "the README leads with what the tool does, not with the host it was built on" {
