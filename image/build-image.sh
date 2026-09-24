@@ -42,6 +42,8 @@ export MQG_REPO_ROOT
 . "$MQG_REPO_ROOT/lib/cpu.sh"
 # shellcheck source=../lib/smbios.sh
 . "$MQG_REPO_ROOT/lib/smbios.sh"
+# shellcheck source=../lib/sshkey.sh
+. "$MQG_REPO_ROOT/lib/sshkey.sh"
 
 # Used by log()/warn()/die() in lib/common.sh, which read it at call time.
 # shellcheck disable=SC2034
@@ -846,11 +848,12 @@ stage_efi() {
 resolve_ssh_key() {
     local mode=${1:-strict}
     if [ -z "$ssh_key" ]; then
-        for candidate in "$HOME"/.ssh/id_*.pub "$MQG_IMAGE_DIR"/keys/*.pub; do
-            [ -f "$candidate" ] || continue
-            ssh_key=$candidate
-            break
-        done
+        # sshkey_find's own `return 1` only ends the command-substitution
+        # subshell below, not this function -- the explicit `|| true`
+        # stops that from tripping `set -e` when no candidate exists,
+        # which is an ordinary outcome here (--generate-ssh-key, or the
+        # strict die below, handle it from there).
+        ssh_key=$(sshkey_find) || true
     fi
     # `soft` never generates, even with --generate-ssh-key: --freshness
     # says it touches nothing, and inventing a secret is not nothing.

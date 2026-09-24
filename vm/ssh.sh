@@ -22,6 +22,8 @@ set -euo pipefail
 MQG_REPO_ROOT=${MQG_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 # shellcheck source=../lib/common.sh
 . "$MQG_REPO_ROOT/lib/common.sh"
+# shellcheck source=../lib/sshkey.sh
+. "$MQG_REPO_ROOT/lib/sshkey.sh"
 # shellcheck disable=SC2034
 MQG_LOG_PREFIX=ssh
 
@@ -50,10 +52,10 @@ usage: vmavs ssh [--port N] [--user U] [--key PATH] [--dry-run] [-- <ssh args>]
   --key PATH   PRIVATE key whose public half the image authorized.
                Default: \$MQG_SSH_KEY, else the private half of whatever
                public key image/build-image.sh's own resolve_ssh_key would
-               have picked to authorize -- the first of \$HOME/.ssh/id_*.pub
-               or \$MQG_IMAGE_DIR/keys/*.pub that has a private half beside
-               it. Same search, same order, so this defaults to the key
-               that is actually in the image rather than guessing.
+               have picked to authorize (lib/sshkey.sh's sshkey_find --
+               the same function, so this can never pick a different key
+               than the one actually in the image). Dies naming the
+               public key if its private half is not beside it.
   --dry-run    Print the ssh command line and exit. Connects to nothing.
 
 Everything after -- is passed to ssh as-is (e.g. a remote command).
@@ -64,20 +66,26 @@ EOF
     shift
 done
 
-# Mirrors image/build-image.sh's resolve_ssh_key search, which is what
-# picks the public key to AUTHORIZE in the image: $HOME/.ssh/id_*.pub, then
-# $MQG_IMAGE_DIR/keys/*.pub (where --generate-ssh-key writes mqg_rsa.pub).
-# That function looks for a PUBLIC key to hand the guest; this one needs
-# the PRIVATE half to hand ssh, so each candidate is tried only if its
-# private half (the same path with .pub stripped) is also there.
+# lib/sshkey.sh's sshkey_find is the SAME search image/build-image.sh's
+# own resolve_ssh_key uses to pick the public key it AUTHORIZES in the
+# image -- one function, shared, so this can never quietly drift from
+# what the image actually accepts. That function returns a PUBLIC key;
+# this needs the PRIVATE half to hand ssh, so the candidate is used only
+# if its private half (the same path with .pub stripped) is also there.
 if [ -z "$key" ]; then
-    for pub in "$HOME"/.ssh/id_*.pub "$MQG_IMAGE_DIR"/keys/*.pub; do
-        [ -f "$pub" ] || continue
+    pub=$(sshkey_find) || pub=
+    if [ -n "$pub" ]; then
         priv=${pub%.pub}
-        [ -f "$priv" ] || continue
+        # sshkey_find returns exactly the key resolve_ssh_key would have
+        # authorized, and only that one -- not a different candidate that
+        # merely happens to have a private half. A public key with no
+        # private half beside it is a real problem to report, not one to
+        # paper over by silently trying something the image never got.
+        [ -f "$priv" ] || die "the image's authorized key is $pub, but its" \
+            "private half ($priv) is not there. Pass --key PATH for a" \
+            "different key."
         key=$priv
-        break
-    done
+    fi
 fi
 [ -n "$key" ] || die "no ssh key found; pass --key PATH (or set \$MQG_SSH_KEY)"
 [ -e "$key" ] || die "no such key: $key"
