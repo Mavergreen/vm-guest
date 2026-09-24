@@ -6484,3 +6484,68 @@ read that way.
 
 Full suite green (643/643, 0 skipped) including the new `tests/emit.bats`
 (12 tests) and the extended `bin/tier-check.sh --strict`.
+
+## 2026-09-24 — shipping-vmavs Task 6 fix round 1 — the drive-drop claim above was wrong
+
+A stronger-model review of the entry above found seven Important issues in
+`emit/packer.sh`. This entry corrects the one this file's own append-only
+rule requires a correction for, rather than an edit: **"the two drives
+Packer's own fields replace" was not true.**
+
+**What was claimed.** The 2026-09-24 entry above (and the template's own
+header, at the time) said the installer media (`id=installer`) and the
+target disk (`id=target`) were DROPPED from `qemuargs`, on the theory that
+Packer's `iso_url` and `disk_size` fields would supply equivalent
+first-class attachment on their own.
+
+**Why it was wrong.** packer-plugin-qemu's own documented behavior: ANY
+`-drive` placed in `qemuargs` replaces ALL of the builder's default
+`-drive` arguments, and any `-device` there replaces its default `-device`
+arguments too. This template always has at least one `-drive` of its own
+(the OVMF CODE/VARS pflash pair -- there is no first-class field for that
+at all), so `qemuargs` was already in full-override mode, and dropping the
+installer/target pair meant Packer would never have attached either --
+not "attached them itself instead," attached NEITHER. Separately, `iso_url`
+attaches as a CD-ROM by default, which OpenCore's ScanPolicy here
+(HFS+-on-SATA only) does not see -- p4-linuxmedia.args' own comment on its
+`installer` drive already says so, which is exactly why P2 replaced
+`ide-cd` with `ide-hd` for the real build in the first place. And Packer's
+own default `disk_interface` is virtio, which 10.9 cannot see either. Three
+independent ways the dropped version would not have booted, none of them
+caught because nothing has run `packer build` against this file.
+
+**What the template does now.** Both drives are KEPT in `qemuargs`, not
+dropped, each rewritten from the profile's own line: the installer's
+`file=` points at `${var.media}` (the same file `iso_url` also names, most
+likely redundantly -- flagged as such); the target's `file=` points at
+`output-mavericks/mavericks.qcow2`, packer-plugin-qemu's documented
+`<output_directory>/<vm_name>.<format>` naming for the disk it would
+otherwise have created and attached itself, with `output_directory` and
+`vm_name` now set explicitly in the source block so that path is
+self-consistent with what the rest of the file declares. The whole drive
+mapping is labelled REASONED in both the header and `--describe`, not
+MEASURED -- it has never been checked against a real `packer build` either,
+and is if anything less certain than the field-name/nesting question
+`--check` already existed to close.
+
+**Also fixed in the same pass**, since a stronger-model review caught them
+alongside the drive-drop claim: `variable "x" { type = string description
+= "..." }` is invalid HCL (attributes inside a block need their own line,
+not to be packed onto one); `machine_type`/`cpu_model`/`memory`/`cpus`
+provenance is now derived per-profile (MEASURED when the named profile's
+own file sets the flag, INHERITED when only its `@include` does, REASONED
+when neither does and a fallback default was used) instead of hardcoded,
+and the NIC/port-forward description is read from the profile's actual
+`-netdev`/`-device` pair instead of assuming `usb-net`/`2222` for every
+profile (p3-full uses `e1000-82545em` with no hostfwd at all, and the
+template now says so rather than fabricating one); the script now refuses
+outright to emit anything for a profile whose own expansion reaches into
+the Tier 2 quarantine, rather than relying solely on `bin/tier-check.sh`
+catching an already-written file after the fact; and the `id=` extraction
+that used to lean on GNU sed's `\b` (silently empty on BSD/macOS sed, which
+would have leaked an absolute host path into an emitted template
+unnoticed) is now pure bash, comma-splitting the option string.
+
+Full suite green (645/645, 0 skipped) after this round; see the fix-round-1
+section of the shipping-vmavs Task 6/7 report for the RED/GREEN detail per
+finding.
