@@ -122,10 +122,15 @@ PY
     done
     run env PATH="$STUB" \
         "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" --check
-    # Cannot-verify is never a pass.
+    # Cannot-verify is never a pass. Checking "packer" and "not" as two
+    # separate substrings would also be satisfied by bash's own "packer:
+    # command not found" if this script ever called the bare command
+    # instead of checking with `command -v` first -- which is precisely
+    # the failure this stub PATH exists to distinguish from a real,
+    # deliberate refusal. Asserting the specific "not installed" phrase
+    # from this script's own die message pins it to that refusal.
     [ "$status" -ne 0 ]
-    [[ "$output" == *"packer"* ]]
-    [[ "$output" == *"not"* ]]
+    [[ "$output" == *"packer is not installed"* ]]
 }
 
 @test "emit refuses a profile that does not exist, and lists the ones that do" {
@@ -181,6 +186,64 @@ PY
     [[ "$cpu_row" != *"MEASURED"* ]]
     machine_row=$(printf '%s\n' "$output" | grep -A1 '  machine_type')
     [[ "$machine_row" == *"REASONED"* ]]
+}
+
+@test "a value two @include hops away is kept, not overwritten by a fallback" {
+    # Fix-round-2 finding: value_source originally looked only ONE level
+    # of @include deep, and the code that decided whether to apply a
+    # fallback default trusted that shallow check -- so a value arriving
+    # through a SECOND @include hop (deep -> p4-linuxmedia -> base-kvm)
+    # was treated as absent and OVERWRITTEN with the wrong default, even
+    # though profile_expand (fully recursive) had already parsed the
+    # right one. This scratch tree reproduces exactly that shape: a
+    # "deep" profile that only @includes p4-linuxmedia (itself unmodified
+    # -- it sets -machine/-cpu directly, one hop from "deep"), whose own
+    # @include base-kvm is replaced here with a scratch copy carrying -m
+    # 8192 instead of the real 4096, so a pass that accidentally read the
+    # real vm/profiles/base-kvm.args instead of this scratch one would be
+    # caught by the wrong number.
+    SCRATCH="$BATS_TEST_TMPDIR/profiles"
+    mkdir -p "$SCRATCH"
+    cp "$REPO/vm/profiles/p4-linuxmedia.args" "$SCRATCH/p4-linuxmedia.args"
+    printf '%s\n' '-enable-kvm' '-m' '8192' '-smp' '2' > "$SCRATCH/base-kvm.args"
+    printf '%s\n' '@include p4-linuxmedia' > "$SCRATCH/deep.args"
+
+    run env PROFILE_DIR="$SCRATCH" \
+        "$VMAVS" emit packer --profile deep --describe
+    [ "$status" -eq 0 ]
+
+    # memory: two hops away (deep -> p4-linuxmedia -> base-kvm). Must be
+    # the scratch base-kvm's real value (8192), and must NOT be
+    # REASONED/fallback -- it plainly is not absent.
+    mem_row=$(printf '%s\n' "$output" | grep -A1 '  memory')
+    [[ "$mem_row" == *"8192"* ]]
+    [[ "$mem_row" != *"REASONED"* ]]
+    [[ "$mem_row" == *"INHERITED"* ]]
+
+    # machine_type: one hop away (deep -> p4-linuxmedia, which sets
+    # -machine directly). A regression here would mean the fix broke the
+    # already-working one-hop case while fixing the two-hop one.
+    machine_row=$(printf '%s\n' "$output" | grep -A1 '  machine_type')
+    [[ "$machine_row" == *"vmport=off"* ]]
+    [[ "$machine_row" != *"REASONED"* ]]
+}
+
+@test "a value two @include hops away survives into the written template too" {
+    # Same scratch tree as the --describe test above, this time checking
+    # the emitted file itself rather than --describe's report.
+    SCRATCH="$BATS_TEST_TMPDIR/profiles"
+    mkdir -p "$SCRATCH"
+    cp "$REPO/vm/profiles/p4-linuxmedia.args" "$SCRATCH/p4-linuxmedia.args"
+    printf '%s\n' '-enable-kvm' '-m' '8192' '-smp' '2' > "$SCRATCH/base-kvm.args"
+    printf '%s\n' '@include p4-linuxmedia' > "$SCRATCH/deep.args"
+
+    run env PROFILE_DIR="$SCRATCH" \
+        "$VMAVS" emit packer --profile deep --out "$OUT"
+    [ "$status" -eq 0 ]
+    run grep -c 'memory       = 8192' "$OUT"
+    [ "$output" = "1" ]
+    run grep -c 'machine_type = "q35,vmport=off"' "$OUT"
+    [ "$output" = "1" ]
 }
 
 @test "emit refuses a profile that expands into the Tier 2 quarantine" {

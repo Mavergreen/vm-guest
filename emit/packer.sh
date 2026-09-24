@@ -146,18 +146,29 @@ profile_commit() {
 # unconditionally INHERITED, regardless of what the named profile actually
 # contained -- so a profile with no -cpu of its own (falling back to this
 # script's default) was still labelled MEASURED, and a profile with no
-# hostfwd was handed a fabricated one. These three functions answer "which
+# hostfwd was handed a fabricated one. These functions answer "which
 # FILE, if any, sets this flag" by reading each candidate .args file's own
 # RAW lines -- never profile_expand's output, which is deliberately
 # flattened and cannot say which file a line came from -- so the label
 # always matches the value that was actually used.
 #
-# One level of @include only: every profile in this project today includes
-# at most one file (`@include base-kvm`), and going further would mean
-# walking an arbitrary include graph for a label, not a value. A deeper
-# include chain would still get the right VALUE (profile_expand handles
-# that recursively) but might report a less specific provenance than the
-# truth -- flagged here rather than silently assumed away.
+# Fix-round-2 finding: the first version of this section only looked ONE
+# level of @include deep, and -- far worse than a label mismatch -- the
+# code that APPLIED a fallback default trusted that shallow check to mean
+# "this value is absent", overwriting an already-correctly-parsed value
+# with the wrong default whenever a flag arrived through a SECOND @include
+# hop (profile_expand itself is fully recursive and has no such depth
+# limit, so the VALUE was always right; only the shallow provenance check
+# was wrong, and it was trusted for more than a label). value_source below
+# now walks the full @include chain, recursively, with the same textual
+# cycle guard lib/profile.sh's own profile_expand uses -- so a value ten
+# @includes deep is still attributed to the actual file that sets it,
+# never "absent". Separately, and now the ONLY thing that decides whether
+# a fallback default is applied at all: the fallback blocks after the
+# parsing loop below check whether the PARSED VALUE is empty, never
+# value_source's report -- value_source exists purely to label an
+# already-resolved value, and must never be consulted to decide whether
+# to overwrite one.
 
 # profile_raw_flags <path> -- the flag lines (not their values) of ONE
 # .args file, as literally written -- comments and blank lines dropped,
@@ -204,8 +215,9 @@ EOF
     return 1
 }
 
-# profile_includes <path> -- the names on this file's own `@include`
-# lines, one per line. One level, as above.
+# profile_includes <path> -- the names on THIS file's own `@include`
+# lines, one per line -- one level; the recursion that reaches deeper
+# ones lives in value_source_walk below, not here.
 profile_includes() {
     local path=$1 line included
     while IFS= read -r line || [ -n "$line" ]; do
@@ -220,22 +232,52 @@ profile_includes() {
     done < "$path"
 }
 
-# value_source <flag> -- "profile", "include:NAME", or "absent" (the
-# caller decides what "absent" means: a fallback default, applied and
-# labelled as such). Checked against the CURRENT --profile.
+# value_source <flag> -- "profile", "include:NAME", or "absent". "NAME" is
+# whichever file in the @include chain ACTUALLY sets the flag, however
+# many hops deep that is -- see value_source_walk. The caller decides what
+# "absent" means (a fallback default), but per the fix-round-2 comment
+# above, "absent" from THIS function must never be what triggers applying
+# one; only the parsed value being empty may do that.
 value_source() {
-    local flag=$1 inc
-    if profile_sets_flag "$profile" "$flag"; then
-        printf 'profile\n'
+    local flag=$1 found
+    if found=$(value_source_walk "$profile" "$flag" ""); then
+        printf '%s\n' "$found"
+    else
+        printf 'absent\n'
+    fi
+}
+
+# value_source_walk <profile-name> <flag> <chain> -- depth-first search of
+# the @include graph starting at <profile-name> for the first file (that
+# name itself, then its includes, then their includes, ...) that sets
+# <flag> directly. <chain> is the colon-delimited list of names already
+# visited on this path, in the exact shape lib/profile.sh's own
+# profile_expand uses for its cycle guard -- borrowed rather than
+# reinvented, because an include cycle here would otherwise recurse
+# forever exactly the way it would there.
+value_source_walk() {
+    local name=$1 flag=$2 chain=$3 inc sub
+
+    case ":$chain:" in
+        *":$name:"*) return 1 ;;
+    esac
+
+    if profile_sets_flag "$name" "$flag"; then
+        if [ "$name" = "$profile" ]; then
+            printf 'profile\n'
+        else
+            printf 'include:%s\n' "$name"
+        fi
         return 0
     fi
-    for inc in $(profile_includes "$(profile_path "$profile")"); do
-        if profile_sets_flag "$inc" "$flag"; then
-            printf 'include:%s\n' "$inc"
+
+    for inc in $(profile_includes "$(profile_path "$name")"); do
+        if sub=$(value_source_walk "$inc" "$flag" "$chain:$name"); then
+            printf '%s\n' "$sub"
             return 0
         fi
     done
-    printf 'absent\n'
+    return 1
 }
 
 # source_label <provenance> -- the MEASURED/INHERITED/REASONED word plus a
@@ -274,13 +316,17 @@ while IFS= read -r eline; do
 done < <(profile_expand "$profile")
 
 # Refuse outright if the profile's OWN expansion reaches into the Tier 2
-# quarantine. bin/tier-check.sh --strict scans emit/'s OUTPUT for this
-# same path, but that is a second line of defense that only catches an
-# already-written file; a profile with a %VENDOR% placeholder would
-# otherwise sail straight through emit with exit 0 and a quarantine path
-# sitting in qemuargs. This is the first line of defense, and it is not
-# optional. Fix-round-1 finding: an earlier version of this script had no
-# such check at all.
+# quarantine. bin/tier-check.sh --strict separately scans emit/ itself --
+# the GENERATOR's own source text (this script, and anything else that
+# lives under emit/), not anything it writes at runtime to wherever --out
+# points -- for the same path, which only catches this script's own
+# source ever hardcoding a quarantine reference. That is a different
+# failure from a QUARANTINED PROFILE being faithfully copied into
+# someone's --out file; without the check right here, a profile with a
+# %VENDOR% placeholder would sail straight through emit with exit 0 and a
+# quarantine path sitting in qemuargs, and nothing under emit/ itself
+# would ever show it. This is the check that catches that. Fix-round-1
+# finding: an earlier version of this script had no such check at all.
 expanded_text=$(printf '%s\n' "${expanded[@]+"${expanded[@]}"}")
 if [ "${expanded_text#*"$MQG_VENDOR_DIR/"}" != "$expanded_text" ]; then
     die "profile '$profile' expands into the Tier 2 quarantine" \
@@ -420,33 +466,41 @@ while [ "$i" -lt "$n" ]; do
     esac
 done
 
-# --- resolve provenance, applying fallbacks only where the profile (and
-# its one level of @include) truly set nothing ---------------------------
+# --- resolve provenance, applying fallbacks only where the PARSED VALUE
+# is truly empty -- never where value_source merely reports "absent" -----
+#
+# Fix-round-2: this is the one thing that changed behaviorally. The
+# parsing loop above already produced the right VALUE regardless of
+# @include depth (profile_expand is fully recursive); value_source's job
+# below is now ONLY to label that value for --describe and the emitted
+# header, never to decide whether a fallback default overwrites it. `[ -z
+# "$machine" ]` etc. ask the one question that actually matters: did the
+# parsing loop find this flag ANYWHERE, at any depth.
 
 machine_prov=$(value_source -machine)
-if [ "$machine_prov" = absent ]; then
+if [ -z "$machine" ]; then
     machine=q35
-    machine_prov="fallback:no -machine line in this profile or its @include; using this script's own q35 default"
+    machine_prov="fallback:no -machine line anywhere in this profile's @include chain; using this script's own q35 default"
 fi
 
 cpu_prov=$(value_source -cpu)
-if [ "$cpu_prov" = absent ]; then
+if [ -z "$cpu" ]; then
     cpu=$MQG_CPU_DEFAULT
-    cpu_prov="fallback:no -cpu line in this profile or its @include; using lib/cpu.sh's MQG_CPU_DEFAULT (docs/decisions/0009)"
+    cpu_prov="fallback:no -cpu line anywhere in this profile's @include chain; using lib/cpu.sh's MQG_CPU_DEFAULT (docs/decisions/0009)"
 fi
 
 mem_prov=$(value_source -m)
-if [ "$mem_prov" = absent ]; then
+if [ -z "$mem" ]; then
     mem=$(build_image_default ram)
     [ -n "$mem" ] || mem=4096
-    mem_prov="fallback:no -m line in this profile or its @include; using image/build-image.sh's own ram default"
+    mem_prov="fallback:no -m line anywhere in this profile's @include chain; using image/build-image.sh's own ram default"
 fi
 
 smp_prov=$(value_source -smp)
-if [ "$smp_prov" = absent ]; then
+if [ -z "$smp" ]; then
     smp=$(build_image_default smp)
     [ -n "$smp" ] || smp=2
-    smp_prov="fallback:no -smp line in this profile or its @include; using image/build-image.sh's own smp default"
+    smp_prov="fallback:no -smp line anywhere in this profile's @include chain; using image/build-image.sh's own smp default"
 fi
 
 disk_gb=$(build_image_default disk_gb)
