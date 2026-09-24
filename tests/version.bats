@@ -78,6 +78,15 @@ ver() { ( cd "$DIR" && sh build/version.sh "$1" ); }
     [ "$output" = "20260922.1" ]
 }
 
+@test "VERSION_NO_WRITE=1 prints the same version and writes no VERSION" {
+    # For `vmavs version`, which must work in a read-only checkout. The
+    # release path does not set it; the test above covers that it writes.
+    run env VERSION_NO_WRITE=1 sh -c "cd '$DIR' && sh build/version.sh auto"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"FULL=20260922.1"* ]]
+    [ ! -e "$DIR/VERSION" ]
+}
+
 @test "an empty UPSTREAM_VERSION fails loudly and names the file" {
     # The family's rule: artifacts named with nothing in front look almost
     # right. "20260922." with no N is the same defect one axis over.

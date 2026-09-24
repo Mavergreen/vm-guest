@@ -12,6 +12,11 @@ teardown() {
     # next `git status`) to trip over. `rm -f` is a no-op for every other
     # test here, which never creates this file.
     rm -f "$REPO/VERSION"
+    # The read-only test below makes its tree unwritable; give it back so
+    # bats can delete $BATS_TEST_TMPDIR, pass or fail.
+    if [ -d "$BATS_TEST_TMPDIR/ro" ]; then
+        chmod -R u+w "$BATS_TEST_TMPDIR/ro"
+    fi
 }
 
 # Builds a tree with no .git, holding only what vmavs needs to run: itself,
@@ -98,7 +103,7 @@ setup_installed_tree() {
     # was first computed. A checkout is detected by $MQG_REPO_ROOT/.git
     # existing; there, version() must always recompute via
     # build/version.sh auto rather than trust a stale VERSION on disk.
-    [ -d "$REPO/.git" ] || skip "not a git checkout"
+    [ -e "$REPO/.git" ] || skip "not a git checkout"
     printf '19990101.1\n' > "$REPO/VERSION"
     run "$VMAVS" version
     [ "$status" -eq 0 ]
@@ -313,4 +318,27 @@ stage_names_in() {
     if printf '%s\n' "$output" | grep -qE '^ +vmavs ssh *$'; then
         echo "help offers a bare vmavs ssh"; false
     fi
+}
+
+@test "vmavs version answers in a read-only checkout, and writes nothing" {
+    # Final review, MEASURED: in a `chmod a-w` clone, `vmavs version`
+    # died "cannot create .../VERSION: Permission denied", rc=2, because
+    # build/version.sh wrote VERSION on every call. Reporting a version is
+    # a read. A throwaway git repo holding what version() needs, then
+    # made unwritable.
+    RO="$BATS_TEST_TMPDIR/ro"
+    mkdir -p "$RO/bin" "$RO/lib" "$RO/build"
+    cp "$REPO/bin/vmavs" "$RO/bin/"
+    cp "$REPO/lib/common.sh" "$RO/lib/"
+    cp "$REPO/build/version.sh" "$RO/build/"
+    printf '20260922\n' > "$RO/UPSTREAM_VERSION"
+    git -C "$RO" init -q
+    git -C "$RO" add -A
+    git -C "$RO" -c user.name=t -c user.email=t@example.invalid \
+        -c commit.gpgsign=false commit -qm fixture
+    chmod -R a-w "$RO"
+    run "$RO/bin/vmavs" version
+    [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [ "$output" = "20260922.1" ]
+    [ ! -e "$RO/VERSION" ]
 }

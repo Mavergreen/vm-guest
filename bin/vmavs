@@ -89,16 +89,19 @@ EOF
 
 version() {
     # A checkout (has .git) always recomputes via build/version.sh auto:
-    # that script writes VERSION on every call it makes, so if we trusted
-    # a pre-existing VERSION file in a checkout the way an installed tree
-    # does, the version would freeze at whatever was first computed and
-    # never move again as tags are added. An installed tree has no .git
-    # and no build/version.sh's git to query, so there VERSION beside
-    # this file is the only source of truth. Neither path is allowed to
+    # the release path has that script write VERSION on every call, so if
+    # we trusted a pre-existing VERSION file in a checkout the way an
+    # installed tree does, the version would freeze at whatever was first
+    # computed and never move again as tags are added. VERSION_NO_WRITE
+    # keeps this call a pure read, so a read-only checkout can answer
+    # too. An installed tree has no .git and no build/version.sh's git to
+    # query, so there VERSION beside this file is the only source of
+    # truth. Neither path is allowed to
     # print an empty string: a version that is silently blank is how an
     # artifact gets shipped labelled with nothing in front of the dot.
     if [ -e "$MQG_REPO_ROOT/.git" ]; then
-        v=$(MAVERICKS_ROOT="$MQG_REPO_ROOT" sh "$MQG_REPO_ROOT/build/version.sh" auto \
+        v=$(MAVERICKS_ROOT="$MQG_REPO_ROOT" VERSION_NO_WRITE=1 \
+                sh "$MQG_REPO_ROOT/build/version.sh" auto \
             | sed -n 's/^FULL=//p')
     else
         # No .git means no build/version.sh tags to query, so VERSION

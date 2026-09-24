@@ -66,5 +66,12 @@ else
 fi
 
 full="$base.$n"
-printf '%s\n' "$full" > "$MAVERICKS_ROOT/VERSION"
+# VERSION_NO_WRITE=1 computes and prints but writes nothing. `vmavs
+# version` sets it: reporting a version is a read, and a read-only
+# checkout must still answer (MEASURED, final review: a `chmod a-w`
+# clone failed with "cannot create .../VERSION: Permission denied"). The
+# release path leaves it unset, and VERSION is written as before.
+if [ "${VERSION_NO_WRITE:-0}" != 1 ]; then
+    printf '%s\n' "$full" > "$MAVERICKS_ROOT/VERSION"
+fi
 printf 'FULL=%s\nTAG=%s\nRELEASE=%s\n' "$full" "$full" "$release"
