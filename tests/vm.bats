@@ -86,3 +86,79 @@ verdict_of() {
     # And the no-PIL branch says the verdict still happened.
     grep -q 'the verdict above is unaffected' "$REPO/vm/screenshot.sh"
 }
+
+# --- vmavs ssh, run, clone --------------------------------------------------
+
+@test "vmavs ssh --dry-run prints the command and starts nothing" {
+    run "$REPO/bin/vmavs" ssh --dry-run --key /dev/null
+    [ "$status" -eq 0 ]
+    [[ "$output" == ssh\ * ]]
+    [[ "$output" == *"-p 2222"* ]]
+    [[ "$output" == *"mavsuser@127.0.0.1"* ]]
+}
+
+@test "vmavs ssh disables host key checking, because every clone has new keys" {
+    run "$REPO/bin/vmavs" ssh --dry-run --key /dev/null
+    [[ "$output" == *"StrictHostKeyChecking=no"* ]]
+    [[ "$output" == *"UserKnownHostsFile=/dev/null"* ]]
+}
+
+@test "vmavs ssh uses only the key it was given" {
+    # Without IdentitiesOnly a loaded agent offers every key it holds and
+    # the server closes the connection on MaxAuthTries before reaching the
+    # one the image authorized.
+    run "$REPO/bin/vmavs" ssh --dry-run --key /dev/null
+    [[ "$output" == *"IdentitiesOnly=yes"* ]]
+}
+
+@test "vmavs ssh honours --port, --user and --key" {
+    run "$REPO/bin/vmavs" ssh --dry-run --port 2299 --user ci --key /dev/null
+    [[ "$output" == *"-p 2299"* ]]
+    [[ "$output" == *"ci@127.0.0.1"* ]]
+}
+
+@test "vmavs ssh passes everything after -- to ssh" {
+    run "$REPO/bin/vmavs" ssh --dry-run --key /dev/null -- uname -a
+    [[ "$output" == *"uname -a"* ]]
+}
+
+@test "vmavs ssh refuses a key that is not there, naming it" {
+    run "$REPO/bin/vmavs" ssh --dry-run --key /nonexistent/id_ed25519
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"/nonexistent/id_ed25519"* ]]
+}
+
+@test "vmavs ssh defaults its key from \$MQG_SSH_KEY when no --key is given" {
+    run env MQG_SSH_KEY=/dev/null "$REPO/bin/vmavs" ssh --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"-i /dev/null"* ]]
+}
+
+@test "vmavs ssh finds a default key the same way build-image.sh's resolve_ssh_key does" {
+    # resolve_ssh_key (image/build-image.sh) picks the PUBLIC key it
+    # authorizes in the image by searching $HOME/.ssh/id_*.pub, then
+    # $MQG_IMAGE_DIR/keys/*.pub. vmavs ssh needs the PRIVATE half of
+    # whichever one that would have picked -- not a guess from a different
+    # search -- so it must find this pair through the same search, in the
+    # same order.
+    mkdir -p "$BATS_TEST_TMPDIR/home/.ssh"
+    printf 'private\n' > "$BATS_TEST_TMPDIR/home/.ssh/id_ed25519"
+    printf 'public\n' > "$BATS_TEST_TMPDIR/home/.ssh/id_ed25519.pub"
+    run env HOME="$BATS_TEST_TMPDIR/home" \
+        MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/images" \
+        "$REPO/bin/vmavs" ssh --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"-i $BATS_TEST_TMPDIR/home/.ssh/id_ed25519 "* ]]
+}
+
+@test "vmavs run lists the profiles when given none" {
+    run "$REPO/bin/vmavs" run
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"p4-linuxmedia"* ]]
+}
+
+@test "vmavs clone reaches vm/clone.sh" {
+    run "$REPO/bin/vmavs" clone
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"usage"* || "$output" == *"golden"* ]]
+}

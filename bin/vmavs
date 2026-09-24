@@ -135,6 +135,9 @@ case $cmd in
         stages "payload,media" "$@" ;;
     install) stages "target,install" "$@" ;;
     image) exec "$BUILD_IMAGE" "$@" ;;
+    run)   exec "$MQG_REPO_ROOT/vm/run.sh" "$@" ;;
+    clone) exec "$MQG_REPO_ROOT/vm/clone.sh" "$@" ;;
+    ssh)   exec "$MQG_REPO_ROOT/vm/ssh.sh" "$@" ;;
     *)
         if ! printf '%s\n' "$SUBCOMMANDS" | cut -d'|' -f1 | grep -qx "$cmd"; then
             printf 'vmavs: unknown subcommand: %s\n\n' "$cmd" >&2
