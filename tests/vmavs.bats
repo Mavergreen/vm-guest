@@ -222,19 +222,30 @@ stage_names_in() {
     run "$VMAVS" triangulate --help
     [ "$status" -eq 0 ]
     [[ "$output" == *"--probe"* ]]
-    # Isolated from whatever this host already has under its real
-    # $MQG_IMAGE_DIR: on a machine with a from-scratch build state (CI has
-    # none at all; a dev box may have a stale or a fresh one) the exact
-    # wording of --freshness's per-stage lines depends on what is already
-    # on disk. A brand-new, empty MQG_IMAGE_DIR is the one state every
-    # host -- including CI, which is the case this project has to hold --
-    # can be put into on demand, and it is the state build-image.sh
-    # --freshness itself documents: every stage reports "no output ...
-    # yet" and resolve_ssh_key(soft) warns about the missing key while
-    # naming the payload stage by name.
-    run env MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/no-image-dir" "$VMAVS" freshness
+    # Isolated from whatever this host already has, not just under its
+    # real $MQG_IMAGE_DIR but under its real $HOME too: fix-round-1
+    # finding -- isolating MQG_IMAGE_DIR alone still leaves
+    # lib/sshkey.sh's sshkey_find searching the invoking user's REAL
+    # ~/.ssh/id_*.pub, and on any host where that glob matches something,
+    # resolve_ssh_key(soft) finds a key, never warns, and the original
+    # loose "stage" or "would" substring check fails -- not because
+    # anything is wrong, but because the test depended on an unrelated
+    # fact about the host running it. Both MQG_IMAGE_DIR and HOME point
+    # at fresh, empty temp directories here, the one state every host --
+    # including CI, which starts with neither -- can be put into on
+    # demand. That state is also asserted STRUCTURALLY rather than with a
+    # loose substring: build-image.sh --freshness prints one
+    # "<stage><TAB><verdict><TAB><reason>" row per stage, and on a
+    # from-scratch image dir the "esd" stage's output file cannot exist
+    # yet, so its verdict is unconditionally "run" -- the same
+    # tab-separated shape every other reader of this output in this
+    # project (build-image.sh's own --freshness branch, stage_freshness)
+    # relies on.
+    run env HOME="$BATS_TEST_TMPDIR/no-home" \
+            MQG_IMAGE_DIR="$BATS_TEST_TMPDIR/no-image-dir" "$VMAVS" freshness
     [ "$status" -eq 0 ]
-    [[ "$output" == *"stage"* || "$output" == *"would"* ]]
+    echo "$output" | grep -qE '^esd[[:space:]]+run[[:space:]]+' \
+        || { echo "unexpected --freshness output:"; echo "$output"; false; }
 }
 
 @test "help keeps the ten from decisions/0007 separate from the rest" {

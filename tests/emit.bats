@@ -18,6 +18,33 @@ emit() { "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" "$@"; }
     [ "$output" = "1" ]
 }
 
+@test "no emitted line packs a multi-argument block onto one line" {
+    # HCL native syntax forbids `blockType "label" { a = 1  b = 2 }`
+    # (Packer's own error is "Invalid single-argument block definition")
+    # -- each attribute inside a block needs its own line. An earlier
+    # version of this template wrote every `variable "x" { type = ...
+    # description = ... }` exactly that way. A single-line object
+    # CONSTRUCTOR (e.g. `qemu = { source = "...", version = "..." }`,
+    # assigned to one attribute) is legitimate HCL as long as its entries
+    # are comma-separated, so this check only flags braces whose content
+    # has more than one `=` and no comma between them.
+    emit
+    run python3 - "$OUT" <<'PY'
+import re, sys
+bad = []
+for i, line in enumerate(open(sys.argv[1]), 1):
+    for m in re.finditer(r'\{([^{}]*)\}', line):
+        body = m.group(1)
+        if body.count('=') > 1 and ',' not in body:
+            bad.append((i, line.rstrip()))
+if bad:
+    for i, l in bad:
+        print(f"{i}: {l}")
+    sys.exit(1)
+PY
+    [ "$status" -eq 0 ]
+}
+
 @test "the template carries the CPU and SMBIOS this project measured" {
     emit
     run grep -c 'Penryn' "$OUT"
@@ -78,8 +105,22 @@ emit() { "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" "$@"; }
 }
 
 @test "--check says plainly that it could not validate when packer is absent" {
-    mkdir -p "$BATS_TEST_TMPDIR/empty"
-    run env PATH="$BATS_TEST_TMPDIR/empty:$PATH" \
+    # A PATH that merely prepends an empty directory hides nothing: if
+    # packer is installed anywhere ELSE on the real PATH, it is still
+    # found there. The stub PATH below holds symlinks to exactly the
+    # tools emit/packer.sh (and the libraries it sources) actually call --
+    # bash, env, dirname, cat, sed, tr, head, basename -- and nothing
+    # else, the same technique tests/doctor.bats uses to hide qemu. If
+    # this host happens to have packer installed, a prepend-only PATH
+    # would let this test pass for the wrong reason (or fail outright by
+    # actually invoking a real packer validate); the stub PATH does not
+    # have that failure mode.
+    STUB="$BATS_TEST_TMPDIR/stub-nopacker"
+    mkdir -p "$STUB"
+    for t in bash env dirname cat sed tr head basename; do
+        ln -s "$(command -v "$t")" "$STUB/$t"
+    done
+    run env PATH="$STUB" \
         "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" --check
     # Cannot-verify is never a pass.
     [ "$status" -ne 0 ]
@@ -100,12 +141,72 @@ emit() { "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" "$@"; }
     [[ "$output" == *"packer"* ]]
 }
 
+# --- fix round 1: drive mapping, provenance, and the Tier 2 quarantine -----
+
+@test "emit packer on p3-full derives its real NIC, and never fabricates a port forward" {
+    # p3-full uses e1000-82545em with no hostfwd at all -- unlike
+    # p4-linuxmedia, which uses usb-net with hostfwd tcp::2223-:22. An
+    # earlier version of this script hardcoded "usb-net" and defaulted a
+    # missing hostfwd to 2222, so EVERY profile's template claimed a
+    # forwarded port regardless of what that profile actually configures.
+    run "$VMAVS" emit packer --profile p3-full --out "$OUT"
+    [ "$status" -eq 0 ]
+    run grep -c 'e1000-82545em' "$OUT"
+    [ "$output" -ge 1 ]
+    run grep -c 'usb-net' "$OUT"
+    [ "$output" = "0" ]
+    run grep -c 'hostfwd=tcp::2222\|hostfwd=tcp::2223' "$OUT"
+    [ "$output" = "0" ]
+    # A comment MENTIONING ssh_host_port_min/max, to explain their
+    # absence, is fine (and expected) -- an actual assignment is not.
+    run grep -c '^[[:space:]]*ssh_host_port_m\(in\|ax\)[[:space:]]*=' "$OUT"
+    [ "$output" = "0" ]
+}
+
+@test "a value the profile does not set is labelled REASONED, not MEASURED" {
+    # A scratch profile with none of -machine/-cpu/-m/-smp/-netdev of its
+    # own (and no @include), so every one of those fields can only come
+    # from this script's or image/build-image.sh's fallback default --
+    # and --describe must say so, not claim MEASURED or INHERITED for a
+    # value nothing in vm/profiles/ actually set.
+    SCRATCH="$BATS_TEST_TMPDIR/profiles"
+    mkdir -p "$SCRATCH"
+    printf '%s\n' '# scratch profile: no -cpu/-machine/-m/-smp/-netdev of its own' \
+        '-display' 'none' > "$SCRATCH/scratch-minimal.args"
+    run env PROFILE_DIR="$SCRATCH" \
+        "$VMAVS" emit packer --profile scratch-minimal --describe
+    [ "$status" -eq 0 ]
+    cpu_row=$(printf '%s\n' "$output" | grep -A1 '  cpu_model')
+    [[ "$cpu_row" == *"REASONED"* ]]
+    [[ "$cpu_row" != *"MEASURED"* ]]
+    machine_row=$(printf '%s\n' "$output" | grep -A1 '  machine_type')
+    [[ "$machine_row" == *"REASONED"* ]]
+}
+
+@test "emit refuses a profile that expands into the Tier 2 quarantine" {
+    # A %VENDOR% placeholder in a profile is exactly what
+    # bin/tier-check.sh guards vm/profiles/ against; emit must refuse it
+    # at the source rather than faithfully copying a quarantine path into
+    # an emitted template. Proven with a scratch PROFILE_DIR -- nothing
+    # planted in the real vm/profiles/.
+    SCRATCH="$BATS_TEST_TMPDIR/profiles"
+    mkdir -p "$SCRATCH"
+    printf '%s\n' '-drive' 'file=%VENDOR%/some-reference.img' \
+        > "$SCRATCH/scratch-tier2.args"
+    run env PROFILE_DIR="$SCRATCH" MQG_VENDOR_DIR="$BATS_TEST_TMPDIR/vendor" \
+        "$VMAVS" emit packer --profile scratch-tier2 --out "$OUT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"scratch-tier2"* ]]
+    [[ "$output" == *"quarantine"* || "$output" == *"Tier 2"* ]]
+    [ ! -f "$OUT" ]
+}
+
 @test "tier-check covers emit/, so a template cannot reach into the Tier 2 quarantine" {
     run grep -c 'emit' "$REPO/bin/tier-check.sh"
     [ "$output" -ge 1 ]
 }
 
-@test "a template that reached into the Tier 2 quarantine fails tier-check --strict" {
+@test "tier-check flags a planted Tier 2 reference under emit/, names it, and a clean control passes" {
     # bin/tier-check.sh scans vm/profiles via PROFILE_DIR for references to
     # MQG_VENDOR_DIR; this task extends that same scan to emit/. Proven
     # against the REAL tier-check.sh, but pointed at a throwaway directory
@@ -118,4 +219,15 @@ emit() { "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" "$@"; }
     run env MQG_VENDOR_DIR="$MQG_VENDOR_DIR" MQG_TIER_EMIT_DIR="$EMITDIR" \
         "$REPO/bin/tier-check.sh" --strict
     [ "$status" -ne 0 ]
+    [[ "$output" == *"planted.hcl"* ]]
+
+    # Clean control: the SAME emit dir, holding only an inoffensive file,
+    # must pass -- proving the failure above is caused by the planted
+    # reference and not by some other property of a nonstandard
+    # MQG_TIER_EMIT_DIR (a missing directory, an empty one, etc).
+    rm -f "$EMITDIR/planted.hcl"
+    printf '# nothing interesting here\n' > "$EMITDIR/clean.hcl"
+    run env MQG_VENDOR_DIR="$MQG_VENDOR_DIR" MQG_TIER_EMIT_DIR="$EMITDIR" \
+        "$REPO/bin/tier-check.sh" --strict
+    [ "$status" -eq 0 ]
 }
