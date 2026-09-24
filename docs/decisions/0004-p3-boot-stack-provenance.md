@@ -26,7 +26,7 @@ Tiers are defined in the umbrella design, §4:
 
 ## The shipped boot path
 
-Everything `./vm/run.sh p3-full` touches before the macOS kernel starts.
+Everything `vmavs run p3-full` touches before the macOS kernel starts.
 Checksums are of the artifacts this host built or fetched on 2026-09-17.
 
 | Component | Tier | How it is obtained | Pinned to | sha256 |

@@ -49,6 +49,7 @@ set -euo pipefail
 MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/common.sh
 . "$MQG_REPO_ROOT/lib/common.sh"
+vmavs_hint triangulate
 # shellcheck source=../lib/triangulate.sh
 . "$MQG_REPO_ROOT/lib/triangulate.sh"
 # shellcheck source=../lib/cpu.sh

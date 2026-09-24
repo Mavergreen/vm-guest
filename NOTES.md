@@ -7,6 +7,12 @@ a dead end that isn't written down gets walked into twice.
 Format per entry: date, phase, what was attempted, the exact command, the
 outcome, and the conclusion drawn.
 
+**2026-09-24:** entries below dated before this one name the scripts they
+ran directly (`image/build-image.sh`, `bin/triangulate.sh`, and so on)
+because that was the documented interface at the time. `vmavs` is now the
+front door — see `bin/vmavs help` — and the scripts are unchanged behind
+it. This log is append-only; the entries below are not rewritten.
+
 ---
 
 ## 2026-09-17 — P0 — host probe

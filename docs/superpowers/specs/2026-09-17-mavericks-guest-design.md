@@ -329,7 +329,7 @@ stock component fails, it is unambiguous which one failed.
 
 #### P3 status: complete, 2026-09-17
 
-**Met.** `./vm/run.sh p3-full` boots 10.9.5 to the desktop with **no Tier 2
+**Met.** `vmavs run p3-full` boots 10.9.5 to the desktop with **no Tier 2
 component anywhere in the boot path**: OpenCore 1.0.7 and OVMF built
 offline from the same pinned `acidanthera/audk` tree, our own
 `config.plist`, `OpenHfsPlus.efi`, and pinned Lilu 1.7.2 / VirtualSMC

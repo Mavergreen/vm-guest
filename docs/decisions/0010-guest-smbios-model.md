@@ -146,7 +146,7 @@ whole pipeline successfully with the default SMBIOS. It is a real Xeon, so
 it is the machine that can settle the explanation:
 
 ```
-bin/triangulate.sh --full --cpu Conroe --smbios MacPro5,1
+vmavs triangulate --full --cpu Conroe --smbios MacPro5,1
 ```
 
 - **It installs and answers SSH** → the driver was fine on a machine that

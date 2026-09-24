@@ -13,7 +13,7 @@ One command, from a clean checkout to a bootable, SSH-reachable image, with
 nobody watching:
 
 ```sh
-./image/build-image.sh
+vmavs image
 ```
 
 It fetches Apple's `InstallESD.dmg`, builds OpenCore and the guest firmware
@@ -26,7 +26,7 @@ every input. `--describe` prints the plan without doing anything.
 The key it authorizes is yours: `--ssh-key PATH`, defaulting to the first of
 `~/.ssh/id_*.pub`. No key is generated into an image, and none is committed.
 
-`image/compare-images.sh A B` says in what sense two images are the same;
+`vmavs compare A B` says in what sense two images are the same;
 `docs/decisions/0006-image-pipeline-reproducibility.md` says what that
 claim is.
 

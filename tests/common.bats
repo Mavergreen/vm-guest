@@ -114,3 +114,36 @@ setup() {
     [ "$status" -eq 0 ]
     [ "$output" = "custom: hi" ]
 }
+
+@test "vmavs_hint is silent when nobody is watching -- this is why the suite stays green" {
+    run bash -c "source '$REPO/lib/common.sh'; vmavs_hint image"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "vmavs_hint names the vmavs equivalent when forced" {
+    run bash -c "source '$REPO/lib/common.sh'; VMAVS_FORCE_HINT=1 vmavs_hint image"
+    [[ "$output" == *"vmavs image"* ]]
+}
+
+@test "every script vmavs dispatches to calls vmavs_hint" {
+    for s in image/build-image.sh bin/triangulate.sh vm/run.sh vm/clone.sh \
+             vm/golden.sh image/compare-images.sh; do
+        run grep -c 'vmavs_hint' "$REPO/$s"
+        [ "$output" -ge 1 ] || { echo "no hint in $s"; false; }
+    done
+}
+
+@test "the docs invoke vmavs, not the scripts" {
+    # NOTES.md is excluded on purpose: it is the append-only lab log and
+    # rewriting what was run would falsify it. docs/triangulation/*.md is
+    # excluded for the same reason -- those are dated run records (what
+    # command was actually run, on what day) and rewriting them would
+    # falsify the record. docs/superpowers/plans/ is excluded because the
+    # plan says so.
+    run bash -c "grep -rn '\./image/build-image\.sh\|\./bin/triangulate\.sh\|\./vm/run\.sh' \
+        '$REPO/README.md' '$REPO/docs' --include='*.md' \
+        | grep -v 'docs/superpowers/plans/' \
+        | grep -v 'docs/triangulation/' | wc -l"
+    [ "$output" = "0" ]
+}

@@ -9,6 +9,7 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export MQG_REPO_ROOT
 # shellcheck source=../lib/common.sh
 . "$MQG_REPO_ROOT/lib/common.sh"
+vmavs_hint run
 # shellcheck source=../lib/profile.sh
 . "$MQG_REPO_ROOT/lib/profile.sh"
 

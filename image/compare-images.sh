@@ -29,6 +29,7 @@ set -euo pipefail
 MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/common.sh
 . "$MQG_REPO_ROOT/lib/common.sh"
+vmavs_hint compare
 # shellcheck source=../lib/cpu.sh
 . "$MQG_REPO_ROOT/lib/cpu.sh"
 

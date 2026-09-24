@@ -35,9 +35,9 @@ our assumptions are least tested.
 
 | Ledger | Claim | What this host tests |
 |---|---|---|
-| **G14** | SMBIOS must not be `MacPro5,1`, because `AppleTyMCEDriver` panics on a non-Xeon CPU | This *is* a Xeon, and it is now the ONLY thing still missing. The observation was re-run on the primary host on 2026-09-21 and **it reproduces** on our own boot stack (`decisions/0010`), so there is nothing stale to rule out. If `MacPro5,1` installs here, G14 is confirmed host-specific. **If it panics anyway, my explanation of P1's panic was wrong** and the real cause is something else. One command: `bin/triangulate.sh --full --cpu Conroe --smbios MacPro5,1`. |
+| **G14** | SMBIOS must not be `MacPro5,1`, because `AppleTyMCEDriver` panics on a non-Xeon CPU | This *is* a Xeon, and it is now the ONLY thing still missing. The observation was re-run on the primary host on 2026-09-21 and **it reproduces** on our own boot stack (`decisions/0010`), so there is nothing stale to rule out. If `MacPro5,1` installs here, G14 is confirmed host-specific. **If it panics anyway, my explanation of P1's panic was wrong** and the real cause is something else. One command: `vmavs triangulate --full --cpu Conroe --smbios MacPro5,1`. |
 | **G3** | The guest CPU model must be masked down from the host's | Inverts the problem: this host is *older* than the model we ask for — and as of 2026-09-21 we know how far down the mask can go. |
-| **G25** | This host can provide every `-cpu` line in `lib/cpu.sh`'s table | Answered in about a second per row by `bin/triangulate.sh --probe`, with nothing installed. Woodcrest should refuse the `Penryn` rows and accept `Conroe`. |
+| **G25** | This host can provide every `-cpu` line in `lib/cpu.sh`'s table | Answered in about a second per row by `vmavs triangulate --probe`, with nothing installed. Woodcrest should refuse the `Penryn` rows and accept `Conroe`. |
 | **G2** | Intel with VT-x | Worth confirming VT-x is present and enabled; some early Mac Pros shipped without it. |
 
 ### The CPU string: this entry was wrong for a year, and it cost us the machine
@@ -62,7 +62,7 @@ came from a UTM bundle, not from the OS.
 **So this host is viable, and it is the only machine that can settle G14.**
 What to run here, in order:
 
-1. `bin/triangulate.sh --probe` — installs nothing, needs no root, and its
+1. `vmavs triangulate --probe` — installs nothing, needs no root, and its
    `-cpu` table says which rows this machine can provide. Expect the
    `Penryn` rows refused (naming `sse4.1` as the missing feature) and
    `Conroe` accepted. That alone confirms both halves of `decisions/0009`.
@@ -74,7 +74,7 @@ What to run here, in order:
    which is now one command:
 
    ```
-   bin/triangulate.sh --full --cpu Conroe --smbios MacPro5,1
+   vmavs triangulate --full --cpu Conroe --smbios MacPro5,1
    ```
 
    `--smbios` exists as of `decisions/0010`; before that the model was
@@ -217,7 +217,7 @@ Not "it worked" or "it didn't", but **an updated ledger**. Every entry it
 touches should end up either confirmed host-specific, demoted to portable,
 or corrected. An entry nobody has tried to falsify is not knowledge.
 
-**`bin/triangulate.sh` is the thing to run**, and it produces exactly that:
+**`vmavs triangulate` is the thing to run**, and it produces exactly that:
 a report whose last section is markdown rows for `docs/host-profile.md`
 section 4, plus `--json` for diffing hosts against each other. It installs
 nothing, needs no root, writes only under `$MQG_IMAGE_DIR`, and removes
@@ -241,9 +241,9 @@ not test the fresh clone `docs/decisions/0006` is about, while looking
 exactly like one that does. A result traced to no particular code is worth
 much less than one that is.
 
-    ./bin/triangulate.sh                     # ~2 min, builds nothing
-    ./bin/triangulate.sh --build             # ~10 min, no install
-    ./bin/triangulate.sh --full --json-out h.json
+    vmavs triangulate                        # ~2 min, builds nothing
+    vmavs triangulate --build                # ~10 min, no install
+    vmavs triangulate --full --json-out h.json
 
 The order above still stands: run `--probe` on everything, and spend
 `--full` on the two hosts that look promising.

@@ -50,6 +50,23 @@ verify_sha256() {
     fi
 }
 
+# Point a human at the documented way to do what they just typed.
+#
+# spec: docs/superpowers/plans/2026-09-22-shipping-vmavs.md Task 8
+#
+# The scripts under image/, boot/, media/ and vm/ are not deprecated and
+# cannot be: `vmavs image` IS image/build-image.sh. What changed is that
+# they are no longer the documented interface. Typing the old command
+# still works and prints this.
+#
+# Silent unless stderr is a terminal, which is why the suite stayed green
+# when this landed -- bats captures stderr through a pipe. VMAVS_FORCE_HINT
+# exists so the hint is testable despite that.
+vmavs_hint() {
+    [ "${VMAVS_FORCE_HINT:-0}" = 1 ] || [ -t 2 ] || return 0
+    printf 'note: `vmavs %s` is the documented way to do this.\n' "$*" >&2
+}
+
 # Append a timestamped line to the run log. Every QEMU invocation goes
 # through this, so the lab log never depends on anyone remembering.
 run_log() {

@@ -38,6 +38,7 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 export MQG_REPO_ROOT
 # shellcheck source=../lib/common.sh
 . "$MQG_REPO_ROOT/lib/common.sh"
+vmavs_hint image
 # shellcheck source=../lib/cpu.sh
 . "$MQG_REPO_ROOT/lib/cpu.sh"
 # shellcheck source=../lib/smbios.sh
