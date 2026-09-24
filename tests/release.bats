@@ -557,9 +557,25 @@ print('ok')
 }
 
 @test "the README states the never-publish rule above the fold" {
+    # In the global constraint's own words: the image OR A SNAPSHOT. An
+    # earlier README said only "the guest image is never published".
     run head -45 "$REPO/README.md"
-    [[ "$output" == *"never"* ]]
+    [[ "$output" == *"Never publish the guest image or a snapshot"* ]]
     [[ "$output" == *"Apple"* ]]
+}
+
+@test "the README offers p4-linuxmedia only as a developer profile, with what it needs" {
+    # Final review: the README offered `vmavs run p4-linuxmedia` as the way
+    # to boot, but that profile boots work/p4-target.qcow2 with installer
+    # media -- not the built image -- and nothing shipped creates that
+    # disk or its VARS file, so on a fresh host it fails.
+    run grep -B3 'vmavs run p4-linuxmedia' "$REPO/README.md"
+    [[ "$output" == *"developer profile"* ]]
+    [[ "$output" == *"work/p4-target.qcow2"* ]]
+    run head -30 "$REPO/README.md"
+    [[ "$output" == *"No shipped command boots the image"* ]]
+    run grep -c 'most builds are tested against\|other pieces of getting from a' "$REPO/README.md"
+    [ "$output" = "0" ]
 }
 
 @test "the README carries no unread-by-a-human marker" {

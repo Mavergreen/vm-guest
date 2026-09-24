@@ -18,31 +18,32 @@ beside it naming every input that went into it. The target disk is 60 GB,
 but sparse: a finished install has measured at under 11 GiB actually
 written.
 
-**Booting that image is not yet its own `vmavs` subcommand.** `vmavs run`
-today boots one of this project's own named development profiles --
-`p4-linuxmedia`, headless, is the one most builds are tested against --
-rather than the image `vmavs image` just built. `decisions/0007` names
-this as the gap `run` is meant to close. Until then, what exists is:
+**No shipped command boots the image `vmavs image` builds, yet.**
+`decisions/0007` says `vmavs run` should boot a throwaway clone of it;
+today `run` only boots this project's own named development profiles, and
+none of them points at that image. That is the open gap.
+
+`p4-linuxmedia`, a development profile from the P4 phase, is shown below
+for developers only. It is not a next step after `vmavs image`: it boots a
+development disk with installer media attached, and nothing in the shipped
+path creates the files it needs, so on a fresh host it fails.
 
 ```sh
-vmavs run p4-linuxmedia   # boot the profile most builds are tested against
-vmavs ssh --port 2223     # p4-linuxmedia forwards SSH to a non-default port
+# developer profile; needs work/p4-target.qcow2 and
+# work/p4-linuxmedia-VARS.fd from earlier phases
+vmavs run p4-linuxmedia
+vmavs ssh --port 2223     # it forwards SSH to 2223, not the default 2222
 ```
-
-`vmavs ssh` on its own assumes the default port, 2222; `p4-linuxmedia`
-forwards a different one, so the two are shown together on purpose.
-`vmavs clone` and `vmavs golden` are the other pieces of getting from a
-built image to something bootable today.
 
 ## Two rules this project does not bend
 
 - **The operating system comes from Apple, and only from Apple.** Firmware
   and bootloaders may be third-party; macOS disk images may not. No
   prebuilt third-party macOS image is used, ever.
-- **The guest image is never published.** Not as a release asset, not as a
-  package, not anywhere reachable without authentication. `vmavs` ships a
-  recipe; you build your own image on your own machine, from Apple's
-  bytes, which never enter this repository. `bin/no-apple-bytes.sh` is the
+- **Never publish the guest image or a snapshot.** Not as a release asset,
+  not as a package, not anywhere reachable without authentication. `vmavs`
+  ships a recipe; you build your own image on your own machine, from
+  Apple's bytes, which never enter this repository. `bin/no-apple-bytes.sh` is the
   gate that keeps that true rather than merely intended -- it checks what
   a release would actually contain, not just what anyone meant to commit.
 
@@ -54,7 +55,7 @@ not a technical one -- and is also, so far, untested.
 ## Will it work on my machine?
 
 `vmavs doctor` answers per subcommand: a host with QEMU and no
-`mkfs.hfsplus`, say, can `run` an image and cannot `media`. Measured so
+`mkfs.hfsplus`, say, is READY for `run` and BLOCKED for `media`. Measured so
 far: **Linux with KVM, on Apple hardware, works end to end** -- a 2018 Mac
 mini, a 2015 MacBook Air and a 2006 Mac Pro have each built and booted a
 guest. **macOS and NetBSD have never been tried**; `decisions/0007` names
