@@ -294,3 +294,84 @@ PY
         "$REPO/bin/tier-check.sh" --strict
     [ "$status" -eq 0 ]
 }
+
+# --- final review: a profile that cannot be expanded writes nothing ---------
+
+@test "an include cycle fails, names the cycle, and writes no template" {
+    # MEASURED before the fix: a -> b -> a, with -cpu set only in b,
+    # exited 0 and wrote a template whose cpu_model was labelled
+    # "REASONED -- no -cpu line anywhere". profile_expand died inside a
+    # process substitution, which ends only the subshell.
+    SCRATCH="$BATS_TEST_TMPDIR/profiles"
+    mkdir -p "$SCRATCH"
+    printf '%s\n' '@include b' '-m' '4096' > "$SCRATCH/a.args"
+    printf '%s\n' '-cpu' 'Penryn' '@include a' > "$SCRATCH/b.args"
+    run env PROFILE_DIR="$SCRATCH" "$VMAVS" emit packer --profile a --out "$OUT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"profile include cycle"* ]]
+    [ ! -e "$OUT" ]
+    run env PROFILE_DIR="$SCRATCH" "$VMAVS" emit packer --profile a --describe
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"cpu_model"* ]]
+}
+
+@test "a missing @include fails, names the missing profile, and says it in words" {
+    # MEASURED before the fix: exit 0, plus eight raw bash "No such file
+    # or directory" lines from the provenance helpers.
+    SCRATCH="$BATS_TEST_TMPDIR/profiles"
+    mkdir -p "$SCRATCH"
+    printf '%s\n' '@include nonesuch' '-m' '4096' > "$SCRATCH/lonely.args"
+    run env PROFILE_DIR="$SCRATCH" "$VMAVS" emit packer --profile lonely --out "$OUT"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no such profile: nonesuch"* ]]
+    [[ "$output" != *"No such file"* ]]
+    [ ! -e "$OUT" ]
+}
+
+@test "--check without --out fails before writing the template anywhere" {
+    run "$VMAVS" emit packer --profile p4-linuxmedia --check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--check needs --out"* ]]
+    [[ "$output" != *'source "qemu"'* ]]
+}
+
+@test "--check says packer init may be needed, and does not call the template broken" {
+    # A packer that fails validate, as a real one does when the plugin
+    # required_plugins names has not been fetched by `packer init`. This
+    # script never runs init (it downloads), so it must not present that
+    # failure as a verified template defect. The stub PATH holds only the
+    # tools emit needs plus this fake packer -- no real one can be found.
+    STUB="$BATS_TEST_TMPDIR/stub-badpacker"
+    mkdir -p "$STUB"
+    for t in bash env dirname cat sed tr head basename; do
+        ln -s "$(command -v "$t")" "$STUB/$t"
+    done
+    printf '#!/bin/sh\necho "Error: Missing plugins" >&2\nexit 1\n' > "$STUB/packer"
+    chmod +x "$STUB/packer"
+    run env PATH="$STUB" \
+        "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" --check
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"packer init"* ]]
+    [[ "$output" == *"NOT yet a verified template failure"* ]]
+}
+
+@test "provenance names the profile's commit in a git worktree, where .git is a file" {
+    # profile_commit tested `-d .git`; in a worktree .git is a file, so
+    # the commit silently vanished from the header. A throwaway repo
+    # holding just what emit needs, and a worktree of it.
+    T="$BATS_TEST_TMPDIR/wt-src"
+    mkdir -p "$T/vm" "$T/image"
+    cp -R "$REPO/bin" "$REPO/lib" "$REPO/emit" "$T/"
+    cp -R "$REPO/vm/profiles" "$T/vm/"
+    cp "$REPO/image/build-image.sh" "$T/image/"
+    git -C "$T" init -q
+    git -C "$T" add -A
+    git -C "$T" -c user.name=t -c user.email=t@example.invalid \
+        -c commit.gpgsign=false commit -qm fixture
+    git -C "$T" worktree add -q "$BATS_TEST_TMPDIR/wt" 2>/dev/null
+    [ -f "$BATS_TEST_TMPDIR/wt/.git" ]
+    want=$(git -C "$T" log -1 --format=%h)
+    run "$BATS_TEST_TMPDIR/wt/bin/vmavs" emit packer --profile p4-linuxmedia --describe
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"p4-linuxmedia.args @ $want"* ]] || { echo "$output"; false; }
+}

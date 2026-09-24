@@ -135,7 +135,8 @@ build_image_default() {
 # has no .git, and this is provenance for the curious, not a requirement).
 profile_commit() {
     command -v git >/dev/null 2>&1 || return 0
-    [ -d "$MQG_REPO_ROOT/.git" ] || return 0
+    # -e, not -d: in a git worktree .git is a file. Same test bin/vmavs uses.
+    [ -e "$MQG_REPO_ROOT/.git" ] || return 0
     git -C "$MQG_REPO_ROOT" log -1 --format=%h -- "$(profile_path "$1")" 2>/dev/null || true
 }
 
@@ -176,8 +177,15 @@ profile_commit() {
 # is intentionally NOT lib/profile.sh's expansion: it must be able to say
 # "this exact file has this exact line", which expansion (by design)
 # erases the provenance of.
+#
+# A file that is not there sets no flag and includes nothing: it prints
+# nothing and succeeds, rather than let bash's own "No such file or
+# directory" through. The expansion above has already died, by name, on a
+# missing @include before any of this runs; this keeps the helpers quiet
+# if that ever changes.
 profile_raw_flags() {
     local path=$1 line
+    [ -f "$path" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"
@@ -220,6 +228,7 @@ EOF
 # ones lives in value_source_walk below, not here.
 profile_includes() {
     local path=$1 line included
+    [ -f "$path" ] || return 0   # see profile_raw_flags
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"
@@ -310,10 +319,24 @@ source_label() {
 # exception this project's own profiles use (-enable-kvm) is called out
 # below by name rather than guessed at generically.
 
+# Captured with $(...) and its status checked, NOT read from `< <(...)`.
+# profile_expand dies on an include cycle or a missing @include, but a die
+# inside process substitution ends only that subshell: this script read
+# whatever came out before it, carried on, and exited 0 with a template
+# built from part of the profile -- an include cycle a -> b -> a, where b
+# set -cpu, came out with cpu_model labelled "REASONED -- no -cpu line
+# anywhere" (MEASURED, final review). profile_expand's own message names
+# the cycle or the missing profile on stderr; this adds that nothing was
+# written.
+expanded_text=$(profile_expand "$profile") \
+    || die "cannot expand profile '$profile' (see above); nothing written"
 expanded=()
 while IFS= read -r eline; do
+    [ -n "$eline" ] || continue
     expanded+=("$eline")
-done < <(profile_expand "$profile")
+done <<EOF
+$expanded_text
+EOF
 
 # Refuse outright if the profile's OWN expansion reaches into the Tier 2
 # quarantine. bin/tier-check.sh --strict separately scans emit/ itself --
@@ -327,7 +350,6 @@ done < <(profile_expand "$profile")
 # quarantine path sitting in qemuargs, and nothing under emit/ itself
 # would ever show it. This is the check that catches that. Fix-round-1
 # finding: an earlier version of this script had no such check at all.
-expanded_text=$(printf '%s\n' "${expanded[@]+"${expanded[@]}"}")
 if [ "${expanded_text#*"$MQG_VENDOR_DIR/"}" != "$expanded_text" ]; then
     die "profile '$profile' expands into the Tier 2 quarantine" \
         "($MQG_VENDOR_DIR) -- refusing to emit. This is exactly what" \
@@ -758,6 +780,12 @@ build {
 BUILD
 }
 
+# --check validates a file, so it needs one. Checked before anything is
+# written: it used to print the whole template to stdout and only then die.
+if [ "$check" -eq 1 ] && [ -z "$out" ]; then
+    die "--check needs --out: nothing to validate on stdout"
+fi
+
 if [ -n "$out" ]; then
     emit_template > "$out"
     log "wrote $out (no packer has parsed it -- see its own header)"
@@ -768,15 +796,24 @@ fi
 # --- --check ---------------------------------------------------------------
 
 if [ "$check" -eq 1 ]; then
-    [ -n "$out" ] || die "--check needs --out: nothing to validate on stdout"
     if ! command -v packer >/dev/null 2>&1; then
         die "packer is not installed / not on PATH -- cannot validate $out." \
             "This is the expected state on this project's hosts today; the" \
             "template's own header says so. Install packer and re-run" \
             "--check, then record the result in NOTES.md."
     fi
+    # The template's required_plugins block wants `packer init` before
+    # `validate` can resolve the qemu source. This script does not run
+    # init -- it downloads a plugin, and this project installs nothing --
+    # so a failure here on a host that has packer but not the plugin
+    # would otherwise read as a defect in the template. REASONED from
+    # Packer's documented init/validate split; never run here.
     if ! packer validate "$out"; then
-        die "packer validate failed against $out -- see its output above"
+        die "packer validate failed against $out -- see its output above." \
+            "If it complains about the qemu plugin, run \`packer init $out\`" \
+            "first (it downloads the plugin; this script will not) and" \
+            "re-run --check. Until then this is NOT yet a verified template" \
+            "failure."
     fi
     log "packer validate: OK against $out. Record this in NOTES.md: it is" \
         "the first time any Packer has ever parsed this template."
