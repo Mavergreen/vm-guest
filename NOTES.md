@@ -6555,3 +6555,62 @@ unnoticed) is now pure bash, comma-splitting the option string.
 Full suite green (645/645, 0 skipped) after this round; see the fix-round-1
 section of the shipping-vmavs Task 6/7 report for the RED/GREEN detail per
 finding.
+
+## 2026-09-24 — P8 — the first Packer to parse `vmavs emit packer`'s output
+
+Until today no Packer had ever read one of these templates; every emitted
+file said so. Packer 1.16.1 (the release zip, SHA-256 checked against
+HashiCorp's SHA256SUMS, unpacked into a session scratch directory -- not
+installed on the host) with `PACKER_PLUGIN_PATH` also in scratch:
+
+```
+$ vmavs emit packer --profile p4-linuxmedia --out p4.pkr.hcl
+$ packer init p4.pkr.hcl          # qemu plugin v1.1.6
+$ packer validate p4.pkr.hcl
+Error: Unset variable "opencore_media"   (and media, ovmf_code, ovmf_vars, ssh_key)
+Error: Unknown post-processor type "vagrant"
+```
+
+Two findings, one of them a real defect:
+
+1. **The vagrant post-processor was undeclared.** It left Packer's core in
+   1.10 and is its own plugin; `required_plugins` named only qemu. Now it
+   names both, and `packer init` installs vagrant v1.1.7.
+2. **The five variables have no defaults**, so a bare `validate` stops
+   before it looks at a single field. Not a template defect -- the values
+   are the user's own paths -- but it meant `--check` could never have
+   passed as written.
+
+With the plugin declared and `-var` placeholders:
+
+```
+$ packer validate -var media=/x/m.img ... -var ssh_key=/x/k p4.pkr.hcl
+Warning: ssh_host_port_min is deprecated and is being replaced by host_port_min ...
+         In future versions of Packer, inclusion of ssh_host_port_min will error your builds.
+Error: ssh_private_key_file is invalid: stat /x/k: no such file or directory
+```
+
+3. **`ssh_host_port_min/max` are deprecated** in favor of
+   `host_port_min/max`. Renamed.
+4. **validate reads the SSH key.** A missing file fails `stat`; an empty
+   one fails "no key found". The placeholder has to be a real key.
+
+After all four: `The configuration is valid.` for the templates from all
+four profiles (base-kvm, p3-full, p4-approachb, p4-linuxmedia), each with
+one expected warning -- `iso_checksum = "none"`, deliberate and explained
+in the template.
+
+`--check` now does this itself: a `-var` placeholder for every variable
+the template declares, and a throwaway ed25519 key (deleted on exit) for
+`ssh_key`. It still does not run `packer init`, because that downloads.
+`.github/workflows/ci.yml` gained a `packer-validate` job
+(`hashicorp/setup-packer@v3.4.0`, Packer pinned at 1.16.1 and tracked by
+Renovate) that emits, inits and `--check`s every profile on every push.
+
+**What this proves and what it does not.** MEASURED: the field names,
+nesting and types are ones the qemu and vagrant plugins accept. Still
+REASONED: everything a build would test -- whether the drive mapping boots,
+whether a fixed `host_port_min/max` reaches a guest whose NIC came from
+`qemuargs`. No `packer build` has run from any of it. (The fix-round entry
+above calls the qemuargs override "documented behavior"; that too is
+REASONED from the plugin's docs and source, not measured here.)

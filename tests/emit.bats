@@ -91,10 +91,40 @@ PY
     [ "$output" = "0" ]
 }
 
-@test "the template says out loud that no Packer has parsed it" {
+@test "every plugin the template uses is declared in required_plugins" {
+    # The vagrant post-processor left Packer's core in 1.10 and is its own
+    # plugin now. Undeclared, `packer validate` fails with "Unknown
+    # post-processor type "vagrant"" -- MEASURED with Packer 1.16.1, the
+    # first time any Packer parsed this template (NOTES.md, 2026-09-24).
     emit
-    run grep -ci 'never been\|unverified\|packer validate' "$OUT"
+    plugins=$(sed -n '/required_plugins {/,/^  }/p' "$OUT")
+    [[ "$plugins" == *'github.com/hashicorp/qemu'* ]]
+    [[ "$plugins" == *'github.com/hashicorp/vagrant'* ]]
+}
+
+@test "the fixed SSH forward uses host_port_min/max, not the deprecated ssh_ names" {
+    # Packer 1.16.1's validate warns that ssh_host_port_min/max "will error
+    # your builds" in a future version. p4-linuxmedia forwards 2223.
+    emit
+    run grep -c '^[[:space:]]*host_port_min[[:space:]]*= 2223$' "$OUT"
+    [ "$output" = "1" ]
+    run grep -c '^[[:space:]]*host_port_max[[:space:]]*= 2223$' "$OUT"
+    [ "$output" = "1" ]
+    run grep -c '^[[:space:]]*ssh_host_port_m\(in\|ax\)[[:space:]]*=' "$OUT"
+    [ "$output" = "0" ]
+}
+
+@test "the template says what packer validate has and has not proven" {
+    # Validation checks field names, nesting and types. It does not boot
+    # anything: no Packer BUILD has run from this template, so the drive
+    # mapping and SSH reachability remain REASONED.
+    emit
+    run grep -c 'packer validate' "$OUT"
     [ "$output" -ge 1 ]
+    run grep -ci 'no packer build has ever run' "$OUT"
+    [ "$output" -ge 1 ]
+    run grep -c 'NO PACKER HAS EVER PARSED' "$OUT"
+    [ "$output" = "0" ]
 }
 
 @test "--describe prints where each field's value came from and writes nothing" {
@@ -131,6 +161,55 @@ PY
     # from this script's own die message pins it to that refusal.
     [ "$status" -ne 0 ]
     [[ "$output" == *"packer is not installed"* ]]
+}
+
+# A stub PATH holding what --check needs plus a fake packer that records
+# its arguments, and whether each file-valued -var existed while it ran.
+check_stub() {
+    STUB="$BATS_TEST_TMPDIR/stub-recpacker"
+    mkdir -p "$STUB"
+    for t in bash env dirname cat sed tr head basename mktemp rm ssh-keygen grep; do
+        ln -s "$(command -v "$t")" "$STUB/$t"
+    done
+    cat > "$STUB/packer" <<EOF
+#!/bin/sh
+printf '%s\n' "\$@" > "$BATS_TEST_TMPDIR/packer-args"
+for a in "\$@"; do
+    case \$a in
+        ssh_key=*) f=\${a#ssh_key=}; [ -s "\$f" ] && grep -q 'OPENSSH PRIVATE KEY' "\$f" \
+                       && echo present > "$BATS_TEST_TMPDIR/key-seen" ;;
+    esac
+done
+exit ${1:-0}
+EOF
+    chmod +x "$STUB/packer"
+}
+
+@test "--check gives packer validate a value for every variable, and a real key" {
+    # validate refuses unset variables, and the qemu plugin parses
+    # ssh_private_key_file -- an empty or missing file fails with "no key
+    # found". MEASURED with Packer 1.16.1 / qemu plugin 1.1.6.
+    check_stub 0
+    run env PATH="$STUB" \
+        "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" --check
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"packer validate: OK"* ]]
+    args=$(cat "$BATS_TEST_TMPDIR/packer-args")
+    [[ "$args" == validate* ]]
+    for v in $(sed -n 's/^variable "\([a-z_]*\)" {$/\1/p' "$OUT"); do
+        [[ "$args" == *"$v="* ]] || { echo "no -var for $v"; false; }
+    done
+    [ "$(cat "$BATS_TEST_TMPDIR/key-seen")" = present ]
+}
+
+@test "--check leaves no placeholder key behind" {
+    check_stub 0
+    export TMPDIR="$BATS_TEST_TMPDIR/tmp"
+    mkdir -p "$TMPDIR"
+    run env PATH="$STUB" TMPDIR="$TMPDIR" \
+        "$VMAVS" emit packer --profile p4-linuxmedia --out "$OUT" --check
+    [ "$status" -eq 0 ]
+    [ -z "$(ls -A "$TMPDIR")" ]
 }
 
 @test "emit refuses a profile that does not exist, and lists the ones that do" {
@@ -343,7 +422,7 @@ PY
     # tools emit needs plus this fake packer -- no real one can be found.
     STUB="$BATS_TEST_TMPDIR/stub-badpacker"
     mkdir -p "$STUB"
-    for t in bash env dirname cat sed tr head basename; do
+    for t in bash env dirname cat sed tr head basename mktemp rm ssh-keygen; do
         ln -s "$(command -v "$t")" "$STUB/$t"
     done
     printf '#!/bin/sh\necho "Error: Missing plugins" >&2\nexit 1\n' > "$STUB/packer"

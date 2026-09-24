@@ -32,12 +32,12 @@
 # word, so --describe and the emitted file cannot disagree about it.
 #
 # The FIELD NAMES AND NESTING -- which Packer block a value belongs in,
-# and under what key -- are ALSO REASONED, from Packer's documented
-# qemu-plugin schema. NO PACKER HAS EVER PARSED A FILE THIS SCRIPT WROTE:
-# packer is not installed on the host this was written on, and this
-# project installs nothing to make that true. `--check` exists to close
-# that gap the moment somebody with packer runs it; until then, every
-# emitted template says so in its own header.
+# and under what key -- are MEASURED: `packer validate` (Packer 1.16.1)
+# first parsed this script's output on 2026-09-24, found two defects (an
+# undeclared vagrant plugin, deprecated ssh_host_port_min/max), and has
+# accepted every profile's template since. .github/workflows/ci.yml
+# re-validates on every push; `--check` is the same check, locally. No
+# Packer BUILD has run from any of it, and every emitted template says so.
 #
 # THE DRIVE MAPPING IS THE LEAST CERTAIN PART OF THIS FILE. Read the
 # "DRIVE MAPPING IS REASONED" section inside emit_template() below (and
@@ -571,17 +571,17 @@ default (this script's own, or image/build-image.sh's) was used instead.
                  REASONED -- packer-plugin-qemu's qemuargs OVERRIDE every
                  default -drive/-device once you supply your own, so
                  both are kept in qemuargs and rewritten rather than left
-                 to Packer's own iso/disk handling. UNVERIFIED against a
-                 real packer-plugin-qemu build; see NOTES.md's
-                 2026-09-24 fix-round entry.
+                 to Packer's own iso/disk handling. packer validate
+                 accepts it; no Packer BUILD has run from it. See
+                 NOTES.md's 2026-09-24 entries.
   smbios (comment only -- not a QEMU flag in this profile)
                  $(smbios_default_text)
                  INHERITED -- lib/smbios.sh's MQG_SMBIOS_DEFAULT. Baked into OpenCore's config.plist by \`vmavs boot-stack\`; this profile and this template never set it as a QEMU argument.
   field names & nesting (the HCL2 schema itself)
-                 REASONED -- from Packer's documented qemu-plugin schema.
-                 UNVERIFIED: no packer is installed on this host. Run
-                 \`vmavs emit packer --check\` once one is, and record the
-                 result in NOTES.md.
+                 MEASURED -- \`packer validate\` (Packer 1.16.1, qemu plugin
+                 1.1.6, vagrant plugin 1.1.7) accepted the template from
+                 every profile, 2026-09-24; ci.yml re-validates on every
+                 push. \`vmavs emit packer --check\` runs the same check.
 EOF
     exit 0
 fi
@@ -600,16 +600,17 @@ emit_template() {
 # file sets it), INHERITED (only its @include does), or REASONED (neither
 # does, and a fallback default was used -- or, for the drive mapping
 # below, this script's own interpretation of Packer's qemuargs-override
-# behavior, never run against a real Packer). Read the value with its own
-# label; do not assume every field is the strongest kind just because some
-# are.
+# behavior). Read the value with its own label; do not assume every field
+# is the strongest kind just because some are.
 #
-# The FIELD NAMES AND NESTING have never been checked against a real
-# Packer. NO PACKER HAS EVER PARSED THIS FILE: packer is not installed on
-# the host that generated it, and this project installs nothing to make
-# that true. Run \`packer validate\` on it and write the result into
-# NOTES.md; \`vmavs emit packer --check\` does exactly that the moment
-# packer is on PATH.
+# The FIELD NAMES, NESTING AND TYPES are MEASURED: \`packer validate\`
+# (Packer 1.16.1, qemu plugin 1.1.6, vagrant plugin 1.1.7) accepted the
+# template emitted from every profile in this project on 2026-09-24, and
+# this project's CI re-validates on every push. \`vmavs emit packer
+# --check\` runs the same check here. Validation proves the template
+# parses; it boots nothing. NO PACKER BUILD HAS EVER RUN from it, so
+# whether the drive mapping and the SSH forward work in a real build is
+# still REASONED.
 #
 # THIS TEMPLATE CONTAINS NO APPLE BYTES and must never be changed so that
 # it does. It names local paths that YOU produced with \`vmavs boot-stack\`
@@ -685,7 +686,8 @@ HEADER
 
 packer {
   required_plugins {
-    qemu = { source = "github.com/hashicorp/qemu", version = "~> 1" }
+    qemu    = { source = "github.com/hashicorp/qemu", version = "~> 1" }
+    vagrant = { source = "github.com/hashicorp/vagrant", version = "~> 1" }
   }
 }
 
@@ -740,19 +742,18 @@ PLUGIN
         printf '  # This profile forwards the guest'"'"'s SSH port to a FIXED host port\n'
         printf '  # (%s, not a range Packer picks itself) because qemuargs below\n' "$ssh_port"
         printf '  # supplies its own -netdev/-device rather than letting the\n'
-        printf '  # qemu-plugin build one -- REASONED, unverified: whether the plugin\n'
-        printf '  # honors a fixed port instead of adding a second NIC is exactly the\n'
-        printf '  # kind of nesting question --check exists to close.\n'
-        printf '  ssh_host_port_min = %s\n' "$ssh_port"
-        printf '  ssh_host_port_max = %s\n' "$ssh_port"
+        printf '  # qemu-plugin build one. packer validate accepts these fields;\n'
+        printf '  # whether a BUILD honors a fixed port instead of adding a second NIC\n'
+        printf '  # is REASONED -- no Packer build has ever run from this template.\n'
+        printf '  host_port_min = %s\n' "$ssh_port"
+        printf '  host_port_max = %s\n' "$ssh_port"
     else
         printf '  # %s sets no hostfwd of its own -- its NIC (%s) forwards no\n' "$profile" "${nic_model:-none}"
-        printf '  # fixed host port, so this template sets no ssh_host_port_min/max\n'
-        printf '  # either, rather than inventing one. REASONED, unverified: whether\n'
-        printf '  # Packer'"'"'s SSH communicator can even reach a guest whose\n'
-        printf '  # -netdev/-device came entirely from qemuargs, with no forwarded\n'
-        printf '  # port declared anywhere, is exactly the kind of question --check\n'
-        printf '  # exists to close once a real Packer runs against this file.\n'
+        printf '  # fixed host port, so this template sets no host_port_min/max\n'
+        printf '  # either, rather than inventing one. REASONED: whether Packer'"'"'s\n'
+        printf '  # SSH communicator can reach a guest whose -netdev/-device came\n'
+        printf '  # entirely from qemuargs, with no forwarded port declared anywhere,\n'
+        printf '  # is a question for a BUILD; packer validate cannot answer it.\n'
     fi
     printf '\n'
     printf '  qemuargs = [\n'
@@ -788,7 +789,7 @@ fi
 
 if [ -n "$out" ]; then
     emit_template > "$out"
-    log "wrote $out (no packer has parsed it -- see its own header)"
+    log "wrote $out"
 else
     emit_template
 fi
@@ -798,23 +799,38 @@ fi
 if [ "$check" -eq 1 ]; then
     if ! command -v packer >/dev/null 2>&1; then
         die "packer is not installed / not on PATH -- cannot validate $out." \
-            "This is the expected state on this project's hosts today; the" \
-            "template's own header says so. Install packer and re-run" \
-            "--check, then record the result in NOTES.md."
+            "CI validates every profile's template on each push" \
+            "(.github/workflows/ci.yml); install packer to check it here."
     fi
+    # validate refuses a variable with no value, and the qemu plugin
+    # parses ssh_private_key_file -- a missing or empty file fails with
+    # "no key found". So every variable gets a placeholder and ssh_key a
+    # real throwaway key, deleted on exit. The other paths are never
+    # opened by validate. MEASURED with Packer 1.16.1 / qemu plugin 1.1.6.
+    keydir=$(mktemp -d "${TMPDIR:-/tmp}/vmavs-emit-check.XXXXXX")
+    trap 'rm -rf "$keydir"' EXIT
+    ssh-keygen -q -t ed25519 -N '' -C 'vmavs emit packer --check placeholder' \
+        -f "$keydir/key" || die "could not make a placeholder ssh key"
+    set --
+    while IFS= read -r v; do
+        case $v in
+            ssh_key) set -- "$@" -var "$v=$keydir/key" ;;
+            *)       set -- "$@" -var "$v=/nonexistent/vmavs-check-placeholder/$v" ;;
+        esac
+    done < <(sed -n 's/^variable "\([a-z_]*\)" {$/\1/p' "$out")
     # The template's required_plugins block wants `packer init` before
-    # `validate` can resolve the qemu source. This script does not run
-    # init -- it downloads a plugin, and this project installs nothing --
-    # so a failure here on a host that has packer but not the plugin
-    # would otherwise read as a defect in the template. REASONED from
-    # Packer's documented init/validate split; never run here.
-    if ! packer validate "$out"; then
+    # `validate` can resolve the qemu source and the vagrant
+    # post-processor. This script does not run init -- it downloads
+    # plugins, and this project installs nothing -- so a failure here on a
+    # host that has packer but not the plugins would otherwise read as a
+    # defect in the template. MEASURED: without init, validate fails.
+    if ! packer validate "$@" "$out"; then
         die "packer validate failed against $out -- see its output above." \
-            "If it complains about the qemu plugin, run \`packer init $out\`" \
-            "first (it downloads the plugin; this script will not) and" \
+            "If it complains about a missing plugin, run \`packer init $out\`" \
+            "first (it downloads the plugins; this script will not) and" \
             "re-run --check. Until then this is NOT yet a verified template" \
             "failure."
     fi
-    log "packer validate: OK against $out. Record this in NOTES.md: it is" \
-        "the first time any Packer has ever parsed this template."
+    log "packer validate: OK against $out (placeholder variables; this" \
+        "proves the template parses, not that a build works)"
 fi
