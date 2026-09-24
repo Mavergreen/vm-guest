@@ -6440,3 +6440,47 @@ the `security` media came out with 548.0 MiB free.
   writes nothing to an image. `u-security`'s receipts above were collected
   by re-running `--stage verify` at the later commit against the image the
   earlier one produced.
+
+## 2026-09-24 — shipping-vmavs Task 6 — `vmavs emit packer`, and one gap it cannot close by itself
+
+`emit/packer.sh` exists now (`f0859b3`), reached through `vmavs emit
+packer --profile NAME [--out FILE] [--describe] [--check]`. It writes one
+Packer HCL2 template for the qemu-plugin builder — the interop artifact
+`docs/test-hosts.md:284` already pointed at, since
+`timsutton/osx-vm-templates` is itself a Packer template and what this
+project builds is the same shape minus the first-boot payload.
+
+**Derived, not retyped.** The template's `-machine`, `-cpu`, memory, CPU
+count, NIC and drive lines come from walking `lib/profile.sh`'s own
+expansion of `vm/profiles/p4-linuxmedia.args` (`a9f8c61`) and
+`vm/profiles/base-kvm.args` (`cebbb4a`, pulled in by `@include`) — the same
+code every other caller of a profile uses, not hand-copied. That profile
+has `-cpu Penryn,+ssse3,+sse4.1,+sse4.2`, `usb-net` with
+`hostfwd=tcp::2223-:22`, and no `-smbios` line and no `isa-applesmc`
+device at all: SMBIOS `iMac14,2` is baked into OpenCore's config.plist by
+`vmavs boot-stack`, not set as a QEMU argument, so it appears in the
+template's comments only, sourced from `lib/smbios.sh`'s
+`MQG_SMBIOS_DEFAULT` rather than typed as a literal. The two drives
+Packer's own fields replace (installer media, target disk) are dropped
+from `qemuargs` on purpose, with a comment saying why, so there are never
+two competing definitions of either.
+
+**What this closes and what it cannot.** `bin/tier-check.sh --strict` now
+scans `emit/` for the Tier 2 quarantine path the same way it already scans
+`vm/profiles/` — proven against a planted file in a throwaway directory
+(`MQG_TIER_EMIT_DIR`), never against the real tree. The template's own
+header says, out loud, that its VALUES are MEASURED or INHERITED (full
+installs behind the CPU and SMBIOS choices, docs/decisions/0009-0010) but
+its FIELD NAMES AND NESTING are REASONED from Packer's documented
+qemu-plugin schema and have **never been checked against a real Packer** —
+**packer is not installed on this host, and this project installs
+nothing to make that true.** `vmavs emit packer --check` exists
+specifically to close that gap: it dies plainly ("packer is not installed
+/ not on PATH") rather than claiming a pass it cannot back up, and the
+moment someone with packer runs `--check`, its `packer validate` result
+belongs in a NOTES.md entry of its own. Until then, the HCL2 block
+structure above is an unverified claim, not a measured one, and should be
+read that way.
+
+Full suite green (643/643, 0 skipped) including the new `tests/emit.bats`
+(12 tests) and the extended `bin/tier-check.sh --strict`.
