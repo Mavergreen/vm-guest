@@ -21,3 +21,7 @@ __pycache__/
 # is left; it is never something to commit.
 .mqg-triangulate.*
 triangulate-logs-*/
+
+# VERSION is a build product: build/version.sh writes it, the tags
+# are the record. A committed copy drifts (family-conventions check 7).
+/VERSION
