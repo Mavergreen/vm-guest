@@ -20,6 +20,13 @@ export MQG_BUILD_DIR
 MQG_VENDOR_DIR=${MQG_VENDOR_DIR:-$MQG_IMAGE_DIR/vendor-reference}
 export MQG_VENDOR_DIR
 PROFILE_DIR=${MQG_TIER_PROFILE_DIR:-$MQG_REPO_ROOT/vm/profiles}
+# emit/ writes files people hand to OTHER tools (vmavs emit packer). A
+# template that reached into the Tier 2 quarantine would export this
+# project's scaffolding as somebody else's dependency -- which is P3's
+# exit gate one step further out. Overridable the same way PROFILE_DIR is,
+# so a test can point this at a throwaway directory rather than planting
+# an offending file in the real tree.
+EMIT_DIR=${MQG_TIER_EMIT_DIR:-$MQG_REPO_ROOT/emit}
 
 strict=0
 if [ "${1:-}" = "--strict" ]; then
@@ -74,8 +81,26 @@ for name in ${names[@]+"${names[@]}"}; do
     fi
 done
 
+# emit/ (vmavs emit packer's output) writes files people hand to OTHER
+# tools -- see the EMIT_DIR comment above. These are plain generated text,
+# not .args profiles: no @include, no %VENDOR% placeholder to expand, so
+# each file is scanned directly for the already-resolved $MQG_VENDOR_DIR
+# path. Same in-process match as the profile loop above and for the same
+# reason: a pipe into `grep -q` SIGPIPEs the writer and a `set -o
+# pipefail` pipeline then reports the match as a pass.
+if [ -d "$EMIT_DIR" ]; then
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        content=$(cat "$f")
+        if [ "${content#*"$MQG_VENDOR_DIR/"}" != "$content" ]; then
+            printf 'TIER2  %s\n' "$f"
+            dirty=1
+        fi
+    done < <(find "$EMIT_DIR" -type f | LC_ALL=C sort)
+fi
+
 if [ "$dirty" -eq 0 ]; then
-    log "no profile references $MQG_VENDOR_DIR -- Tier 2 clean"
+    log "no profile or emitted file references $MQG_VENDOR_DIR -- Tier 2 clean"
     exit 0
 fi
 

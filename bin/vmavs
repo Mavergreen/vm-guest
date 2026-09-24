@@ -138,6 +138,14 @@ case $cmd in
     run)   exec "$MQG_REPO_ROOT/vm/run.sh" "$@" ;;
     clone) exec "$MQG_REPO_ROOT/vm/clone.sh" "$@" ;;
     ssh)   exec "$MQG_REPO_ROOT/vm/ssh.sh" "$@" ;;
+    emit)
+        target=${1:-}
+        [ -n "$target" ] || die "usage: vmavs emit packer [options]"
+        shift
+        case $target in
+            packer) exec "$MQG_REPO_ROOT/emit/packer.sh" "$@" ;;
+            *) die "no such emit target: $target (today: packer). One Packer template reaches QEMU, VirtualBox, VMware and Proxmox -- see docs/test-hosts.md" ;;
+        esac ;;
     *)
         if ! printf '%s\n' "$SUBCOMMANDS" | cut -d'|' -f1 | grep -qx "$cmd"; then
             printf 'vmavs: unknown subcommand: %s\n\n' "$cmd" >&2
