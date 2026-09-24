@@ -761,6 +761,20 @@ _fake_firmware() {
     done
 }
 
+# required_cmds <dir> -- every tool a require_cmd declaration in <dir>'s
+# *.sh files names, one per line, sorted. Comment-only lines are dropped
+# first, as tests/doctor.bats already does: a comment saying a script
+# "declares no require_cmd dependency of its own" is prose, not a
+# declaration, and matching it turned "dependency", "of", "its" and "own"
+# into tools. That bit two tasks, and comments were being contorted to
+# dodge it rather than the test being fixed.
+required_cmds() {
+    grep -rhE 'require_cmd [a-z0-9. _-]+' --include='*.sh' "$1" \
+        | grep -v '^[[:space:]]*#' \
+        | grep -oE 'require_cmd [a-z0-9. _-]+' \
+        | sed 's/require_cmd //' | tr ' ' '\n' | grep -v '^$' | sort -u
+}
+
 @test "prereqs.sh knows every tool the scripts actually require" {
     # ap-juicer 2026-09-21 stopped at "missing required command: zip",
     # which neither prereqs.sh nor triangulate.sh checked. The build
@@ -768,11 +782,21 @@ _fake_firmware() {
     # the authority, and this table is the lookup. An earlier fix
     # reconciled two lists while a third went unread.
     missing=""
-    for t in $(grep -rhoE 'require_cmd [a-z0-9. _-]+' --include='*.sh' "$REPO" \
-               | sed 's/require_cmd //' | tr ' ' '\n' | grep -v '^$' | sort -u); do
+    for t in $(required_cmds "$REPO"); do
         grep -q "^$t|" "$REPO/boot/prereqs.sh" || missing="$missing $t"
     done
     [ -z "$missing" ] || { echo "require_cmd names these; prereqs.sh does not:$missing"; false; }
+}
+
+@test "a comment that says require_cmd in plain words is not a declaration" {
+    F="$BATS_TEST_TMPDIR/decl"
+    mkdir -p "$F"
+    printf '%s\n' \
+        '# this script declares no require_cmd dependency of its own' \
+        '    # indented: require_cmd line somewhere names them' \
+        'require_cmd zip unzip' > "$F/x.sh"
+    run required_cmds "$F"
+    [ "$output" = "$(printf 'unzip\nzip')" ]
 }
 
 @test "prereqs.sh detects a missing development header and names its package" {

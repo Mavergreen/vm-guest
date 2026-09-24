@@ -106,14 +106,11 @@ FAIL"*) return 1 ;;
 # A `case`, not an associative array: bash 3.2 is the floor and
 # `declare -A` is one of the constructs this project removed to keep it.
 #
-# Every tool named below is traced to a `require_cmd`-declared dependency
-# (or, for the compiler toolchain, to bin/triangulate.sh's BUILD_TOOLS,
-# which is where gcc/nasm/iasl are checked today -- boot/build-ovmf.sh
-# declares none of its own, and just fails mid-compile without one) in the
-# scripts each subcommand actually runs. (Note for anyone grepping this
-# file for the literal declaration form: the two words above are written
-# with a hyphen between them, on purpose, so this comment cannot be
-# mistaken by tooling for an actual declaration naming bogus tools.)
+# Every tool named below is traced to a require_cmd declaration (or, for
+# the compiler toolchain, to bin/triangulate.sh's BUILD_TOOLS, which is
+# where gcc/nasm/iasl are checked today -- boot/build-ovmf.sh declares
+# none of its own, and just fails mid-compile without one) in the scripts
+# each subcommand actually runs.
 #
 #   fetch      media/fetch-installesd.sh, image/fetch-openssh.sh,
 #              image/fetch-updates.sh
@@ -125,7 +122,7 @@ FAIL"*) return 1 ;;
 #   media      media/build-installer-img.sh, lib/hfs.sh, and the
 #              qemu-linux privops backend (lib/privops-qemu-linux.sh) that
 #              does the one privileged step inside a microVM
-#   install    image/build-image.sh's own top-level dependency line, plus
+#   install    image/build-image.sh's own top-level require_cmd line, plus
 #              the QEMU binary it boots (checked separately, right after)
 #   clone      vm/clone.sh, lib/golden.sh (qemu-img create / info)
 #   run        vm/run.sh (qemu-system-x86_64, hardcoded)
@@ -135,12 +132,13 @@ FAIL"*) return 1 ;;
 #              its --describe/header output, but only ever with
 #              `command -v git` guarding it first, so a host without git
 #              gets a template with less provenance, not a failure. There
-#              is genuinely nothing this subcommand requires -- see below.
+#              is genuinely nothing this subcommand requires, so its list
+#              is empty.
 #   image      the union of fetch, boot-stack, media and install -- every
 #               stage image/build-image.sh's pipeline runs
 #
 # Left out on purpose, as ubiquitous POSIX baseline present on every host
-# this project targets (Linux, macOS, NetBSD) even though a `require_cmd`
+# this project targets (Linux, macOS, NetBSD) even though a require_cmd
 # line somewhere names them: awk, tr, head, tail, dd, od, truncate. Naming
 # them here would not help anyone triangulate a missing tool; a host
 # without them cannot run bin/vmavs itself. 7z is left out too: it is
@@ -155,7 +153,7 @@ FAIL"*) return 1 ;;
 # SECOND-TIER SUBCOMMANDS (docs/superpowers/plans/2026-09-22-shipping-vmavs.md
 # Task 7; not part of decisions/0007's ten):
 #
-#   triangulate bin/triangulate.sh declares no `require_cmd` dependency of
+#   triangulate bin/triangulate.sh declares no require_cmd dependency of
 #               its own -- its default level, --probe, is a survey that
 #               only ever ASKS `command -v` about tools
 #               (RUNTIME_TOOLS/BUILD_TOOLS), which is data-gathering, not
@@ -163,12 +161,12 @@ FAIL"*) return 1 ;;
 #               boot-stack/media/install do, but those are reported by
 #               triangulate's OWN probe output, not by doctor -- an
 #               honest empty list here, not an omission.
-#   golden      vm/golden.sh declares no `require_cmd` dependency of its
+#   golden      vm/golden.sh declares no require_cmd dependency of its
 #               own; lib/golden.sh calls `qemu-img` directly (create/info)
 #               for every subcommand that touches an image.
-#   compare     image/compare-images.sh's own top-level dependency line.
+#   compare     image/compare-images.sh's own top-level require_cmd line.
 #   freshness   build-image.sh --freshness exits before the script's own
-#               `require_cmd` declaration is ever reached, and
+#               require_cmd declaration is ever reached, and
 #               resolve_ssh_key(soft) only globs $HOME/.ssh and
 #               $MQG_IMAGE_DIR/keys (lib/sshkey.sh) -- no external tool
 #               either way. Once a stage's inputs are compared (anything
