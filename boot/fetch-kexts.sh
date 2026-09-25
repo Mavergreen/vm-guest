@@ -24,7 +24,7 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/vendor.sh
 . "$MQG_REPO_ROOT/lib/vendor.sh"
 
-# "<source name in vendor/sources.tsv>:<kext bundle name>".
+# "<source name in assets/pins/sources.tsv>:<kext bundle name>".
 #
 # The bundle name is also the name of the Mach-O inside Contents/MacOS,
 # which is the convention every acidanthera kext follows. The archives do
@@ -45,7 +45,7 @@ fi
 
 MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 MQG_BUILD_DIR=${MQG_BUILD_DIR:-$MQG_IMAGE_DIR/build}
-SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/vendor/sources.tsv}
+SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/assets/pins/sources.tsv}
 KEXT_DIR="$MQG_BUILD_DIR/kexts"
 
 require_cmd curl unzip

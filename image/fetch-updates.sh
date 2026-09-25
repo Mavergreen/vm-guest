@@ -7,7 +7,7 @@
 # build non-reproducible (whatever Apple serves that day) and
 # network-dependent at the wrong moment, and a 2013 OS negotiating with
 # 2026 servers may simply hang. Every update this project installs is a
-# standalone .pkg pinned in vendor/sources.tsv by checksum, exactly like
+# standalone .pkg pinned in assets/pins/sources.tsv by checksum, exactly like
 # every other ingredient. NEVER run `softwareupdate` at build time.
 #
 # WHAT EACH SELECTION IS
@@ -56,7 +56,7 @@ export MQG_REPO_ROOT
 MQG_LOG_PREFIX=fetch-updates
 
 MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
-SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/vendor/sources.tsv}
+SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/assets/pins/sources.tsv}
 
 # The selections, as registry names in install order. One place, read by
 # this script, by image/build-image.sh's stamp and by the tests -- a second
@@ -92,7 +92,7 @@ against its pinned checksum. Prints one absolute path per line, in the
 order the guest must install them. Prints nothing at all for "none".
 
   --updates WHICH  One of: $MQG_UPDATES_CHOICES (default: none)
-  --names          Print the vendor/sources.tsv names instead of fetching.
+  --names          Print the assets/pins/sources.tsv names instead of fetching.
                    Touches nothing and needs no network.
   --out DIR        Where to cache the packages
                    (default: \$MQG_IMAGE_DIR/updates)

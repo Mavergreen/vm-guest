@@ -19,7 +19,7 @@ setup() {
     BUILD="$REPO/image/build-image.sh"
     PAYLOAD="$REPO/image/payload/build-firstboot-pkg.sh"
     MEDIA="$REPO/media/build-installer-img.sh"
-    TSV="$REPO/vendor/sources.tsv"
+    TSV="$REPO/assets/pins/sources.tsv"
 }
 
 # --- the rule that has no exceptions ---------------------------------------
@@ -42,7 +42,7 @@ setup() {
 
 # --- the pins ---------------------------------------------------------------
 
-@test "every update package is pinned in vendor/sources.tsv with a real checksum" {
+@test "every update package is pinned in assets/pins/sources.tsv with a real checksum" {
     run "$FETCH" --names --updates all
     [ "$status" -eq 0 ]
     [ -n "$output" ]

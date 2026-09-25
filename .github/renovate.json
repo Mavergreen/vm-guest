@@ -13,8 +13,8 @@
     },
     {
       "customType": "regex",
-      "description": "OpenCore, built from pinned source (Tier 0). The version appears once in the URL, so no autoReplaceStringTemplate is needed. The sha256 in the next column is NOT something Renovate can compute -- .github/workflows/ci.yml re-verifies every changed vendor/sources.tsv line, so the bump PR stays red until the checksum is pinned with it. See INGREDIENTS.md.",
-      "managerFilePatterns": ["/^vendor/sources\\.tsv$/"],
+      "description": "OpenCore, built from pinned source (Tier 0). The version appears once in the URL, so no autoReplaceStringTemplate is needed. The sha256 in the next column is NOT something Renovate can compute -- .github/workflows/ci.yml re-verifies every changed assets/pins/sources.tsv line, so the bump PR stays red until the checksum is pinned with it. See INGREDIENTS.md.",
+      "managerFilePatterns": ["/^assets/pins/sources\\.tsv$/"],
       "matchStrings": [
         "https://github\\.com/acidanthera/OpenCorePkg/archive/refs/tags/(?<currentValue>[^/\\s]+)\\.tar\\.gz"
       ],
@@ -24,7 +24,7 @@
     {
       "customType": "regex",
       "description": "Lilu, an acidanthera release binary injected by OpenCore (Tier 1). The version appears TWICE in one URL, so the whole match is rewritten from a template -- a manager that replaced only the captured occurrence would leave a half-updated URL that 404s.",
-      "managerFilePatterns": ["/^vendor/sources\\.tsv$/"],
+      "managerFilePatterns": ["/^assets/pins/sources\\.tsv$/"],
       "matchStrings": [
         "https://github\\.com/acidanthera/Lilu/releases/download/(?<currentValue>[^/\\s]+)/Lilu-[^\\s]+\\.zip"
       ],
@@ -35,7 +35,7 @@
     {
       "customType": "regex",
       "description": "VirtualSMC, the SMC emulation kext OpenCore injects (Tier 1). Same two-occurrences-in-one-URL shape as Lilu.",
-      "managerFilePatterns": ["/^vendor/sources\\.tsv$/"],
+      "managerFilePatterns": ["/^assets/pins/sources\\.tsv$/"],
       "matchStrings": [
         "https://github\\.com/acidanthera/VirtualSMC/releases/download/(?<currentValue>[^/\\s]+)/VirtualSMC-[^\\s]+\\.zip"
       ],

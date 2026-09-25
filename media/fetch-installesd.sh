@@ -21,7 +21,7 @@
 set -euo pipefail
 
 # Pinned in two places on purpose: here, so --show-expected needs nothing
-# but bash, and in vendor/sources.tsv, where every other third-party
+# but bash, and in assets/pins/sources.tsv, where every other third-party
 # artifact is recorded. The fetch path checks they still agree.
 INSTALLESD_SHA256=c861fd59e82bf777496809a0d2a9b58f66691ee56738031f55874a3fe1d7c3ff
 
@@ -51,7 +51,7 @@ MQG_REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # host without curl is told that rather than something further downstream.
 require_cmd curl openssl xxd awk od tr head tail sha256sum
 
-SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/vendor/sources.tsv}
+SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/assets/pins/sources.tsv}
 if [ -z "${MQG_INSTALLESD_SHA256:-}" ]; then
     recorded=$(source_field "$SOURCES" apple-installesd-10.9.5 sha256)
     [ "$recorded" = "$INSTALLESD_SHA256" ] \

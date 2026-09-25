@@ -2,7 +2,6 @@
 # published. See the "never publish the guest image" rule in the design.
 golden/
 work/
-vendor/cache/
 *.qcow2
 *.img
 *.dmg

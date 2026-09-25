@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 so bin/verify-changed-sources.sh has a base revision
-      # to diff vendor/sources.tsv against. With a shallow clone it would
+      # to diff assets/pins/sources.tsv against. With a shallow clone it would
       # find none and skip -- silently, which is the failure mode that
       # check exists to prevent.
       - uses: actions/checkout@v7
@@ -41,7 +41,7 @@ jobs:
       - name: No Apple-derived bytes in a release
         run: ./bin/no-apple-bytes.sh
 
-      # A Renovate bump moves a URL in vendor/sources.tsv and cannot compute
+      # A Renovate bump moves a URL in assets/pins/sources.tsv and cannot compute
       # the checksum beside it. Without this the resulting PR is green and
       # the shared preset automerges a pin that will fail at fetch time.
       - name: Every changed source pin still verifies
@@ -116,17 +116,6 @@ jobs:
   # a darwin or netbsd build break is found here, not by a user.
   go:
     runs-on: ubuntu-latest
-    env:
-      # The repo's own vendor/ (the third-party artifact registry,
-      # vendor/sources.tsv) has no vendor/modules.txt. Since Task 4 gave
-      # go.mod its first real dependencies (golang.org/x/crypto,
-      # golang.org/x/term), Go's automatic vendor-directory detection
-      # (triggered by any top-level "vendor" dir once go.mod's go
-      # directive is >= 1.14) now misreads that unrelated directory as an
-      # inconsistent Go vendor tree and refuses to build. -mod=mod is the
-      # smallest fix that does not touch vendor/sources.tsv or its shell
-      # callers. See task-3-4-report.md for the full account.
-      GOFLAGS: -mod=mod
     steps:
       - uses: actions/checkout@v7
 

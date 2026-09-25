@@ -128,7 +128,7 @@ needs a bootable configuration first.
 
 #### Which releases, and whether they still support 10.9
 
-`vendor/sources.tsv` pins:
+`assets/pins/sources.tsv` pins:
 
 | Kext | Release | Why this version |
 |---|---|---|

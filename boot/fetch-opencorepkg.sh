@@ -25,7 +25,7 @@ fi
 
 MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 MQG_BUILD_DIR=${MQG_BUILD_DIR:-$MQG_IMAGE_DIR/build}
-SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/vendor/sources.tsv}
+SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/assets/pins/sources.tsv}
 
 require_cmd curl tar
 

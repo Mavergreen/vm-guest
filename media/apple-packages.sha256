@@ -1,6 +1,6 @@
 # The SHA-256 of every file in Apple's Packages directory, as shipped in
 # InstallESD.dmg c861fd59e82bf777496809a0d2a9b58f66691ee56738031f55874a3fe1d7c3ff
-# (10.9.5 13F34, pinned by media/fetch-installesd.sh and vendor/sources.tsv).
+# (10.9.5 13F34, pinned by media/fetch-installesd.sh and assets/pins/sources.tsv).
 #
 # WHY THESE ARE PINNED RATHER THAN MEASURED EACH RUN
 #

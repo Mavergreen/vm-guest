@@ -99,7 +99,7 @@ setup() {
 
 @test "fetch-opencorepkg.sh refuses an unpinned checksum" {
     # The name here must match what fetch-opencorepkg.sh looks up
-    # (opencorepkg-src, per vendor/sources.tsv) -- a mismatched name would
+    # (opencorepkg-src, per assets/pins/sources.tsv) -- a mismatched name would
     # die with "no such source" instead, which is a different failure than
     # the one this test means to exercise.
     printf '%s\n' \
@@ -166,7 +166,7 @@ setup() {
     [ "$status" -eq 0 ]
     while IFS=$'\t' read -r name _commit; do
         sha=$(awk -F'\t' -v n="$name" \
-            '$0 !~ /^#/ && $1 == n { print $3; exit }' "$REPO/vendor/sources.tsv")
+            '$0 !~ /^#/ && $1 == n { print $3; exit }' "$REPO/assets/pins/sources.tsv")
         # A name with no row at all is as broken as an unpinned one.
         [ -n "$sha" ]
         [ "$sha" != "TOFU" ]
@@ -179,7 +179,7 @@ setup() {
     [ "$status" -eq 0 ]
     while IFS=$'\t' read -r name commit; do
         url=$(awk -F'\t' -v n="$name" \
-            '$0 !~ /^#/ && $1 == n { print $2; exit }' "$REPO/vendor/sources.tsv")
+            '$0 !~ /^#/ && $1 == n { print $2; exit }' "$REPO/assets/pins/sources.tsv")
         [[ "$url" == *"$commit"* ]]
     done <<< "$output"
 }

@@ -15,13 +15,13 @@ setup() {
 # violation can be committed without touching this one.
 make_repo() {
     local dir="$BATS_TEST_TMPDIR/planted"
-    mkdir -p "$dir/bin" "$dir/lib" "$dir/vendor" "$dir/boot/config" \
+    mkdir -p "$dir/bin" "$dir/lib" "$dir/assets/pins" "$dir/boot/config" \
         "$dir/components/openssh"
     cp "$REPO/bin/no-apple-bytes.sh" "$dir/bin/"
     cp "$REPO/bin/ingredient-fingerprint.sh" "$dir/bin/"
     cp "$REPO/bin/image-staleness.sh" "$dir/bin/"
     cp "$REPO/lib/common.sh" "$dir/lib/"
-    cp "$REPO/vendor/sources.tsv" "$dir/vendor/"
+    cp "$REPO/assets/pins/sources.tsv" "$dir/assets/pins/"
     cp "$REPO/boot/config/config.plist" "$dir/boot/config/"
     cp "$REPO/components/openssh/version" "$dir/components/openssh/"
     git -C "$dir" init -q
@@ -72,7 +72,7 @@ make_repo() {
 }
 
 @test "Apple's media is registered as a URL, never as a path in the tree" {
-    run awk -F'\t' '$1 ~ /^apple-/ { print $2 }' "$REPO/vendor/sources.tsv"
+    run awk -F'\t' '$1 ~ /^apple-/ { print $2 }' "$REPO/assets/pins/sources.tsv"
     [ -n "$output" ]
     [[ "$output" == http://* || "$output" == https://* ]]
 }
@@ -336,13 +336,13 @@ make_repo() {
     [ "$status" -eq 0 ]
 }
 
-@test "the registry check runs in ref mode against the ref's own vendor/sources.tsv" {
+@test "the registry check runs in ref mode against the ref's own assets/pins/sources.tsv" {
     dir="$(make_repo)"
-    printf 'apple-bogus\t/not/a/url\tdeadbeef\n' >> "$dir/vendor/sources.tsv"
+    printf 'apple-bogus\t/not/a/url\tdeadbeef\n' >> "$dir/assets/pins/sources.tsv"
     git -C "$dir" add -A
     git -C "$dir" -c commit.gpgsign=false commit -qm planted
     git -C "$dir" tag t1
-    git -C "$dir" checkout -q HEAD~1 -- vendor/sources.tsv
+    git -C "$dir" checkout -q HEAD~1 -- assets/pins/sources.tsv
     git -C "$dir" add -A
     git -C "$dir" -c commit.gpgsign=false commit -qm reverted
     run bash -c "cd '$dir' && ./bin/no-apple-bytes.sh t1"
@@ -360,7 +360,7 @@ make_repo() {
     # One line per non-comment registry entry, plus each components/*/version,
     # plus config.plist.
     registry=$(awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $1 != "" { n++ } END { print n+0 }' \
-        "$REPO/vendor/sources.tsv")
+        "$REPO/assets/pins/sources.tsv")
     components=$(ls -d "$REPO"/components/*/ 2>/dev/null | wc -l)
     [ "${#lines[@]}" -eq $((registry + components + 1)) ]
     [[ "$output" == *"config.plist"* ]]
@@ -382,10 +382,10 @@ make_repo() {
     dir="$(make_repo)"
     before="$(cd "$dir" && ./bin/ingredient-fingerprint.sh)"
     # Reverse the entry lines; the pins are identical, so the digest must be.
-    { grep '^#' "$dir/vendor/sources.tsv"
-      grep -v '^#' "$dir/vendor/sources.tsv" | grep . | tac
-    } > "$dir/vendor/sources.tsv.new"
-    mv "$dir/vendor/sources.tsv.new" "$dir/vendor/sources.tsv"
+    { grep '^#' "$dir/assets/pins/sources.tsv"
+      grep -v '^#' "$dir/assets/pins/sources.tsv" | grep . | tac
+    } > "$dir/assets/pins/sources.tsv.new"
+    mv "$dir/assets/pins/sources.tsv.new" "$dir/assets/pins/sources.tsv"
     after="$(cd "$dir" && ./bin/ingredient-fingerprint.sh)"
     [ "$after" = "$before" ]
 }
@@ -434,7 +434,7 @@ make_repo() {
     } > "$BATS_TEST_TMPDIR/predates.manifest"
     printf 'brand-new-thing\thttp://example.invalid/x.tar.gz\t%s\n' \
         0000000000000000000000000000000000000000000000000000000000000001 \
-        >> "$dir/vendor/sources.tsv"
+        >> "$dir/assets/pins/sources.tsv"
     run bash -c "cd '$dir' && ./bin/image-staleness.sh '$BATS_TEST_TMPDIR/predates.manifest'"
     [ "$status" -ne 0 ]
     [[ "$output" == *"GAINED"* ]]

@@ -362,7 +362,7 @@ stage_names_in() {
 #
 # The pipeline used to skip a stage whenever its output file was present.
 # The failure that motivated all of this: Renovate bumps the OpenCore pin
-# in vendor/sources.tsv, the opencore stage sees its .efi sitting there,
+# in assets/pins/sources.tsv, the opencore stage sees its .efi sitting there,
 # skips, and we build an image from stale firmware without a word. Each
 # stage now records what it consumed beside its output, and `--freshness`
 # answers "would this run, and why" without building anything -- which is
@@ -378,7 +378,7 @@ freshness_row() {
 # already uses.
 freshness_sandbox() {
     export MQG_SOURCES="$BATS_TEST_TMPDIR/sources.tsv"
-    cp "$REPO/vendor/sources.tsv" "$MQG_SOURCES"
+    cp "$REPO/assets/pins/sources.tsv" "$MQG_SOURCES"
     mkdir -p "$MQG_IMAGE_DIR/media" "$MQG_IMAGE_DIR/build/artifacts"
 }
 
@@ -421,7 +421,7 @@ bump_pin() {
     [[ "$(freshness_row esd)" == *"no input record"* ]]
 }
 
-@test "a bumped pin in vendor/sources.tsv reruns the stage that consumes it" {
+@test "a bumped pin in assets/pins/sources.tsv reruns the stage that consumes it" {
     # THE SCENARIO THIS EXISTS FOR.
     freshness_sandbox
     plant_stage esd "$MQG_IMAGE_DIR/media/InstallESD.dmg"

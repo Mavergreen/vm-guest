@@ -13,7 +13,7 @@
 # re-runs. Two of the three inputs floated and arbitrary fetched shell ran
 # at build time. All three are pinned now:
 #
-#   OpenCorePkg  release tarball, vendor/sources.tsv (opencorepkg-src)
+#   OpenCorePkg  release tarball, assets/pins/sources.tsv (opencorepkg-src)
 #   efibuild.sh  ocbuild at OCBUILD_COMMIT, read from disk instead of curl'd
 #   EDK II       acidanthera/audk at AUDK_COMMIT, plus its submodules,
 #                which a GitHub archive tarball leaves out
@@ -137,7 +137,7 @@ OC_BUILD_OPTIONS=$(printf -- '-std=%s\t%s' "$OC_STD" "$OC_NO_WERROR")
 
 # The pinned commits. These are what "reproducible" means for this build,
 # and this is the one place they are written down: boot/fetch-edk2.sh asks
-# this script (--show-pins) what to download. vendor/sources.tsv holds the
+# this script (--show-pins) what to download. assets/pins/sources.tsv holds the
 # URLs; pinned_file below refuses a URL that does not name the commit
 # expected here, rather than trusting two files to stay in step.
 OCBUILD_COMMIT=e9ed49cb7a4f7fa2830c024a13d63de27c2e0d1a
@@ -211,7 +211,7 @@ if [ "${1:-}" = "--list-artifacts" ]; then
     exit 0
 fi
 
-# Every pinned input, as "<source name in vendor/sources.tsv>\t<commit>",
+# Every pinned input, as "<source name in assets/pins/sources.tsv>\t<commit>",
 # each name once. boot/fetch-edk2.sh downloads exactly this list, so the
 # build declares what it needs and the fetch script has no pins of its own
 # to drift out of date.
@@ -240,7 +240,7 @@ fi
 
 MQG_IMAGE_DIR=${MQG_IMAGE_DIR:-$HOME/.local/share/mavericks-qemu-guest}
 MQG_BUILD_DIR=${MQG_BUILD_DIR:-$MQG_IMAGE_DIR/build}
-SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/vendor/sources.tsv}
+SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/assets/pins/sources.tsv}
 SRC="$MQG_BUILD_DIR/OpenCorePkg-$OC_VERSION"
 UDK="$SRC/UDK"
 OUT="$MQG_BUILD_DIR/artifacts"

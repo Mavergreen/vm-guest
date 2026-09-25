@@ -88,7 +88,7 @@ for k in d['Kernel']['Add']:
     [ "$status" -eq 0 ]
     while read -r bundle; do
         [ -z "$bundle" ] && continue
-        grep -q "${bundle%%.kext}" "$REPO/vendor/sources.tsv" \
+        grep -q "${bundle%%.kext}" "$REPO/assets/pins/sources.tsv" \
             || { echo "kext not pinned in sources.tsv: $bundle"; return 1; }
     done <<< "$output"
 }

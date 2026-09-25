@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # The third-party artifact registry.
 #
-# vendor/sources.tsv is tab-separated: name, url, sha256. A sha256 of TOFU
+# assets/pins/sources.tsv is tab-separated: name, url, sha256. A sha256 of TOFU
 # means "not yet known" -- see the trust-on-first-use note in the plan.
 #
 # Requires lib/common.sh to be sourced first.

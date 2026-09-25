@@ -148,7 +148,7 @@ ssh_user=mavsuser
 #             applications rather than the operating system.
 #
 # Like --nic and unlike --cpu, an unlisted value is REFUSED: the list is
-# not guidance here, it is the set of things vendor/sources.tsv has pins
+# not guidance here, it is the set of things assets/pins/sources.tsv has pins
 # for.
 #
 # NEVER `softwareupdate` at build time. It reaches Apple's servers during
@@ -584,7 +584,7 @@ have() { [ -s "$1" ] && [ "$force" -eq 0 ]; }
 #
 # This pipeline used to skip a stage whenever its output file was present.
 # That is wrong in exactly the case this project built machinery to
-# prevent: Renovate bumps the OpenCore or EDK II pin in vendor/sources.tsv,
+# prevent: Renovate bumps the OpenCore or EDK II pin in assets/pins/sources.tsv,
 # the opencore stage sees its .efi sitting there, skips, and we ship an
 # image built from stale firmware without a word. bin/image-staleness.sh
 # catches that afterwards, per image, from the manifest -- the pipeline
@@ -975,7 +975,7 @@ updates_stamp() {
         printf 'update:%s=%s\n' "$name" \
             "$(awk -F'\t' -v n="$name" \
                '$0 !~ /^#/ && $1 == n { print $3; exit }' \
-               "$MQG_REPO_ROOT/vendor/sources.tsv")"
+               "$MQG_REPO_ROOT/assets/pins/sources.tsv")"
     done < <("$MQG_REPO_ROOT/image/fetch-updates.sh" --names --updates "$updates")
 }
 

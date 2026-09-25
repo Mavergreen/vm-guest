@@ -232,7 +232,7 @@ while IFS= read -r -d '' f; do
     fi
 done < "$MQG_NAB_LIST"
 
-# 4. The registry's own statement. vendor/sources.tsv names Apple's
+# 4. The registry's own statement. assets/pins/sources.tsv names Apple's
 #    InstallESD as a URL fetched at runtime. If it ever named a path
 #    inside the repository instead, the rule would be broken by the
 #    registry rather than by a file.
@@ -240,13 +240,13 @@ done < "$MQG_NAB_LIST"
 #    Read via `blob_show`, not off disk -- the registry AT THE REF being
 #    checked is what matters, not whatever the working tree happens to
 #    hold right now.
-registry_content=$(blob_show vendor/sources.tsv) || registry_content=""
+registry_content=$(blob_show assets/pins/sources.tsv) || registry_content=""
 if printf '%s\n' "$registry_content" | grep -q '^apple-'; then
     while IFS=$'\t' read -r name url _; do
         case $name in apple-*) : ;; *) continue ;; esac
         case $url in
             http://*|https://*) : ;;
-            *) flag "vendor/sources.tsv:$name" \
+            *) flag "assets/pins/sources.tsv:$name" \
                     "points at $url, not at a URL -- Apple's media must be" \
                     "fetched at runtime, never carried" ;;
         esac

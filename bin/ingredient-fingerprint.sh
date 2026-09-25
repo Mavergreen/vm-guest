@@ -6,7 +6,7 @@
 # WHAT AN INGREDIENT IS HERE
 #
 # Anything that, if it moved, would make the next image different from the
-# last one. That is the boot-stack sources in vendor/sources.tsv, the
+# last one. That is the boot-stack sources in assets/pins/sources.tsv, the
 # component pins under components/*/version, and boot/config/config.plist
 # (OpenCore's configuration is as much an input as OpenCore is).
 #
@@ -22,7 +22,7 @@
 #
 # image/build-image.sh used to skip a stage whenever its output file was
 # present, which is wrong in exactly the case the machinery above exists to
-# prevent: Renovate moves the OpenCore or EDK II pin in vendor/sources.tsv,
+# prevent: Renovate moves the OpenCore or EDK II pin in assets/pins/sources.tsv,
 # the opencore stage sees its .efi sitting there, skips, and the pipeline
 # builds an image from stale firmware without a word.
 # bin/image-staleness.sh catches that afterwards, per image; the pipeline
@@ -51,7 +51,7 @@ MQG_LOG_PREFIX=ingredient-fingerprint
 # The registry this run reads. MQG_SOURCES is the seam
 # boot/build-opencore.sh already uses, and it is what lets a test bump a
 # pin without touching the checkout.
-SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/vendor/sources.tsv}
+SOURCES=${MQG_SOURCES:-$MQG_REPO_ROOT/assets/pins/sources.tsv}
 
 # Stages that have repository-side inputs to declare. `install` is here
 # with nothing of its own: everything it consumes is a checksum or a
@@ -165,7 +165,7 @@ compiler_inputs() {
 
 # The listing, sorted, so its digest does not depend on file order.
 ingredient_list() {
-    # vendor/sources.tsv: name -> the checksum, which IS the identity of
+    # assets/pins/sources.tsv: name -> the checksum, which IS the identity of
     # the artifact. The URL is how to get it; the checksum is what it is.
     # A URL that changes while the bytes do not is not a new ingredient.
     awk -F'\t' '$0 !~ /^#/ && NF >= 3 && $1 != "" { print $1 "\t" $3 }' \

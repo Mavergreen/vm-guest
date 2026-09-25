@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Re-fetch and re-verify every vendor/sources.tsv entry this branch changed.
+# Re-fetch and re-verify every assets/pins/sources.tsv entry this branch
+# changed.
 #
 # WHY THIS EXISTS, AND WHY IT IS NOT OPTIONAL
 #
-# Each line of vendor/sources.tsv is a URL and a sha256 of what that URL
+# Each line of assets/pins/sources.tsv is a URL and a sha256 of what that URL
 # returns. Renovate can move the URL; it cannot compute the checksum. So a
 # bump PR arrives with a new version and an old hash -- a pin that is
 # internally inconsistent and will fail at fetch time, half an hour into
@@ -39,7 +40,7 @@ export MQG_REPO_ROOT
 # shellcheck disable=SC2034  # read by log()/warn()/die() at call time
 MQG_LOG_PREFIX=verify-changed-sources
 
-TSV=$MQG_REPO_ROOT/vendor/sources.tsv
+TSV=$MQG_REPO_ROOT/assets/pins/sources.tsv
 cd "$MQG_REPO_ROOT"
 
 base=${1:-}
@@ -53,7 +54,16 @@ fi
 
 old=$(mktemp) || die "cannot create a temp file"
 trap 'rm -f "$old"' EXIT
-git show "$base:vendor/sources.tsv" > "$old" 2>/dev/null || : > "$old"
+# The registry moved from vendor/sources.tsv to assets/pins/sources.tsv.
+# A base commit from before that move still has it at the old path, so a
+# PR opened against such a base needs the fallback -- without it, every
+# pin in the file would look "new" against an empty $old (or, the other
+# way, git show would just fail and $old would be silently emptied), and
+# either way every pin would be treated as changed instead of comparing
+# apples to apples.
+if ! git show "$base:assets/pins/sources.tsv" > "$old" 2>/dev/null; then
+    git show "$base:vendor/sources.tsv" > "$old" 2>/dev/null || : > "$old"
+fi
 
 # Names whose url or sha256 column differs from the base revision. Compared
 # field by field rather than line by line, so a reflowed comment or a
@@ -71,7 +81,7 @@ while IFS=$'\t' read -r name url sha; do
 done < "$TSV"
 
 if [ -z "$changed" ]; then
-    log "no vendor/sources.tsv pin changed since $base -- nothing to fetch"
+    log "no assets/pins/sources.tsv pin changed since $base -- nothing to fetch"
     exit 0
 fi
 

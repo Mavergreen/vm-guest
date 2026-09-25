@@ -28,7 +28,7 @@ setup() {
     # other third-party artifact is. They must not drift apart.
     expected=$("$REPO/media/fetch-installesd.sh" --show-expected)
     recorded=$(awk -F'\t' '$1 == "apple-installesd-10.9.5" { print $3 }' \
-        "$REPO/vendor/sources.tsv")
+        "$REPO/assets/pins/sources.tsv")
     [ -n "$recorded" ]
     [ "$expected" = "$recorded" ]
 }
