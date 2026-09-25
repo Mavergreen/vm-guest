@@ -87,7 +87,11 @@ func (s Spec) Args() []string {
 		"-device", "usb-storage,bus=usb.0,drive=opencore",
 		"-drive", "id=target,if=none,format=qcow2,file=" + s.Disk,
 		"-device", "ide-hd,bus=ide.0,drive=target",
-		"-netdev", fmt.Sprintf("user,id=net0,hostfwd=tcp::%d-:22", s.SSHPort),
+		// hostfwd is bound to 127.0.0.1: unbound (build-image.sh's
+		// qemu_args, "hostfwd=tcp::PORT-:22") reaches the guest's sshd
+		// -- Apple's OpenSSH 6.2, with no other access control -- from
+		// anywhere on the network. vmavs ssh only ever dials 127.0.0.1.
+		"-netdev", fmt.Sprintf("user,id=net0,hostfwd=tcp:127.0.0.1:%d-:22", s.SSHPort),
 		"-device", NICDevice(s.NIC),
 		"-device", "usb-kbd,bus=usb.0",
 		"-device", "usb-mouse,bus=usb.0",

@@ -27,7 +27,11 @@ func TestInstallMatchesTheShellPipelineArgumentForArgument(t *testing.T) {
 		"-device", "usb-storage,bus=usb.0,drive=opencore",
 		"-drive", "id=target,if=none,format=qcow2,file=/i/x.qcow2",
 		"-device", "ide-hd,bus=ide.0,drive=target",
-		"-netdev", "user,id=net0,hostfwd=tcp::2222-:22",
+		// Deliberately deviates from build-image.sh's qemu_args()
+		// ("hostfwd=tcp::2222-:22"): binding 127.0.0.1 keeps the guest's
+		// sshd, Apple's OpenSSH 6.2, off the network; vmavs ssh only
+		// ever dials 127.0.0.1 itself (fix round 1, controller ruling 6).
+		"-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22",
 		"-device", "e1000-82545em,netdev=net0",
 		"-device", "usb-kbd,bus=usb.0",
 		"-device", "usb-mouse,bus=usb.0",

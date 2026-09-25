@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Machine defaults, MEASURED: each is the value image/build-image.sh used
@@ -65,10 +66,19 @@ func (p Paths) OpenCoreImage() string {
 	return cur
 }
 
-// Home is VMAVS_HOME, else ~/.local/share/vmavs.
+// Home is VMAVS_HOME, made absolute (a qcow2 overlay's backing file is a
+// path baked into the overlay, and a relative one would break as soon as
+// the working directory changed), else ~/.local/share/vmavs.
 func Home(getenv func(string) string) (string, error) {
 	if h := getenv("VMAVS_HOME"); h != "" {
-		return h, nil
+		if strings.HasPrefix(h, "~") {
+			return "", fmt.Errorf("VMAVS_HOME=%s: a leading ~ is not expanded here; use $HOME instead", h)
+		}
+		abs, err := filepath.Abs(h)
+		if err != nil {
+			return "", fmt.Errorf("VMAVS_HOME=%s: %w", h, err)
+		}
+		return abs, nil
 	}
 	u := getenv("HOME")
 	if u == "" {

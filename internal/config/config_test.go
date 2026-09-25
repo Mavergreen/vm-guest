@@ -22,6 +22,23 @@ func TestHomeIsVMAVS_HOMEElseXDGStyleDefault(t *testing.T) {
 	}
 }
 
+func TestHomeIsMadeAbsolute(t *testing.T) {
+	h, err := Home(env(map[string]string{"VMAVS_HOME": "rel/vmavs"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(h) {
+		t.Fatalf("got %q, want absolute (a relative VMAVS_HOME would break every overlay's backing-file path)", h)
+	}
+}
+
+func TestHomeRejectsATildePrefix(t *testing.T) {
+	_, err := Home(env(map[string]string{"VMAVS_HOME": "~/vmavs"}))
+	if err == nil || !strings.Contains(err.Error(), "$HOME") {
+		t.Fatalf("err = %v, want a hint to use $HOME", err)
+	}
+}
+
 func TestLegacyHintOnlyWhenOnlyTheOldHomeExists(t *testing.T) {
 	old := "/h/.local/share/mavericks-qemu-guest"
 	exists := func(p string) bool { return p == old }
