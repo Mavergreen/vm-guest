@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	vmguest "github.com/Mavergreen/vm-guest"
 	"github.com/Mavergreen/vm-guest/internal/proc"
@@ -71,7 +72,7 @@ func (b Backend) buildInitramfs(ctx context.Context, payload []byte, roles []str
 	if err != nil {
 		return nil, err
 	}
-	mods, order, err := b.stageModules(ctx)
+	mods, order, err := b.stagedModules(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -112,6 +113,39 @@ func joinLines(s []string) string {
 		return ""
 	}
 	return strings.Join(s, "\n") + "\n"
+}
+
+// moduleCache is a Backend's staged modules, shared by its copies, and
+// what they were staged for.
+type moduleCache struct {
+	mu    sync.Mutex
+	key   string
+	mods  map[string][]byte
+	order []string
+}
+
+// stagedModules is stageModules, once per Backend: the modules a host has
+// do not change between the passes of one build, and staging them again
+// on every pass repeated every "built into the kernel" line four times.
+// The answer is kept for this module list, tree and release only, and a
+// failure is not kept: the next Run tries again.
+func (b Backend) stagedModules(ctx context.Context) (map[string][]byte, []string, error) {
+	if b.staged == nil {
+		return b.stageModules(ctx)
+	}
+	c := b.staged
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := strings.Join(append([]string{b.ModulesDir, b.KVer}, b.Modules...), "\x00")
+	if c.mods != nil && c.key == key {
+		return c.mods, c.order, nil
+	}
+	mods, order, err := b.stageModules(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	c.key, c.mods, c.order = key, mods, order
+	return mods, order, nil
 }
 
 // stageModules resolves each module, with its dependencies, the way the

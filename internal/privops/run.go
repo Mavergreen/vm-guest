@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
 
@@ -60,7 +61,7 @@ func (b Backend) Run(ctx context.Context, target string, payload []byte, disks [
 		}
 		return nil, fmt.Errorf("the privops microVM cannot run on this host: %d requirement(s) above are unmet -- nothing here installs anything; see vmavs doctor", len(m))
 	}
-	if !regularFile(target) {
+	if !config.RegularFile(target) {
 		return nil, fmt.Errorf("privops: no such image: %s", target)
 	}
 	var roles []string
@@ -70,7 +71,7 @@ func (b Backend) Run(ctx context.Context, target string, payload []byte, disks [
 		default:
 			return nil, fmt.Errorf("privops: unknown disk role %q", d.Role)
 		}
-		if !regularFile(d.Path) {
+		if !config.RegularFile(d.Path) {
 			return nil, fmt.Errorf("privops: no such image: %s", d.Path)
 		}
 		roles = append(roles, d.Role)
@@ -99,11 +100,11 @@ func (b Backend) Run(ctx context.Context, target string, payload []byte, disks [
 	args := []string{"-enable-kvm", "-m", fmt.Sprint(b.MemMiB), "-nographic", "-no-reboot",
 		"-kernel", kernel, "-initrd", initrdPath,
 		"-append", "console=ttyS0 loglevel=3 panic=1 mqg_modules=" + strings.Join(b.Modules, ","),
-		"-drive", "file=" + target + ",format=raw,if=virtio"}
+		"-drive", "file=" + driveFile(target) + ",format=raw,if=virtio"}
 	// readonly=on is belt and braces over the guest's own mount -o ro: a
 	// source QEMU will not write is one a buggy payload cannot corrupt.
 	for _, d := range disks {
-		spec := "file=" + d.Path + ",format=raw,if=virtio"
+		spec := "file=" + driveFile(d.Path) + ",format=raw,if=virtio"
 		if d.Role == "ro" {
 			spec += ",readonly=on"
 		}
@@ -170,11 +171,9 @@ func (b Backend) Run(ctx context.Context, target string, payload []byte, disks [
 	return console, nil
 }
 
-// regularFile is the shell's [ -f "$path" ].
-func regularFile(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.Mode().IsRegular()
-}
+// driveFile is path as a value in -drive's option list, which QEMU
+// splits on commas: a comma in the value is written twice.
+func driveFile(path string) string { return strings.ReplaceAll(path, ",", ",,") }
 
 // cleanLines is the console as lines, without terminal escapes or
 // carriage returns, and without the trailing newlines a command
@@ -213,6 +212,20 @@ func (b Backend) logTail(console []byte) {
 	for _, l := range lines {
 		b.logf("  %s", l)
 	}
+}
+
+// Marker is the value printed after "name " at the start of exactly one
+// console line, and whether there was exactly one. It is the one rule for
+// a marker read as a single value -- a size, a count, a checksum: printed
+// on no line, or on two, it is no value, and the caller refuses what it
+// was for. Two lines are two answers, and taking either would be a guess.
+// (content-digest.sh took the first, build-installer-img.sh all of them
+// at once; neither payload prints one twice.)
+func Marker(console []byte, name string) (string, bool) {
+	if v := Markers(console, name); len(v) == 1 {
+		return v[0], true
+	}
+	return "", false
 }
 
 // Markers is every value printed after "name " at the start of a console

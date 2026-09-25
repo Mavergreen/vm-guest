@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // KernelCandidates is every path a kernel image might be at, most
@@ -105,8 +106,9 @@ func BusyboxLinkage(path string) string {
 
 // Missing is one line per unmet requirement, and nothing when the backend
 // can run here. Every one is named, not just the first: a report naming
-// one of several costs a round trip per guess. cpio is not among them:
-// the initramfs is written in Go (Ruling 5 of phase 4).
+// one of several costs a round trip per guess. A KVM device this user
+// cannot write is among them, since QEMU runs with -enable-kvm; cpio is
+// not: the initramfs is written in Go (Ruling 5 of phase 4).
 func (b Backend) Missing() []string {
 	if b.GOOS != "linux" {
 		return []string{fmt.Sprintf("the qemu-linux privops backend (it boots a Linux kernel with its own modules; this host is %s)", b.GOOS)}
@@ -126,5 +128,21 @@ func (b Backend) Missing() []string {
 	if _, err := b.Kernel(); err != nil {
 		m = append(m, fmt.Sprintf("a readable kernel image for %s (looked for: %s)", b.KVer, strings.Join(b.KernelCandidates(), " ")))
 	}
+	if l := b.kvmMissing(); l != "" {
+		m = append(m, l)
+	}
 	return m
+}
+
+// kvmMissing is why QEMU's -enable-kvm would fail here, or "". Access is
+// asked with the real uid, as open(2) will check it; a device node is
+// never opened here, since opening one is not a question.
+func (b Backend) kvmMissing() string {
+	if b.KVMDevice == "" || syscall.Access(b.KVMDevice, 2) == nil { // 2 is W_OK
+		return ""
+	}
+	if _, err := os.Stat(b.KVMDevice); err != nil {
+		return b.KVMDevice + " does not exist (is the kvm module loaded? on a VM, is nested virtualisation on?)"
+	}
+	return b.KVMDevice + " is not writable by this user (is this user in group kvm? on a VM, is nested virtualisation on?)"
 }

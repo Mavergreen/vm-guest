@@ -199,5 +199,12 @@ func QEMU(getenv func(string) string) string {
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
+// RegularFile is the shell's [ -f "$p" ]: a regular file, symlinks
+// followed.
+func RegularFile(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.Mode().IsRegular()
+}
+
 // Exists reports whether p exists: LegacyHint's exists, on the real filesystem.
 func Exists(p string) bool { return exists(p) }

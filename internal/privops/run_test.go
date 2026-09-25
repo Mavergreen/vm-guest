@@ -430,6 +430,101 @@ func TestRunDrives(t *testing.T) {
 	}
 }
 
+// QEMU splits -drive's option list on commas, and reads ",," as one:
+// every file= path is escaped, the target's and each disk's.
+func TestRunEscapesCommasInDrivePaths(t *testing.T) {
+	fx := newRunFixture(t)
+	img := fx.images(t, "t,1.img", "a,,b", "c")
+	fx.console(t, "MQG-PRIVOPS-OK rc=0\n")
+	if _, err := fx.b.Run(context.Background(), img[0], nil, []Disk{{"ro", img[1]}, {"raw", img[2]}}); err != nil {
+		t.Fatal(err)
+	}
+	a := qemuCalls(fx.fake)[0].Args
+	var drives []string
+	for i := range a {
+		if a[i] == "-drive" {
+			drives = append(drives, a[i+1])
+		}
+	}
+	esc := func(p string) string { return strings.ReplaceAll(p, ",", ",,") }
+	want := []string{
+		"file=" + esc(img[0]) + ",format=raw,if=virtio",
+		"file=" + esc(img[1]) + ",format=raw,if=virtio,readonly=on",
+		"file=" + esc(img[2]) + ",format=raw,if=virtio",
+	}
+	if !reflect.DeepEqual(drives, want) {
+		t.Fatalf("drives\n got %q\nwant %q", drives, want)
+	}
+	if !strings.Contains(drives[0], "t,,1.img,format") || !strings.Contains(drives[1], "a,,,,b,format") {
+		t.Fatalf("not escaped: %q", drives)
+	}
+}
+
+// Modules are resolved and staged once per Backend, not once per pass:
+// a build is four passes, and "assuming it is built into the kernel" for
+// each of seven modules on each pass was twenty-eight lines of noise.
+func TestModulesAreStagedOncePerBackend(t *testing.T) {
+	fx := newRunFixture(t)
+	uname := &proc.Fake{Handle: func(c proc.Cmd) error {
+		if c.Name == "uname" {
+			_, _ = io.WriteString(c.Stdout, testKVer+"\n")
+		}
+		return nil
+	}}
+	b, err := NewBackend(uname, "qemu-system-x86_64", fx.log.logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The backend NewBackend made, pointed at the fixture's host.
+	b.Runner, b.BootDir, b.ModulesDir, b.KVer, b.GOOS, b.KVMDevice, b.gzipLevel =
+		fx.fake, fx.b.BootDir, fx.b.ModulesDir, testKVer, "linux", "", fx.b.gzipLevel
+	fx.fake.Paths["modprobe"] = "/sbin/modprobe"
+	src := filepath.Join(fx.root, "modules", testKVer, "kernel", "fs", "hfsplus.ko")
+	write(t, src, []byte("hfsplus"), 0o644)
+	var modprobes int
+	fx.fake.Handle = func(c proc.Cmd) error {
+		switch c.Name {
+		case "modprobe":
+			modprobes++
+		case "qemu-system-x86_64":
+			initrd, _ := os.ReadFile(c.Args[8])
+			if got := string(byName(readNewc(t, initrd))["lib/modules/hfsplus.ko"].data); got != "hfsplus" {
+				t.Errorf("pass staged hfsplus.ko as %q", got)
+			}
+			_, _ = io.WriteString(c.Stdout, "MQG-PRIVOPS-OK rc=0\n")
+		}
+		return nil
+	}
+	img := fx.images(t, "t.img")
+	for pass := 0; pass < 2; pass++ {
+		if _, err := b.Run(context.Background(), img[0], nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	builtIn := 0
+	for _, l := range fx.log.all() {
+		if strings.Contains(l, "assuming it is built into the kernel") {
+			builtIn++
+		}
+	}
+	if want := len(DefaultModules) - 1; builtIn != want {
+		t.Fatalf("logged %d built-in lines over two passes, want %d (once per module):\n%s", builtIn, want, strings.Join(fx.log.all(), "\n"))
+	}
+	if modprobes != len(DefaultModules) {
+		t.Fatalf("modprobe ran %d times over two passes, want %d", modprobes, len(DefaultModules))
+	}
+
+	// What the modules are is part of the answer: a Backend whose list
+	// changed stages again.
+	b.Modules = []string{"hfsplus"}
+	if _, err := b.Run(context.Background(), img[0], nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if modprobes != len(DefaultModules)+1 {
+		t.Fatalf("a changed module list was not staged again: %d modprobes", modprobes)
+	}
+}
+
 func TestRunRefusesAnUnknownRoleAndAMissingImage(t *testing.T) {
 	fx := newRunFixture(t)
 	img := fx.images(t, "t.img", "a")
@@ -598,6 +693,26 @@ func TestRunRefusesWhatCannotRunHere(t *testing.T) {
 	}
 }
 
+// Marker is the one rule for a marker read as a single value: printed
+// on exactly one line, or it is no value -- two lines are two answers.
+func TestMarker(t *testing.T) {
+	for _, tc := range []struct {
+		console string
+		want    string
+		ok      bool
+	}{
+		{"x\r\nA 1\r\nB 2\n", "1", true},
+		{"A 1\nA 1\n", "", false},
+		{"A 1\nA 2\n", "", false},
+		{"B 1\n", "", false},
+		{"\x1bc\x1b[2JA 7\r\n", "7", true},
+	} {
+		if got, ok := Marker([]byte(tc.console), "A"); got != tc.want || ok != tc.ok {
+			t.Errorf("Marker(%q) = %q, %v; want %q, %v", tc.console, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
 func TestMarkers(t *testing.T) {
 	if got := Markers([]byte("A 1\r\nB x\nA 2\n"), "A"); !reflect.DeepEqual(got, []string{"1", "2"}) {
 		t.Fatalf("%q", got)
@@ -627,19 +742,16 @@ func TestTheMicroVMRunsAPayload(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
+	// Missing includes a writable /dev/kvm (NewBackend's KVMDevice).
 	if m := b.Missing(); len(m) > 0 {
 		t.Skipf("the microVM cannot run here: %q", m)
-	}
-	if f, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0); err != nil {
-		t.Skipf("/dev/kvm is not writable: %v", err)
-	} else {
-		f.Close()
 	}
 	mkfs, err := exec.LookPath("mkfs.hfsplus")
 	if err != nil {
 		t.Skip("mkfs.hfsplus not installed")
 	}
-	target := filepath.Join(t.TempDir(), "target.img")
+	// A comma in the path, which QEMU's -drive would split on unescaped.
+	target := filepath.Join(t.TempDir(), "tar,get.img")
 	if err := os.WriteFile(target, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}

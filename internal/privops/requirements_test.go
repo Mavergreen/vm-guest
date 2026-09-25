@@ -269,11 +269,56 @@ func TestNewBackendReadsTheReleaseFromUname(t *testing.T) {
 		}
 		return
 	}
-	if b.KVer != "6.1.0-test" || b.BootDir != "/boot" || b.ModulesDir != "/lib/modules" ||
+	if b.KVer != "6.1.0-test" || b.BootDir != "/boot" || b.ModulesDir != "/lib/modules" || b.KVMDevice != "/dev/kvm" ||
 		b.MemMiB != 512 || b.Timeout != DefaultTimeout || DefaultTimeout != 15*time.Minute || !reflect.DeepEqual(b.Modules, DefaultModules) {
 		t.Fatalf("%+v", b)
 	}
 	if strings.Join(DefaultModules, " ") != "nls_base nls_utf8 hfsplus virtio virtio_ring virtio_pci virtio_blk" {
 		t.Fatalf("DefaultModules = %v", DefaultModules)
 	}
+}
+
+// The microVM boots with -enable-kvm: a KVM device this user cannot open
+// is a requirement unmet, named with what to look at. "" is not checked.
+func TestMissingNamesTheKVMDevice(t *testing.T) {
+	met := func(t *testing.T) Backend {
+		root := t.TempDir()
+		write(t, filepath.Join(root, "boot/vmlinuz-6.1.0-test"), []byte("kernel"), 0o644)
+		b := fixtureBackend(root)
+		b.Runner = &proc.Fake{Paths: map[string]string{"qemu-system-x86_64": "/usr/bin/qemu-system-x86_64", "busybox": staticELF(t)}}
+		return b
+	}
+	t.Run("absent", func(t *testing.T) {
+		b := met(t)
+		b.KVMDevice = filepath.Join(t.TempDir(), "kvm")
+		want := []string{b.KVMDevice + " does not exist (is the kvm module loaded? on a VM, is nested virtualisation on?)"}
+		if got := b.Missing(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("Missing()\n got %q\nwant %q", got, want)
+		}
+	})
+	t.Run("present, not writable", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root writes a mode-0444 file")
+		}
+		b := met(t)
+		b.KVMDevice = filepath.Join(t.TempDir(), "kvm")
+		write(t, b.KVMDevice, nil, 0o444)
+		want := []string{b.KVMDevice + " is not writable by this user (is this user in group kvm? on a VM, is nested virtualisation on?)"}
+		if got := b.Missing(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("Missing()\n got %q\nwant %q", got, want)
+		}
+	})
+	t.Run("writable", func(t *testing.T) {
+		b := met(t)
+		b.KVMDevice = filepath.Join(t.TempDir(), "kvm")
+		write(t, b.KVMDevice, nil, 0o666)
+		if got := b.Missing(); len(got) != 0 {
+			t.Fatalf("Missing() = %q", got)
+		}
+	})
+	t.Run("not checked", func(t *testing.T) {
+		if got := met(t).Missing(); len(got) != 0 {
+			t.Fatalf("Missing() = %q with KVMDevice unset", got)
+		}
+	})
 }
