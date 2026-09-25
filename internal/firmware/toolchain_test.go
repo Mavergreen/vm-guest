@@ -156,7 +156,7 @@ func TestCheckRefusesBelowTheFloorAndWarnsAbove(t *testing.T) {
 	}
 	// lib/compiler.sh's BELOW warning explains that -Werror is no longer
 	// inherited, so a diagnostic this compiler spells differently is not
-	// fatal -- restored after fix round 1 dropped it.
+	// fatal; the Go warning must say so too.
 	if !strings.Contains(log.String(), "no longer inherit") || !strings.Contains(log.String(), "no longer fatal") {
 		t.Fatalf("below log missing the -Werror sentence: %s", log.String())
 	}
@@ -169,8 +169,8 @@ func TestCheckRefusesBelowTheFloorAndWarnsAbove(t *testing.T) {
 		t.Fatalf("above log: %s", log.String())
 	}
 	// lib/compiler.sh's ABOVE warning names the two concrete checksums and
-	// says to compare against what was built -- restored after fix round 1
-	// dropped them.
+	// says to compare against what was built; the Go warning must keep
+	// that evidence.
 	if !strings.Contains(log.String(), "3373692a") || !strings.Contains(log.String(), "195c4dcf") ||
 		!strings.Contains(log.String(), "compare its checksums against what you built") {
 		t.Fatalf("above log missing the concrete evidence: %s", log.String())

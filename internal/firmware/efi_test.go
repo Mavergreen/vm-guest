@@ -561,7 +561,8 @@ func TestKextsKeepTheirOwnBundleWhenTheNewPinIsBroken(t *testing.T) {
 }
 
 // foreign replaces a Go-marked Lilu.kext with a bundle Go did not unpack,
-// leaving the marker: the reviewer's probe.
+// leaving the marker: a marker that outlived its bundle must not make the
+// new bundle Go's.
 func foreign(t *testing.T, f *fixture) string {
 	t.Helper()
 	bundle := filepath.Join(f.home, "build", "kexts", "Lilu.kext")

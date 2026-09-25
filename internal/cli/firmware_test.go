@@ -171,8 +171,7 @@ func TestFirmwareRunsOnlyTheNamedTargetsInTheirOrder(t *testing.T) {
 
 // TestFirmwarePassesItsFlags runs with the target once before its flags
 // and once after: cmdFirmware's flags and targets may appear in either
-// order (fix round 1), and both orderings must reach the Builder the
-// same way.
+// order, and both orderings must reach the Builder the same way.
 func TestFirmwarePassesItsFlags(t *testing.T) {
 	orderings := []struct {
 		name string
@@ -219,10 +218,10 @@ func TestFirmwarePassesItsFlags(t *testing.T) {
 	}
 }
 
-// TestFirmwareArgOrderingsParseCorrectly covers the orderings fix round
-// 1 asked for: a target before its flags, a target between two flags,
-// and "--" ending flag parsing for good so a flag-shaped word after it
-// is an unknown target, not a flag -- exactly as vmavs fetch's own
+// TestFirmwareArgOrderingsParseCorrectly pins how firmware reads its
+// arguments: a target before its flags, a target between two flags, and
+// "--" ending flag parsing for good so a flag-shaped word after it is an
+// unknown target, not a flag -- exactly as vmavs fetch's own
 // parseInterleaved-based parsing behaves.
 func TestFirmwareArgOrderingsParseCorrectly(t *testing.T) {
 	cases := []struct {

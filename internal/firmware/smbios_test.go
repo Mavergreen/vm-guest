@@ -120,7 +120,7 @@ func TestProductNameAndSetProductNameMirrorAWKWhenACommentPrecedesTheStringTag(t
 	}
 }
 
-// Named deviation (ruling, fix round 1): the shell's awk has a latent bug
+// A named deviation from the shell: its awk has a latent bug
 // here. Its first pattern matches ANY line containing the SystemProductName
 // key -- including one that also carries a <string> on the same line -- and
 // "next"s past it, so its second pattern (which rewrites the next line that
