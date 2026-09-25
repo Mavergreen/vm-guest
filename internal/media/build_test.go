@@ -104,6 +104,8 @@ func (v *fakeVM) Run(_ context.Context, target string, payload []byte, disks []p
 		writeAt(t, target, assembledAt, "assembled by pass 2")
 	case "verify-packages":
 		v.sums(&con, "MQG-SUM-MEDIA", "", v.dropMedia)
+		// A read-write mount rewrites the HFS+ header, whatever the pass.
+		writeAt(t, target, mountedAt, "mounted by pass 4")
 	case "content-digest":
 		con.WriteString(v.digest(disks))
 	case "fix-ownership":
@@ -142,6 +144,7 @@ func (v *fakeVM) sums(w *strings.Builder, marker, bad, drop string) {
 const (
 	assembledAt = 2 << 20
 	ownedAt     = 2<<20 + 4096
+	mountedAt   = 2<<20 + 8192
 )
 
 func writeAt(t *testing.T, path string, off int64, data string) {
@@ -302,7 +305,7 @@ $`)
 	}
 	absent(t, out+".building", out+".lock", g.b.Paths.MediaWork())
 	img, _ := os.ReadFile(out)
-	for off, want := range map[int]string{assembledAt: "assembled by pass 2", ownedAt: "owned by pass 3"} {
+	for off, want := range map[int]string{assembledAt: "assembled by pass 2", ownedAt: "owned by pass 3", mountedAt: "mounted by pass 4"} {
 		if got := string(img[off : off+len(want)]); got != want {
 			t.Errorf("the media holds %q at %d, want %q", got, off, want)
 		}
@@ -550,6 +553,13 @@ func TestForceReplacesTheMedia(t *testing.T) {
 	g := newRig(t)
 	writeFile(t, g.out, "the old media")
 	writeFile(t, g.out+".sha256", "the old sidecar\n")
+	// The old sidecar goes before the image is replaced: never a moment
+	// when it sits beside media it was not written for.
+	g.b.afterMediaRename = func() {
+		if _, err := os.Lstat(g.out + ".sha256"); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the old sidecar is still there once the new media is in place (%v)", err)
+		}
+	}
 	if _, err := g.b.Build(context.Background(), g.esd, Options{Force: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -799,18 +809,50 @@ func TestAPassThatFailsIsNamed(t *testing.T) {
 
 // A sidecar temp is only ever one this package staged and a killed build
 // left: its own prefix, and nothing else in build/, is swept.
+//
+// The home is taken literally, whatever it holds: "[" alone is a
+// malformed glob, and "a[1]" one that matches "a1" and not itself.
 func TestStaleSidecarTempsAreSwept(t *testing.T) {
+	for _, home := range []string{"", "vmavs[", "a[1]"} {
+		t.Run("home="+home, func(t *testing.T) {
+			g := newRig(t)
+			if home != "" {
+				g.b.Paths = config.Paths{Home: filepath.Join(t.TempDir(), home)}
+				g.out = g.b.Paths.InstallerMedia()
+			}
+			dir := filepath.Dir(g.out)
+			stale := writeFile(t, filepath.Join(dir, ".installer-media.img.sha256.tmp-12345"), "stale")
+			other := writeFile(t, filepath.Join(dir, "installer-media.img.sha256.tmp-notours"), "not ours")
+			if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
+				t.Fatal(err)
+			}
+			absent(t, stale)
+			if _, err := os.Stat(other); err != nil {
+				t.Fatalf("a file that is not ours was removed: %v", err)
+			}
+			if _, err := os.Stat(g.out + ".sha256"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// A failed rename after the old sidecar is gone leaves the old media,
+// and the error says so: its sidecar is what is missing.
+func TestAFailedRenameSaysTheOldMediaIsIntact(t *testing.T) {
 	g := newRig(t)
-	dir := filepath.Dir(g.out)
-	stale := writeFile(t, filepath.Join(dir, ".installer-media.img.sha256.tmp-12345"), "stale")
-	other := writeFile(t, filepath.Join(dir, "installer-media.img.sha256.tmp-notours"), "not ours")
-	if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
-		t.Fatal(err)
+	// A rename cannot replace a directory that holds something.
+	writeFile(t, filepath.Join(g.out, "in the way"), "x")
+	writeFile(t, g.out+".sha256", "the old sidecar\n")
+	_, err := g.b.Build(context.Background(), g.esd, Options{Force: true})
+	want := "the old media at " + g.out + " is intact, but its sidecar was removed: cannot rename"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want one containing %q", err, want)
 	}
-	absent(t, stale)
-	if _, err := os.Stat(other); err != nil {
-		t.Fatalf("a file that is not ours was removed: %v", err)
+	if _, serr := os.Stat(filepath.Join(g.out, "in the way")); serr != nil {
+		t.Fatal(serr)
 	}
+	absent(t, g.out+".sha256", g.out+".building", g.out+".lock")
 }
 
 // Once the verified media is in place, the build has succeeded: tidying

@@ -209,6 +209,24 @@ func checkSpace(o Options) error {
 // a killed build left.
 func sidecarTempPrefix(out string) string { return "." + filepath.Base(out) + ".sha256.tmp-" }
 
+// staleSidecarTemps is every file beside out with sidecarTempPrefix. The
+// directory is read, not globbed: a home holding a glob character --
+// "[" is malformed, "a[1]" matches "a1" -- is taken literally.
+func staleSidecarTemps(out string) ([]string, error) {
+	dir := filepath.Dir(out)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var p []string
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), sidecarTempPrefix(out)) {
+			p = append(p, filepath.Join(dir, e.Name()))
+		}
+	}
+	return p, nil
+}
+
 // Build makes the installer media from esd and returns its path,
 // Paths.InstallerMedia(), with a .sha256 sidecar beside it:
 //
@@ -317,7 +335,7 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	// stale or half-written one silently becoming media that then costs
 	// an hour of booting. The .building file is only ever a killed build.
 	building := out + ".building"
-	stale, err := filepath.Glob(filepath.Join(filepath.Dir(out), sidecarTempPrefix(out)+"*"))
+	stale, err := staleSidecarTemps(out)
 	if err != nil {
 		return "", err
 	}
@@ -365,11 +383,17 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	// The old sidecar goes first, so that no sidecar ever describes an
 	// image it was not written for; the rename then replaces any old
 	// media in one step.
-	if err := os.Remove(out + ".sha256"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	oldSidecar := false
+	if err := os.Remove(out + ".sha256"); err == nil {
+		oldSidecar = true
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
 	if err := os.Rename(building, out); err != nil {
-		return "", err
+		if oldSidecar {
+			return "", fmt.Errorf("the old media at %s is intact, but its sidecar was removed: cannot rename the new media over it: %w", out, err)
+		}
+		return "", fmt.Errorf("cannot rename the new media into place: %w", err)
 	}
 	if b.afterMediaRename != nil {
 		b.afterMediaRename()
