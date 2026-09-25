@@ -62,12 +62,8 @@ func cmdRun(ctx context.Context, e *Env, args []string) error {
 	if err := portFree(hw.SSHPort); err != nil {
 		return err
 	}
-	pid := e.PID
-	if pid == 0 {
-		pid = os.Getpid()
-	}
 	r := runner(e)
-	run, err := vm.Prepare(ctx, r, p, m, hw, config.QEMU(e.Getenv), pid, *keep)
+	run, err := vm.Prepare(ctx, r, p, m, hw, config.QEMU(e.Getenv), pid(e), *keep)
 	if err != nil {
 		return err
 	}

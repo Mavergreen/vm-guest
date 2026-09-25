@@ -63,13 +63,14 @@ A Go rewrite of `vmavs` is underway, one subcommand at a time
 go build -o out/vmavs ./cmd/vmavs
 ```
 
-So far it has `fetch`, `firmware`, `run`, `ssh`, `emit packer`, `doctor`
-and `version` -- the subcommands that fetch and verify Apple's installer,
-its post-10.9.5 updates, the guest's OpenSSH and the firmware's pinned
-sources (`fetch firmware`: OpenCorePkg, ocbuild's efibuild.sh, EDK II and
-its submodules, and the Lilu and VirtualSMC kext releases), build what
-the guest boots before its kernel, boot a guest, reach it over SSH and
-report on the host, not the ones that build an image. `fetch` adopts the
+So far it has `fetch`, `firmware`, `media`, `run`, `ssh`, `emit packer`,
+`doctor` and `version` -- the subcommands that fetch and verify Apple's
+installer, its post-10.9.5 updates, the guest's OpenSSH and the
+firmware's pinned sources (`fetch firmware`: OpenCorePkg, ocbuild's
+efibuild.sh, EDK II and its submodules, and the Lilu and VirtualSMC kext
+releases), build what the guest boots before its kernel and the installer
+media, boot a guest, reach it over SSH and report on the host, not the
+ones that install and build an image. `fetch` adopts the
 shell tree's own downloads (verified, never moved or deleted) when they
 are already there -- including its `build/` directory, where the
 firmware's downloads live -- so switching to the Go binary does not mean
@@ -86,6 +87,26 @@ header; `vmavs doctor` reports any of those that are missing. It needs
 neither `sgdisk` nor mtools: the GPT and FAT32 images are written in Go
 (`internal/diskimg`).
 
+`vmavs media` builds the installer media, `build/installer-media.img`
+with a `.sha256` sidecar, from Apple's InstallESD.dmg, which it fetches
+and verifies first as `vmavs fetch esd` does (adopting the shell tree's
+download). `dmg2img` converts the ESD and `mkfs.hfsplus` makes the empty
+volume; every read and write of an HFS+ volume happens in four passes of
+the privops microVM -- the host's own kernel and a static busybox, booted
+under QEMU -- where the build is root and the host is not, and the last
+pass checks the Packages against Apple's pinned checksums. The media is
+renamed into place only once it is verified. `--autoinstall`,
+`--firstboot-pkg` and `--extra-pkg` add the unattended-install hooks and
+packages, `--extra-space-mib` room for them, and `--describe` prints the
+layout without fetching or writing anything. `vmavs media digest IMAGE`
+prints what is on an image as one checksum, which two builds of the same
+ESD agree on though their images' own checksums never will. It needs
+`dmg2img` and `mkfs.hfsplus`, `qemu-system-x86_64` with KVM, a static
+`busybox` and a readable kernel for the running release; `vmavs doctor`
+reports any that are missing. It needs no `cpio`, no `sgdisk` and no
+mount: nothing is mounted on the host, so it builds over SSH and on
+headless CI.
+
 Point `run` at an image the shell pipeline already built:
 
 ```sh
@@ -98,8 +119,8 @@ MEASURED on this project's own KVM host, 2026-09-25: both a modern image
 and one running Apple's legacy OpenSSH 6.2 boot and answer SSH this way --
 see NOTES.md, "P8 -- the Go vmavs boots a built image and answers SSH".
 
-Everything else -- `media`, `install`, `image` and the whole build
-pipeline -- is still `bin/vmavs`, unchanged, and stays the shipped path
+Everything else -- `install`, `image` and the whole build pipeline -- is
+still `bin/vmavs`, unchanged, and stays the shipped path
 until phase 6 of the Go design
 (`docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md#9-phases`), when
 the shell tree is re-measured against the Go one and retired.

@@ -222,17 +222,83 @@ func TestRunNamesTheFirmwareCommandThatBuildsWhatItIsMissing(t *testing.T) {
 	}
 }
 
-// TestDoctorOrderIsFetchFirmwareRunSSHEmit: the printed order, and the
-// order GO/NO-GO's "ready:" list draws from.
-func TestDoctorOrderIsFetchFirmwareRunSSHEmit(t *testing.T) {
+// TestDoctorOrderIsFetchFirmwareMediaRunSSHEmit: the printed order, and
+// the order GO/NO-GO's "ready:" list draws from.
+func TestDoctorOrderIsFetchFirmwareMediaRunSSHEmit(t *testing.T) {
 	p := config.Paths{Home: t.TempDir()}
 	subs := Subcommands(linux(intel, "Y", true), p, "qemu-system-x86_64")
 	var got []string
 	for _, s := range subs {
 		got = append(got, s.Subcommand)
 	}
-	want := []string{"fetch", "firmware", "run", "ssh", "emit"}
+	want := []string{"fetch", "firmware", "media", "run", "ssh", "emit"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("Subcommands order = %v, want %v", got, want)
+	}
+}
+
+// mediaRow is the "media" Readiness among subs.
+func mediaRow(subs []Readiness) Readiness {
+	for _, s := range subs {
+		if s.Subcommand == "media" {
+			return s
+		}
+	}
+	return Readiness{}
+}
+
+func TestDoctorMediaRow(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	missing := []string{"busybox (not on PATH)", "a readable kernel image for 6.1.0 (looked for: /boot/vmlinuz-6.1.0)"}
+
+	h := linux(intel, "Y", true)
+	h.Privops = func() []string { return missing }
+	m := mediaRow(Subcommands(h, p, "qemu-system-x86_64"))
+	want := append([]string{"dmg2img", "mkfs.hfsplus"}, missing...)
+	if strings.Join(m.Missing, "; ") != strings.Join(want, "; ") {
+		t.Fatalf("media.Missing = %q, want %q", m.Missing, want)
+	}
+
+	h = linux(intel, "Y", true, "dmg2img", "mkfs.hfsplus")
+	h.Privops = func() []string { return nil }
+	if m := mediaRow(Subcommands(h, p, "qemu-system-x86_64")); !m.Ready() || m.Subcommand != "media" {
+		t.Fatalf("media = %+v, want READY with the tools present and the microVM available", m)
+	}
+
+	// The microVM runs under KVM (qemu -enable-kvm), which Missing does
+	// not ask about: the media row does.
+	h = linux(intel, "Y", false, "dmg2img", "mkfs.hfsplus")
+	h.Privops = func() []string { return nil }
+	m = mediaRow(Subcommands(h, p, "qemu-system-x86_64"))
+	if strings.Join(m.Missing, "; ") != "a writable /dev/kvm (the privops microVM runs under KVM)" {
+		t.Fatalf("media.Missing = %q, want the KVM device", m.Missing)
+	}
+
+	// No Privops: the microVM is not checked, and nothing goes missing
+	// because of it.
+	h.Privops = nil
+	if m := mediaRow(Subcommands(h, p, "qemu-system-x86_64")); !m.Ready() {
+		t.Fatalf("media = %+v, want READY when Privops is nil", m)
+	}
+}
+
+// TestDoctorMediaDoesNotDecideTheVerdict: GO is still run's, whatever
+// media needs.
+func TestDoctorMediaDoesNotDecideTheVerdict(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	for _, f := range []string{p.OVMFCode(), p.OVMFVarsTemplate(), p.OpenCoreImage(),
+		filepath.Join(p.Images(), "i.qcow2"), filepath.Join(p.Images(), "i.manifest")} {
+		os.MkdirAll(filepath.Dir(f), 0o755)
+		os.WriteFile(f, []byte("name\ti\n"), 0o644)
+	}
+	h := linux(intel, "Y", true, "qemu-system-x86_64", "qemu-img")
+	h.Privops = func() []string { return []string{"busybox (not on PATH)"} }
+	subs := Subcommands(h, p, "qemu-system-x86_64")
+	if mediaRow(subs).Ready() {
+		t.Fatal("media should be blocked")
+	}
+	ok, line := Verdict(HostRows(h), subs)
+	if !ok || !strings.HasPrefix(line, "GO") || !strings.Contains(line, "media (missing: dmg2img, mkfs.hfsplus, busybox (not on PATH))") {
+		t.Fatalf("ok=%v %s", ok, line)
 	}
 }

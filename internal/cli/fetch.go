@@ -81,27 +81,17 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	if hint := fetchLegacyHint(e); hint != "" {
 		logf(e, "fetch", "%s", hint)
 	}
-	reg := e.Registry
-	if reg == nil {
-		reg, err = pins.Embedded()
-		if err != nil {
-			return err
-		}
+	reg, err := registry(e)
+	if err != nil {
+		return err
 	}
 	ep := endpoints(e)
-	// legacyBase is "" unless the shell tree's own home is a different
-	// place than VMAVS_HOME -- when VMAVS_HOME already IS the shell tree's
-	// home (phase 1's documented way of booting a shell-built image),
-	// there is nothing more to adopt from.
-	legacyBase := ""
-	if legacy := config.LegacyHome(e.Getenv); legacy != "" && legacy != p.Home {
-		legacyBase = legacy
-	}
+	legacy := legacyBase(e, p)
 
 	client := httpClient(e)
 	logFetch := func(format string, a ...any) { logf(e, "fetch", format, a...) }
-	rc := fetch.Recovery{Base: ep.Recovery, Client: client, Log: logFetch}
 	if *probe {
+		rc := fetch.Recovery{Base: ep.Recovery, Client: client, Log: logFetch}
 		url, size, err := rc.Probe(ctx, reg)
 		if err != nil {
 			return err
@@ -115,7 +105,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	for _, t := range targets {
 		switch t {
 		case "esd":
-			path, err := g.InstallESD(ctx, reg, rc, adoptCandidates(p, legacyBase, config.Paths.ShellESD))
+			path, err := installESD(ctx, e, "fetch", p, reg)
 			if err != nil {
 				return err
 			}
@@ -126,7 +116,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 			if err != nil {
 				return err
 			}
-			pkgs, err := g.OpenSSH(ctx, ep.OpenSSHReleases, tag, adoptCandidates(p, legacyBase, func(q config.Paths) string { return q.ShellOpenSSH(tag) }))
+			pkgs, err := g.OpenSSH(ctx, ep.OpenSSHReleases, tag, adoptCandidates(p, legacy, func(q config.Paths) string { return q.ShellOpenSSH(tag) }))
 			if err != nil {
 				return err
 			}
@@ -134,7 +124,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 			fmt.Fprintln(e.Stdout, pkgs.Replace)
 
 		case "updates":
-			ups, err := g.Updates(ctx, reg, *updates, adoptCandidates(p, legacyBase, config.Paths.ShellUpdates))
+			ups, err := g.Updates(ctx, reg, *updates, adoptCandidates(p, legacy, config.Paths.ShellUpdates))
 			if err != nil {
 				return err
 			}
@@ -144,7 +134,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 
 		case "firmware":
 			for _, n := range firmware.SourceNames() {
-				path, err := g.Pinned(ctx, reg, n, adoptCandidates(p, legacyBase, config.Paths.ShellBuild))
+				path, err := g.Pinned(ctx, reg, n, adoptCandidates(p, legacy, config.Paths.ShellBuild))
 				if err != nil {
 					return err
 				}
@@ -155,18 +145,29 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	return nil
 }
 
+// installESD fetches and verifies InstallESD.dmg as cmd, adopting the
+// shell tree's download where it can, and returns its path: vmavs fetch
+// esd, and every command that needs the ESD (vmavs media).
+func installESD(ctx context.Context, e *Env, cmd string, p config.Paths, reg *pins.Registry) (string, error) {
+	client := httpClient(e)
+	log := func(format string, a ...any) { logf(e, cmd, format, a...) }
+	g := &fetch.Getter{Paths: p, Client: client, Log: log}
+	rc := fetch.Recovery{Base: endpoints(e).Recovery, Client: client, Log: log}
+	return g.InstallESD(ctx, reg, rc, adoptCandidates(p, legacyBase(e, p), config.Paths.ShellESD))
+}
+
 // adoptCandidates is where to look for the shell tree's own download,
-// in order: VMAVS_HOME's copy (at, applied to it), and, when legacyBase
+// in order: VMAVS_HOME's copy (at, applied to it), and, when legacy
 // is set (the shell tree's own home, when it differs from VMAVS_HOME),
 // that home's copy too -- both tried by Getter's own adoption loop, which
 // verifies each candidate itself. Listing both here, rather than picking
 // one by mere existence, is what stops a partial or stale copy in one
 // directory from shadowing a good copy in the other. The paths
 // themselves are config's (Paths.ShellESD and friends).
-func adoptCandidates(p config.Paths, legacyBase string, at func(config.Paths) string) []string {
+func adoptCandidates(p config.Paths, legacy string, at func(config.Paths) string) []string {
 	dirs := []string{at(p)}
-	if legacyBase != "" {
-		dirs = append(dirs, at(config.Paths{Home: legacyBase}))
+	if legacy != "" {
+		dirs = append(dirs, at(config.Paths{Home: legacy}))
 	}
 	return dirs
 }

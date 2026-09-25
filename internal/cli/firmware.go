@@ -9,7 +9,6 @@ import (
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/fetch"
 	"github.com/Mavergreen/vm-guest/internal/firmware"
-	"github.com/Mavergreen/vm-guest/internal/pins"
 )
 
 const firmwareHelp = `usage: vmavs firmware [opencore|ovmf|efi ...] [--smbios MODEL] [--ccache] [--compiler 'NAME VERSION']
@@ -95,11 +94,9 @@ func cmdFirmware(ctx context.Context, e *Env, args []string) error {
 			return err
 		}
 	}
-	reg := e.Registry
-	if reg == nil {
-		if reg, err = pins.Embedded(); err != nil {
-			return err
-		}
+	reg, err := registry(e)
+	if err != nil {
+		return err
 	}
 	logFW := func(format string, a ...any) { logf(e, "firmware", format, a...) }
 	b := &firmware.Builder{
@@ -126,12 +123,8 @@ func cmdFirmware(ctx context.Context, e *Env, args []string) error {
 	in := firmware.Inputs{}
 	if len(names) > 0 {
 		g := &fetch.Getter{Paths: p, Client: httpClient(e), Log: func(f string, a ...any) { logf(e, "firmware", f, a...) }}
-		legacyBase := ""
-		if legacy := config.LegacyHome(e.Getenv); legacy != "" && legacy != p.Home {
-			legacyBase = legacy
-		}
 		for _, n := range names {
-			path, err := g.Pinned(ctx, reg, n, adoptCandidates(p, legacyBase, config.Paths.ShellBuild))
+			path, err := g.Pinned(ctx, reg, n, adoptCandidates(p, legacyBase(e, p), config.Paths.ShellBuild))
 			if err != nil {
 				return err
 			}

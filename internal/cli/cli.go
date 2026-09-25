@@ -71,6 +71,7 @@ func commandTable() []command {
 		{"doctor", "What this host can do, subcommand by subcommand", cmdDoctor},
 		{"fetch", "Fetch and verify the pinned inputs (Apple's installer, updates, OpenSSH)", cmdFetch},
 		{"firmware", "Build OpenCore, OVMF and the OpenCore EFI image from pinned source", cmdFirmware},
+		{"media", "Build the installer media from Apple's InstallESD.dmg, mounting nothing", cmdMedia},
 		{"run", "Boot a built image on a throwaway overlay", cmdRun},
 		{"ssh", "Open a shell in the running guest", cmdSSH},
 		{"emit", "Write a Packer template for this machine", cmdEmit},
@@ -193,6 +194,34 @@ func runner(e *Env) proc.Runner {
 		return e.Runner
 	}
 	return proc.Exec{}
+}
+
+// pid is e.PID, or this process's: the pid run records in its state
+// file and the media build in its lock.
+func pid(e *Env) int {
+	if e.PID != 0 {
+		return e.PID
+	}
+	return os.Getpid()
+}
+
+// registry is e.Registry, or the one embedded in this binary.
+func registry(e *Env) (*pins.Registry, error) {
+	if e.Registry != nil {
+		return e.Registry, nil
+	}
+	return pins.Embedded()
+}
+
+// legacyBase is the shell tree's own home when it is a different place
+// than p's, else "": when VMAVS_HOME already IS the shell tree's home
+// (phase 1's documented way of booting a shell-built image), there is
+// nothing more to adopt from.
+func legacyBase(e *Env, p config.Paths) string {
+	if legacy := config.LegacyHome(e.Getenv); legacy != "" && legacy != p.Home {
+		return legacy
+	}
+	return ""
 }
 
 // environ is e.Environ(), or os.Environ(): what the firmware builds hand

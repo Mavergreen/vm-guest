@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -142,9 +143,9 @@ func TestDoctorRealHostWiresGCCBinAndTheHeaderProbe(t *testing.T) {
 	}
 }
 
-// TestDoctorSubcommandOrderIsFetchFirmwareRunSSHEmit: the SUBCOMMAND
-// table lists firmware right after fetch, before run.
-func TestDoctorSubcommandOrderIsFetchFirmwareRunSSHEmit(t *testing.T) {
+// TestDoctorSubcommandOrderIsFetchFirmwareMediaRunSSHEmit: the SUBCOMMAND
+// table lists firmware right after fetch, then media, before run.
+func TestDoctorSubcommandOrderIsFetchFirmwareMediaRunSSHEmit(t *testing.T) {
 	home := t.TempDir()
 	host := fakeHost(goodCPUInfo, "Y", true, "qemu-system-x86_64", "qemu-img")
 	_, stdout, _ := runDoctor(t, host, map[string]string{"VMAVS_HOME": home})
@@ -155,11 +156,11 @@ func TestDoctorSubcommandOrderIsFetchFirmwareRunSSHEmit(t *testing.T) {
 			continue
 		}
 		switch fields[1] {
-		case "fetch", "firmware", "run", "ssh", "emit":
+		case "fetch", "firmware", "media", "run", "ssh", "emit":
 			order = append(order, fields[1])
 		}
 	}
-	want := []string{"fetch", "firmware", "run", "ssh", "emit"}
+	want := []string{"fetch", "firmware", "media", "run", "ssh", "emit"}
 	if !slices.Equal(order, want) {
 		t.Fatalf("subcommand order = %v, want %v", order, want)
 	}
@@ -175,5 +176,31 @@ func TestDoctorShowsTheLegacyHomeHintWhenItApplies(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "export VMAVS_HOME=") {
 		t.Fatalf("stdout=%s, want the legacy-home hint", stdout)
+	}
+}
+
+// TestDoctorRealHostAsksThePrivopsBackend: with no Host override,
+// cmdDoctor fills Host.Privops from the real privops backend, through the
+// Runner: a fake that knows no program leaves the microVM's requirements
+// in the media row.
+func TestDoctorRealHostAsksThePrivopsBackend(t *testing.T) {
+	fake := &proc.Fake{}
+	env := map[string]string{"VMAVS_HOME": t.TempDir()}
+	var out bytes.Buffer
+	e := &Env{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &bytes.Buffer{},
+		Getenv: func(k string) string { return env[k] }, Runner: fake, PID: 777}
+	Run(context.Background(), []string{"doctor"}, e)
+	var media string
+	for _, line := range strings.Split(out.String(), "\n") {
+		if f := strings.Fields(line); len(f) >= 2 && f[1] == "media" {
+			media = line
+		}
+	}
+	want := "busybox (not on PATH)"
+	if runtime.GOOS != "linux" {
+		want = "the qemu-linux privops backend"
+	}
+	if !strings.Contains(media, "missing: dmg2img, mkfs.hfsplus, ") || !strings.Contains(media, want) {
+		t.Fatalf("media row = %q, want the tools and %q:\n%s", media, want, out.String())
 	}
 }

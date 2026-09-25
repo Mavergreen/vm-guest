@@ -51,7 +51,8 @@ app:
 vmavs doctor                          can this host do it, per subcommand
 vmavs fetch    [esd|openssh|updates|firmware] [--updates …] [--probe]   fetch pinned inputs (default: all of them)
 vmavs firmware [opencore|ovmf|efi ...] [--smbios MODEL] [--ccache] [--compiler 'NAME VERSION']   OpenCore, OVMF and the EFI image, from pinned source
-vmavs media                           installer media
+vmavs media    [--autoinstall] [--firstboot-pkg PATH] [--extra-pkg PATH]... [--extra-space-mib N] [--force] [--keep-work] [--describe] [--privops-timeout DURATION]   installer media, built in the privops microVM
+vmavs media    digest [--list] IMAGE                        what is on an image, as one checksum
 vmavs install                         target disk + unattended install
 vmavs image    [--describe] [--freshness] [--stage a,b,…]   the whole chain
 vmavs run      [--image NAME] [--keep]                      boot a built image
@@ -98,7 +99,11 @@ Changes from the shell `vmavs`:
   The `MQG_*` names are not carried over: `MQG_SMBIOS`, `MQG_CCACHE` and
   `MQG_COMPILER` became `vmavs firmware`'s `--smbios`, `--ccache` and
   `--compiler` flags, and `GCC_BIN`, EDK II's own variable rather than
-  this project's, is still honoured.
+  this project's, is still honoured. `MQG_PRIVOPS_TIMEOUT` became `vmavs
+  media --privops-timeout` (default 15m); `MQG_MEDIA_MARGIN_MIB` became
+  the constant `media.MarginMiB` (512); the other `MQG_PRIVOPS_*` knobs
+  became fields on `privops.Backend`, for tests; and
+  `MQG_PRIVOPS_BACKEND` is gone, since `qemu-linux` is the only backend.
 
 ## 3. Repository layout
 
@@ -116,7 +121,10 @@ internal/
   firmware/   OpenCore and OVMF builds (orchestrate make/gcc/nasm/iasl),
               compiler and ccache checks, EFI image assembly
   diskimg/    GPT and FAT32 writers (replace sgdisk and mtools)
-  media/      installer media assembly; the privops microVM driver
+  media/      installer media assembly, Apple's pinned checksums, the content digest
+  privops/    the microVM: busybox initramfs (written in Go), host kernel and
+              modules, QEMU; knows nothing about installer media
+  lock/       the directory-and-pid build lock, with stale takeover
   payload/    the first-boot flat .pkg, including a xar writer (replaces mkflatpkg.py)
   machine/    THE machine definition (§4)
   manifest/   built-image manifests: parse, find, hardware, SSH facts
@@ -141,8 +149,14 @@ Until phase 6, `embed.go` embeds these files from their current paths
 (`assets/pins/sources.tsv`, `components/openssh/version`,
 `boot/config/config.plist`, `media/apple-packages.sha256`,
 `image/payload/firstboot.sh`, `image/payload/postinstall`,
-`image/payload/com.mqg.firstboot.plist`), not from `assets/` as shown
-above. The move to `assets/` happens together with the shell tree's
+`image/payload/com.mqg.firstboot.plist`, `boot/patches/*.patch`,
+`media/privops/*.sh`, `image/autoinstall/autoinstall.sh`,
+`image/autoinstall/minstallconfig.xml`,
+`image/autoinstall/OSInstall.collection`), not from `assets/` as shown
+above. The one exception is `assets/privops/init.sh`, the microVM's
+`/init`, which is new: until phase 6 it is a heredoc in
+`lib/privops-qemu-linux.sh` as well, and a test holds the two
+byte-equal. The move to `assets/` happens together with the shell tree's
 removal, because the shell tree, Renovate's `managerFilePatterns`, CI's
 `verify-changed-sources.sh` and the path-keyed ingredient fingerprints all
 read them at their current paths today; moving them sooner would change
@@ -167,13 +181,24 @@ plus a small subcommand table is enough.
   require. Patches are applied with `git apply`.
 - `mkfs.hfsplus` and `dmg2img`, until HFS+ and DMG reading are
   reconsidered;
-- `7z`, only for media verification.
+- for the privops microVM, which `media` does every HFS+ read and write
+  in: a static `busybox` and a readable host kernel and its modules, which
+  it boots under `qemu-system-x86_64` with KVM; `modprobe`, to resolve the
+  modules, only when present; `xz` and `zstd` only when a module is
+  compressed that way;
+- `7z`, only for comparing built media with the Mac-made reference, in
+  `media/verify-installer-img.sh`, which stays a second-tier shell tool
+  (§9); the build itself checks the media against Apple's pinned
+  checksums in Go.
 
-`sgdisk`, mtools, `tar`, `unzip` and `curl` are no longer needed by the Go
-path (`internal/diskimg`, `internal/firmware`, `internal/fetch`).
+`sgdisk`, mtools, `tar`, `unzip`, `curl` and `cpio` are no longer needed by
+the Go path (`internal/diskimg`, `internal/firmware`, `internal/fetch`, and
+`internal/privops`, which writes the initramfs itself). Nothing mounts on
+the host, so `media` needs no desktop seat and no root.
 
 `doctor` reports exactly this list, derived from the code that calls
-these tools.
+these tools -- except what is used only when present or needed
+(`modprobe`, `xz`, `zstd`) and `7z`, which no Go subcommand calls.
 
 ## 4. One machine
 
@@ -246,11 +271,14 @@ build/    firmware outputs, the OpenCore/EDK II trees, kexts, ccache,
           and the OpenCore EFI image (opencore.img) — `firmware` names
           everything under here, in the shell tree's own layout, so a
           build either implementation started can be finished by the
-          other
+          other; and the installer media, installer-media.img with its
+          .sha256 sidecar, built as installer-media.img.building and
+          renamed into place once verified
 cache/    downloaded inputs, keyed by sha256: cache/<sha256>/<name>; an
           OpenSSH release's own SHA256SUMS sits next to them, at
           cache/openssh/<tag>/SHA256SUMS
-work/     per-build scratch: stage input-hash records, logs, monitor sockets
+work/     per-build scratch: stage input-hash records, logs, monitor sockets;
+          media/, the media build's raw conversions and microVM console
 run/      per-run overlays and NVRAM — removed on exit
 keys/     the generated SSH key pair
 ```

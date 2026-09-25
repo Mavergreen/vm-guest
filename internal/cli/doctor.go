@@ -11,6 +11,7 @@ import (
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/doctor"
 	"github.com/Mavergreen/vm-guest/internal/firmware"
+	"github.com/Mavergreen/vm-guest/internal/privops"
 )
 
 const doctorHelp = `usage: vmavs doctor
@@ -50,6 +51,16 @@ func cmdDoctor(ctx context.Context, e *Env, args []string) error {
 				return true
 			}
 			return firmware.HeaderCompiles(ctx, r, gcc, nil, name)
+		},
+		// The media build's own backend, asked the media build's question.
+		// A kernel release uname cannot give is itself missing: the
+		// microVM boots that kernel.
+		Privops: func() []string {
+			be, err := privops.NewBackend(r, config.QEMU(e.Getenv), nil)
+			if err != nil {
+				return []string{fmt.Sprintf("the running kernel's release (%v)", err)}
+			}
+			return be.Missing()
 		},
 	}
 	if e.Host != nil {

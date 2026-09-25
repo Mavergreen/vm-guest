@@ -26,6 +26,9 @@ type Host struct {
 	// Header says whether a C header compiles against this host's search
 	// path. nil means "not checked": no header goes missing because of it.
 	Header func(name string) bool
+	// Privops is what the privops microVM lacks on this host, one line
+	// per requirement (privops.Backend.Missing). nil means "not checked".
+	Privops func() []string
 }
 
 type Row struct{ Status, Check, Detail string }
@@ -125,6 +128,25 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 		}
 	}
 
+	// media runs every HFS+ read and write in the privops microVM, and
+	// dmg2img and mkfs.hfsplus on the host; nothing mounts, so it needs no
+	// sgdisk, cpio or desktop seat.
+	med := Readiness{Subcommand: "media"}
+	for _, t := range []string{"dmg2img", "mkfs.hfsplus"} {
+		if _, err := h.LookPath(t); err != nil {
+			med.Missing = append(med.Missing, t)
+		}
+	}
+	if h.Privops != nil {
+		med.Missing = append(med.Missing, h.Privops()...)
+		// The microVM boots with -enable-kvm, which Missing does not ask
+		// about. Off Linux, Missing has already said the backend cannot
+		// run at all.
+		if h.GOOS == "linux" && !h.Writable("/dev/kvm") {
+			med.Missing = append(med.Missing, "a writable /dev/kvm (the privops microVM runs under KVM)")
+		}
+	}
+
 	run := Readiness{Subcommand: "run"}
 	for _, t := range []string{qemu, "qemu-img"} {
 		if _, err := h.LookPath(t); err != nil {
@@ -146,7 +168,7 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 	if _, err := h.LookPath("packer"); err != nil {
 		emit.Notes = append(emit.Notes, "--check needs packer on PATH")
 	}
-	return []Readiness{fetch, fw, run, {Subcommand: "ssh"}, emit}
+	return []Readiness{fetch, fw, med, run, {Subcommand: "ssh"}, emit}
 }
 
 func Verdict(host []Row, subs []Readiness) (bool, string) {
