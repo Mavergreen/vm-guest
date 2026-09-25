@@ -111,6 +111,14 @@ func Packer(hw config.Machine, diskGB int) ([]byte, error) {
 	src.SetAttributeValue("ssh_timeout", cty.StringVal("60m"))
 	src.SetAttributeValue("host_port_min", cty.NumberIntVal(int64(hw.SSHPort)))
 	src.SetAttributeValue("host_port_max", cty.NumberIntVal(int64(hw.SSHPort)))
+	// net_device must name the NIC qemuargs already attaches (machine.NICDevice):
+	// packer-plugin-qemu (step_run.go, applyUserOverrides, issue #6804) only
+	// skips its own automatic "-device virtio-net,netdev=user.0" append when
+	// this string is a substring of some -device argument already present.
+	// Left unset, it defaults to "virtio-net", which our -device lines never
+	// contain, so the plugin would append a device wired to a netdev
+	// ("user.0") that does not exist here -- QEMU then refuses to start.
+	src.SetAttributeValue("net_device", cty.StringVal(hw.NIC))
 	src.SetAttributeRaw("qemuargs", pairsTokens(pairs))
 	root.AppendNewline()
 	build := root.AppendNewBlock("build", nil).Body()

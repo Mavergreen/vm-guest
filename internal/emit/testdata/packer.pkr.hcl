@@ -80,6 +80,7 @@ source "qemu" "mavericks" {
   ssh_timeout          = "60m"
   host_port_min        = 2222
   host_port_max        = 2222
+  net_device           = "e1000-82545em"
   qemuargs = [
     ["-drive", "if=pflash,format=raw,unit=0,readonly=on,file=${var.ovmf_code}"],
     ["-drive", "if=pflash,format=raw,unit=1,file=${var.ovmf_vars}"],

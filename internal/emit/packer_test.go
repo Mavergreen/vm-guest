@@ -3,6 +3,7 @@ package emit
 import (
 	"flag"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
+	"github.com/Mavergreen/vm-guest/internal/machine"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/packer.pkr.hcl")
@@ -89,5 +91,33 @@ func TestQuotedTemplateEscapesLiteralText(t *testing.T) {
 	got := string(templateTokens(`a "b" ${var.x} $${lit}`).Bytes())
 	if got != `"a \"b\" ${var.x} $$${lit}"` {
 		t.Fatalf("got %s", got)
+	}
+}
+
+// TestNetDeviceMatchesTheNICInQemuargs guards packer-plugin-qemu issue
+// #6804 (step_run.go, applyUserOverrides): the plugin only skips its own
+// automatic netdev=user.0 -device append when net_device is a substring of
+// some -device argument already in qemuargs. net_device must therefore
+// name exactly the NIC machine.NICDevice already put there, for every NIC
+// vmavs supports -- not just the default.
+func TestNetDeviceMatchesTheNICInQemuargs(t *testing.T) {
+	for _, nic := range config.NICChoices {
+		hw := config.DefaultMachine()
+		hw.NIC = nic
+		b, err := Packer(hw, config.DefaultDiskGB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		netDevice := regexp.MustCompile(`net_device\s*=\s*"([^"]*)"`).FindStringSubmatch(src)
+		if netDevice == nil || netDevice[1] != nic {
+			t.Errorf("%s: net_device = %v, want %q", nic, netDevice, nic)
+		}
+		if !strings.Contains(src, machine.NICDevice(nic)) {
+			t.Errorf("%s: qemuargs lacks the -device line %q that net_device must be a substring of", nic, machine.NICDevice(nic))
+		}
+		if !strings.Contains(machine.NICDevice(nic), nic) {
+			t.Errorf("%s: machine.NICDevice's own -device line %q does not contain the NIC name", nic, machine.NICDevice(nic))
+		}
 	}
 }
