@@ -317,7 +317,7 @@ cleanup is `defer`, not traps.
 ## 8. CI
 
 - **The `go` job:**
-  - `go vet`, `staticcheck` and `go test ./...` on Linux;
+  - `go vet`, `staticcheck` and `go test -race ./...` on Linux;
   - cross-builds for `darwin/amd64`, `darwin/arm64` and `netbsd/amd64`.
 - **`packer-validate`** validates the Go `vmavs emit packer` template for
   every NIC it can install with and, until phase 6, the shell emitter's
