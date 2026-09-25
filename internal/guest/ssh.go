@@ -1,0 +1,121 @@
+// Package guest talks to a running guest over SSH, with Go's own client:
+// no ssh binary and no known_hosts.
+package guest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"time"
+
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/term"
+)
+
+type Target struct {
+	Addr   string
+	User   string
+	Signer ssh.Signer
+	// Legacy is a guest running Apple's OpenSSH 6.2 (manifest.LegacySSH).
+	Legacy  bool
+	Timeout time.Duration
+}
+
+// ClientConfig trusts any host key: every overlay has fresh host keys, so
+// a pinned one would be wrong by construction. What authenticates is the
+// user key the image authorized.
+func (t Target) ClientConfig() *ssh.ClientConfig {
+	signer := t.Signer
+	cfg := &ssh.ClientConfig{
+		User:            t.User,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         t.Timeout,
+	}
+	if t.Legacy {
+		// OpenSSH 6.2 offers only ssh-rsa/ssh-dss host keys and SHA-1
+		// key exchanges, and predates rsa-sha2 signatures (RFC 8332).
+		// The shell equivalent is ssh_opts() in image/build-image.sh.
+		sup, ins := ssh.SupportedAlgorithms(), ssh.InsecureAlgorithms()
+		cfg.HostKeyAlgorithms = append(append([]string{}, sup.HostKeys...), ins.HostKeys...)
+		cfg.KeyExchanges = append(append([]string{}, sup.KeyExchanges...), ins.KeyExchanges...)
+		if as, ok := signer.(ssh.AlgorithmSigner); ok && signer.PublicKey().Type() == ssh.KeyAlgoRSA {
+			if s, err := ssh.NewSignerWithAlgorithms(as, []string{ssh.KeyAlgoRSA}); err == nil {
+				signer = s
+			}
+		}
+	}
+	cfg.Auth = []ssh.AuthMethod{ssh.PublicKeys(signer)}
+	return cfg
+}
+
+func Dial(ctx context.Context, t Target) (*ssh.Client, error) {
+	d := net.Dialer{Timeout: t.Timeout}
+	conn, err := d.DialContext(ctx, "tcp", t.Addr)
+	if err != nil {
+		return nil, err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, t.Addr, t.ClientConfig())
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("ssh %s@%s: %w", t.User, t.Addr, err)
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// Exec runs one command and returns its exit status.
+func Exec(c *ssh.Client, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	s, err := c.NewSession()
+	if err != nil {
+		return 0, err
+	}
+	defer s.Close()
+	s.Stdin, s.Stdout, s.Stderr = stdin, stdout, stderr
+	return status(s.Run(command))
+}
+
+// Shell is an interactive login shell on a terminal.
+func Shell(c *ssh.Client, in *os.File, out, errOut io.Writer) (int, error) {
+	s, err := c.NewSession()
+	if err != nil {
+		return 0, err
+	}
+	defer s.Close()
+	s.Stdin, s.Stdout, s.Stderr = in, out, errOut
+	fd := int(in.Fd())
+	if term.IsTerminal(fd) {
+		old, err := term.MakeRaw(fd)
+		if err != nil {
+			return 0, err
+		}
+		defer term.Restore(fd, old)
+		w, h, err := term.GetSize(fd)
+		if err != nil {
+			w, h = 80, 24
+		}
+		termName := os.Getenv("TERM")
+		if termName == "" {
+			termName = "xterm"
+		}
+		if err := s.RequestPty(termName, h, w, ssh.TerminalModes{ssh.ECHO: 1}); err != nil {
+			return 0, err
+		}
+	}
+	if err := s.Shell(); err != nil {
+		return 0, err
+	}
+	return status(s.Wait())
+}
+
+func status(err error) (int, error) {
+	var xe *ssh.ExitError
+	if errors.As(err, &xe) {
+		return xe.ExitStatus(), nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return 0, nil
+}
