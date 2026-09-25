@@ -83,10 +83,26 @@ func (b blockingRunner) Run(ctx context.Context, c proc.Cmd) error {
 
 func (b blockingRunner) LookPath(name string) (string, error) { return b.create.LookPath(name) }
 
+// freePort is a TCP port free on 127.0.0.1 right now. cmdRun's own
+// portFree check means every test that gets as far as vm.Prepare binds a
+// real port; the default (2222) is not guaranteed free on the host
+// running these tests -- including, per fix round 2, a real machine
+// during the phase 9 measurement, where something else may already be
+// listening on it.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
 func TestRunBootsTheLatestImageOnItsOwnHardwareAndCleansUp(t *testing.T) {
 	h := shellHome(t)
 	f := &proc.Fake{}
-	code, stderr := runVmavs(t, f, map[string]string{"VMAVS_HOME": h}, "run")
+	code, stderr := runVmavs(t, f, map[string]string{"VMAVS_HOME": h}, "run", "--ssh-port", strconv.Itoa(freePort(t)))
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
@@ -103,7 +119,7 @@ func TestRunKeepAndFlagsWin(t *testing.T) {
 	h := shellHome(t)
 	f := &proc.Fake{}
 	code, _ := runVmavs(t, f, map[string]string{"VMAVS_HOME": h, "VMAVS_QEMU": "/opt/q"},
-		"run", "--keep", "--nic", "e1000-82545em", "--memory", "8192")
+		"run", "--keep", "--nic", "e1000-82545em", "--memory", "8192", "--ssh-port", strconv.Itoa(freePort(t)))
 	if code != 0 {
 		t.Fatal(code)
 	}
@@ -140,7 +156,7 @@ func TestRunStopsCleanlyWhenCtxIsCancelled(t *testing.T) {
 	var out, errb bytes.Buffer
 	e := &Env{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errb,
 		Getenv: func(k string) string { return map[string]string{"VMAVS_HOME": h}[k] }, Runner: br, PID: 777}
-	code := Run(ctx, []string{"run"}, e)
+	code := Run(ctx, []string{"run", "--ssh-port", strconv.Itoa(freePort(t))}, e)
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, errb.String())
 	}
@@ -160,7 +176,7 @@ func TestRunRemovesTheDirEvenWhenBootFails(t *testing.T) {
 		}
 		return errors.New("boom")
 	}}
-	code, stderr := runVmavs(t, f, map[string]string{"VMAVS_HOME": h}, "run")
+	code, stderr := runVmavs(t, f, map[string]string{"VMAVS_HOME": h}, "run", "--ssh-port", strconv.Itoa(freePort(t)))
 	if code != 1 || !strings.Contains(stderr, "boom") {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
@@ -188,7 +204,7 @@ func TestRunReapsStaleRunDirectoriesFirst(t *testing.T) {
 	stale := filepath.Join(p.Run(), "old-stale")
 	os.MkdirAll(stale, 0o755)
 	os.WriteFile(filepath.Join(stale, "state"), []byte("image\told\nport\t2222\npid\t1\nkeep\tfalse\n"), 0o644)
-	code, stderr := runVmavs(t, &proc.Fake{}, map[string]string{"VMAVS_HOME": h}, "run")
+	code, stderr := runVmavs(t, &proc.Fake{}, map[string]string{"VMAVS_HOME": h}, "run", "--ssh-port", strconv.Itoa(freePort(t)))
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, stderr)
 	}
