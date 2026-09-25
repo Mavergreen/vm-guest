@@ -17,6 +17,7 @@ import (
 
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/fetch"
+	"github.com/Mavergreen/vm-guest/internal/firmware"
 	"github.com/Mavergreen/vm-guest/internal/pins"
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
@@ -84,6 +85,152 @@ func fakeOpenSSHRelease(t *testing.T, tag string, base, replace []byte) *httptes
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// fakeFirmwareServer serves one distinct body per firmware.SourceNames()
+// name, at <srv>/<name>.tar.gz, and returns the registry rows (as TSV
+// lines, one per source) that point there. refuse, if true, answers
+// every request with a 500, so a test can prove adoption never touched
+// the network.
+func fakeFirmwareServer(t *testing.T, refuse bool) (*httptest.Server, map[string][]byte, []string) {
+	t.Helper()
+	names := firmware.SourceNames()
+	bodies := make(map[string][]byte, len(names))
+	for _, n := range names {
+		bodies[n] = []byte("firmware body of " + n)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuse {
+			w.WriteHeader(500)
+			return
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), ".tar.gz")
+		if b, ok := bodies[name]; ok {
+			w.Write(b)
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	t.Cleanup(srv.Close)
+	var rows []string
+	for _, n := range names {
+		rows = append(rows, fmt.Sprintf("%s\t%s/%s.tar.gz\t%s", n, srv.URL, n, sum(bodies[n])))
+	}
+	return srv, bodies, rows
+}
+
+// firmwareCachePaths is where fakeFirmwareServer's bodies land in a cache
+// rooted at home, in firmware.SourceNames() order.
+func firmwareCachePaths(home string, bodies map[string][]byte) []string {
+	p := config.Paths{Home: home}
+	var want []string
+	for _, n := range firmware.SourceNames() {
+		want = append(want, p.CacheFile(sum(bodies[n]), n+".tar.gz"))
+	}
+	return want
+}
+
+func TestFetchFirmwareFetchesEverySource(t *testing.T) {
+	_, bodies, rows := fakeFirmwareServer(t, false)
+	reg, err := pins.Parse(strings.NewReader(strings.Join(rows, "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	env := map[string]string{"VMAVS_HOME": home, "HOME": t.TempDir()}
+	e, out, errb := fetchEnv(env)
+	e.Registry = reg
+	code := Run(context.Background(), []string{"fetch", "firmware"}, e)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
+	got := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	want := firmwareCachePaths(home, bodies)
+	if !slices.Equal(got, want) {
+		t.Fatalf("stdout paths =\n%v\nwant\n%v", got, want)
+	}
+}
+
+func TestFetchWithNoTargetIncludesFirmware(t *testing.T) {
+	fwSrv, bodies, fwRows := fakeFirmwareServer(t, false)
+	_ = fwSrv
+	asset := []byte("not really Apple's installer")
+	esdSrv, esdReg := fakeAppleCDN(t, asset)
+	tag, err := fetch.OpenSSHTag()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshSrv := fakeOpenSSHRelease(t, tag, xar("base"), xar("replace"))
+
+	var rows []string
+	for _, r := range esdReg.Rows() {
+		rows = append(rows, fmt.Sprintf("%s\t%s\t%s", r.Name, r.URL, r.SHA256))
+	}
+	rows = append(rows, fwRows...)
+	reg, err := pins.Parse(strings.NewReader(strings.Join(rows, "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	env := map[string]string{"VMAVS_HOME": home, "HOME": t.TempDir()}
+	e, out, errb := fetchEnv(env)
+	e.Registry = reg
+	e.Endpoints = &Endpoints{Recovery: esdSrv.URL, OpenSSHReleases: sshSrv.URL}
+	code := Run(context.Background(), []string{"fetch", "--updates", "none"}, e)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	want := firmwareCachePaths(home, bodies)
+	if len(lines) < len(want) {
+		t.Fatalf("stdout=%q, too few lines for esd+openssh+firmware", out.String())
+	}
+	got := lines[len(lines)-len(want):]
+	if !slices.Equal(got, want) {
+		t.Fatalf("stdout's firmware tail =\n%v\nwant\n%v\n(full stdout: %q)", got, want, out.String())
+	}
+}
+
+func TestFetchFirmwareAdoptsFromTheLegacyBuildDirectory(t *testing.T) {
+	_, bodies, rows := fakeFirmwareServer(t, true)
+	reg, err := pins.Parse(strings.NewReader(strings.Join(rows, "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := shortTempDir(t)
+	legacyBuild := filepath.Join(home, ".local", "share", "mavericks-qemu-guest", "build")
+	if err := os.MkdirAll(legacyBuild, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range firmware.SourceNames() {
+		if err := os.WriteFile(filepath.Join(legacyBuild, n+".tar.gz"), bodies[n], 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := map[string]string{"HOME": home}
+	e, out, errb := fetchEnv(env)
+	e.Registry = reg
+	code := Run(context.Background(), []string{"fetch", "firmware"}, e)
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "adopted") {
+		t.Fatalf("stderr=%q, want an adoption note", errb.String())
+	}
+	got := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(got) != len(firmware.SourceNames()) {
+		t.Fatalf("stdout=%q, want one path per source", out.String())
+	}
+}
+
+func TestFetchRejectsUnknownTargetsStill(t *testing.T) {
+	env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()}
+	e, _, errb := fetchEnv(env)
+	code := Run(context.Background(), []string{"fetch", "firmwar"}, e)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
 }
 
 // fetchEnv is an Env set up like vmavs() but with VMAVS_HOME/HOME in temp

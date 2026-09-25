@@ -9,22 +9,27 @@ import (
 
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/fetch"
+	"github.com/Mavergreen/vm-guest/internal/firmware"
 	"github.com/Mavergreen/vm-guest/internal/pins"
 )
 
-const fetchHelp = `usage: vmavs fetch [esd|openssh|updates ...] [--updates none|security|all] [--probe]
+const fetchHelp = `usage: vmavs fetch [esd|openssh|updates|firmware ...] [--updates none|security|all] [--probe]
 
-Fetch and verify vmavs's pinned inputs: Apple's InstallESD.dmg (esd), the
-guest's OpenSSH release (openssh), and Apple's post-10.9.5 updates
-(updates). With no target, all three. Each fetched file's path is printed
-on stdout, one per line, in the order esd, openssh (its base package,
-then System-Replace), updates (install order); progress and adoption go
-to stderr as "vmavs fetch: ...".
+Fetch and verify vmavs's pinned inputs: Apple's InstallESD.dmg
+(esd), the guest's OpenSSH release (openssh), Apple's post-10.9.5
+updates (updates), and the firmware's pinned sources -- OpenCorePkg,
+ocbuild's efibuild.sh, EDK II (audk) and its submodules, and the
+Lilu and VirtualSMC kext releases (firmware). With no target, all
+four. Each fetched file's path is printed on stdout, one per line, in
+the order esd, openssh (its base package, then System-Replace), updates
+(install order), firmware (each pinned source, in build order); progress
+and adoption go to stderr as "vmavs fetch: ...".
 
 It first tries to adopt the shell tree's own downloads: inside VMAVS_HOME
 (which may itself be the shell tree's home, phase 1's documented way of
 booting a shell-built image) and, when it differs, the shell tree's own
-legacy home too -- media/InstallESD.dmg, openssh/<tag>/ and updates/.
+legacy home too -- media/InstallESD.dmg, openssh/<tag>/, updates/ and
+build/ (the firmware's own downloads).
 Adoption is verified the same as everything else here, and never moves or
 deletes anything in the old home.
 
@@ -42,8 +47,10 @@ size, without downloading it (esd only).
 type Endpoints struct{ Recovery, OpenSSHReleases string }
 
 // fetchOrder is the order cmdFetch runs and prints targets in, regardless
-// of the order they were named in.
-var fetchOrder = []string{"esd", "openssh", "updates"}
+// of the order they were named in. Spec §2 says fetch with no argument
+// gets "all of" the pinned inputs, so firmware -- added in phase 3 -- is
+// included here too.
+var fetchOrder = []string{"esd", "openssh", "updates", "firmware"}
 
 func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	fs := newFlags("fetch")
@@ -135,6 +142,15 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 			for _, u := range ups {
 				fmt.Fprintln(e.Stdout, u.Path)
 			}
+
+		case "firmware":
+			for _, n := range firmware.SourceNames() {
+				path, err := g.Pinned(ctx, reg, n, adoptCandidates(p, legacyBase, config.Paths.ShellBuild))
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(e.Stdout, path)
+			}
 		}
 	}
 	return nil
@@ -206,7 +222,7 @@ func fetchTargets(args []string) ([]string, error) {
 	want := map[string]bool{}
 	for _, a := range args {
 		if !slices.Contains(fetchOrder, a) {
-			return nil, usagef("unknown fetch target %q: choose from esd, openssh, updates", a)
+			return nil, usagef("unknown fetch target %q: choose from %s", a, strings.Join(fetchOrder, ", "))
 		}
 		want[a] = true
 	}

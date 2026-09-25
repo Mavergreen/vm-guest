@@ -85,6 +85,10 @@ func (p Paths) ShellESD() string               { return filepath.Join(p.Home, "m
 func (p Paths) ShellOpenSSH(tag string) string { return filepath.Join(p.Home, "openssh", tag) }
 func (p Paths) ShellUpdates() string           { return filepath.Join(p.Home, "updates") }
 
+// ShellBuild is where the shell tree keeps its firmware downloads (and
+// builds): build/. Adoption looks there for the firmware's sources.
+func (p Paths) ShellBuild() string { return p.Build() }
+
 // OpenCoreImageOut is where vmavs writes the OpenCore EFI image it
 // builds: always build/opencore.img, never the shell tree's
 // work/opencore-p3.img, which OpenCoreImage still falls back to for

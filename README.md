@@ -65,12 +65,15 @@ go build -o out/vmavs ./cmd/vmavs
 
 So far it has `fetch`, `run`, `ssh`, `emit packer`, `doctor` and `version`
 -- the subcommands that fetch and verify Apple's installer, its
-post-10.9.5 updates and the guest's OpenSSH, boot a guest, reach it over
-SSH and report on the host, not the ones that build an image. `fetch`
-adopts the shell tree's own downloads (verified, never moved or deleted)
-when they are already there, so switching to the Go binary does not mean
-downloading Apple's 5 GB installer again. Point it at an image the shell
-pipeline already built:
+post-10.9.5 updates, the guest's OpenSSH and the firmware's pinned
+sources (`fetch firmware`: OpenCorePkg, ocbuild's efibuild.sh, EDK II and
+its submodules, and the Lilu and VirtualSMC kext releases), boot a guest,
+reach it over SSH and report on the host, not the ones that build an
+image. `fetch` adopts the shell tree's own downloads (verified, never
+moved or deleted) when they are already there -- including its `build/`
+directory, where the firmware's downloads live -- so switching to the Go
+binary does not mean downloading Apple's 5 GB installer again. Point it
+at an image the shell pipeline already built:
 
 ```sh
 export VMAVS_HOME="$HOME/.local/share/mavericks-qemu-guest"
