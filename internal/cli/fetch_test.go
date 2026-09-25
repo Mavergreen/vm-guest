@@ -352,10 +352,10 @@ func TestFetchESDProbePrintsURLAndSizeAndDownloadsNothing(t *testing.T) {
 	}
 }
 
-// TestFetchArgOrderingsParseCorrectly is a table-driven test over the
-// orderings the fix-round-1 review asked for: targets and flags mixed in
-// either order, --updates in its "X", "=X" and single-dash forms, and the
-// standard "--" terminator. It calls parseFetchArgs/fetchTargets
+// TestFetchArgOrderingsParseCorrectly pins how fetch reads its
+// arguments: targets and flags mixed in either order, --updates in its
+// "X", "=X" and single-dash forms, and the standard "--" terminator. It
+// calls parseInterleaved and orderedTargets, the helpers cmdFetch uses,
 // directly (rather than a full Run(), which would need a working network
 // fake for every combination) because what is under test here is
 // argument parsing, not fetching.
@@ -379,13 +379,13 @@ func TestFetchArgOrderingsParseCorrectly(t *testing.T) {
 			updates := fs.String("updates", config.DefaultUpdates, "")
 			probe := fs.Bool("probe", false, "")
 			e := &Env{Stdout: io.Discard, Stderr: io.Discard}
-			targetArgs, err := parseFetchArgs(fs, e, fetchHelp, c.args)
+			targetArgs, err := parseInterleaved(fs, e, fetchHelp, c.args)
 			if err != nil {
-				t.Fatalf("parseFetchArgs(%v): %v", c.args, err)
+				t.Fatalf("parseInterleaved(%v): %v", c.args, err)
 			}
-			targets, err := fetchTargets(targetArgs)
+			targets, err := orderedTargets("fetch", targetArgs, fetchOrder)
 			if err != nil {
-				t.Fatalf("fetchTargets(%v): %v", targetArgs, err)
+				t.Fatalf("orderedTargets(%v): %v", targetArgs, err)
 			}
 			wantTargets := c.wantTargets
 			if wantTargets == nil {
@@ -406,8 +406,8 @@ func TestFetchArgOrderingsParseCorrectly(t *testing.T) {
 
 // TestFetchArgErrorsExitTwo covers the two ways fetch's arguments can be
 // wrong: an unknown flag (the flag package's own error, wrapped as a
-// UsageError) and an unknown target (fetchTargets' own check, naming all
-// three choices).
+// UsageError) and an unknown target (orderedTargets' check, naming every
+// choice).
 func TestFetchArgErrorsExitTwo(t *testing.T) {
 	cases := []struct {
 		name string
@@ -454,10 +454,10 @@ func TestFetchUnknownTargetExactWording(t *testing.T) {
 }
 
 // TestFetchDuplicateTargetsAreDeduped: naming the same target twice is
-// redundant, not contradictory, so fetchTargets dedupes rather than
-// erroring (the comment on fetchTargets says why).
+// redundant, not contradictory, so orderedTargets dedupes rather than
+// erroring (its comment says why).
 func TestFetchDuplicateTargetsAreDeduped(t *testing.T) {
-	got, err := fetchTargets([]string{"esd", "openssh", "esd"})
+	got, err := orderedTargets("fetch", []string{"esd", "openssh", "esd"}, fetchOrder)
 	if err != nil {
 		t.Fatal(err)
 	}

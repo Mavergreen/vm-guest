@@ -267,16 +267,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return writeAtomic(path, perm, func(w io.Writer) error { _, err := w.Write(data); return err })
 }
 
+// writeAtomic fills a temp file beside path (stageFile), and renames it
+// to path; on any error the temp file is removed and path is untouched.
 func writeAtomic(path string, perm os.FileMode, fill func(io.Writer) error) error {
-	return writeAtomicFile(path, perm, func(f *os.File) error { return fill(f) })
-}
-
-// writeAtomicFile fills a temp file beside path, makes it perm, syncs,
-// closes and renames it to path; on any error the temp file is removed
-// and path is untouched. fill gets the file itself, for a caller that
-// needs to Truncate it, write at offsets and read it back.
-func writeAtomicFile(path string, perm os.FileMode, fill func(*os.File) error) error {
-	tmp, err := stageFile(path, perm, fill)
+	tmp, err := stageFile(path, perm, func(f *os.File) error { return fill(f) })
 	if err != nil {
 		return err
 	}
@@ -287,9 +281,10 @@ func writeAtomicFile(path string, perm os.FileMode, fill func(*os.File) error) e
 	return nil
 }
 
-// stageFile is writeAtomicFile up to the rename: the name of a temp file
-// beside path, filled, made perm, synced and closed, for a caller that
-// renames it into place itself (or removes it). On error nothing is left.
+// stageFile is the name of a temp file beside path, filled, made perm,
+// synced and closed, for a caller that renames it into place (or removes
+// it). fill gets the file itself, for a caller that needs to Truncate
+// it, write at offsets and read it back. On error nothing is left.
 func stageFile(path string, perm os.FileMode, fill func(*os.File) error) (name string, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err

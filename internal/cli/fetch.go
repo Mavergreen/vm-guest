@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"slices"
 	"strings"
@@ -57,11 +56,11 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	updates := fs.String("updates", config.DefaultUpdates,
 		fmt.Sprintf("which post-10.9.5 updates to fetch (%s)", strings.Join(config.UpdateChoices, "|")))
 	probe := fs.Bool("probe", false, "esd only: print the asset URL and size from the osrecovery handshake; download nothing")
-	targetArgs, err := parseFetchArgs(fs, e, fetchHelp, args)
+	targetArgs, err := parseInterleaved(fs, e, fetchHelp, args)
 	if err != nil {
 		return err
 	}
-	targets, err := fetchTargets(targetArgs)
+	targets, err := orderedTargets("fetch", targetArgs, fetchOrder)
 	if err != nil {
 		return err
 	}
@@ -170,21 +169,6 @@ func adoptCandidates(p config.Paths, legacyBase string, at func(config.Paths) st
 		dirs = append(dirs, at(config.Paths{Home: legacyBase}))
 	}
 	return dirs
-}
-
-// parseFetchArgs is parseInterleaved (cli.go), named for fetch's own
-// callers and tests; cmdFirmware uses parseInterleaved directly.
-func parseFetchArgs(fs *flag.FlagSet, e *Env, help string, args []string) ([]string, error) {
-	return parseInterleaved(fs, e, help, args)
-}
-
-// fetchTargets validates args against fetchOrder and returns the
-// requested targets in canonical order (esd, openssh, updates, firmware),
-// regardless of the order they were named in. No args means all four.
-// orderedTargets (cli.go) does the same thing for "vmavs firmware"; this
-// is that shared helper, named for fetch's own messages.
-func fetchTargets(args []string) ([]string, error) {
-	return orderedTargets("fetch", args, fetchOrder)
 }
 
 // endpoints is e.Endpoints with every empty field filled with the real
