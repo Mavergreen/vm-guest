@@ -44,10 +44,11 @@ func main() {
 	// started, so an ignored SIGINT (a background job) stays ignored.
 	context.AfterFunc(ctx, func() { signal.Reset(os.Interrupt) })
 	code := cli.Run(ctx, os.Args[1:], &cli.Env{
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-		Getenv: os.Getenv,
+		Stdin:   os.Stdin,
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+		Getenv:  os.Getenv,
+		Environ: os.Environ,
 	})
 	stop()
 	os.Exit(code)

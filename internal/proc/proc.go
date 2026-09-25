@@ -27,6 +27,10 @@ type Cmd struct {
 	// held for as long as QEMU runs, even if vmavs itself is killed
 	// before it can release it deliberately.
 	ExtraFiles []*os.File
+	// Env is the child's whole environment, as exec.Cmd.Env: nil means
+	// vmavs's own. The firmware builds use it to hand upstream's
+	// build scripts their settings (ARCHS, BUILD_ARGUMENTS, ...).
+	Env []string
 }
 
 // String is the command as a shell would need it typed, for logs and
@@ -68,6 +72,7 @@ func (x Exec) Run(ctx context.Context, c Cmd) error {
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Dir, c.Stdin, c.Stdout, c.Stderr
 	cmd.ExtraFiles = c.ExtraFiles
+	cmd.Env = c.Env
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = x.GracePeriod
 	if cmd.WaitDelay == 0 {

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/doctor"
@@ -28,6 +29,9 @@ type Env struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	Getenv func(string) string
+	// Environ is the environment children inherit (the firmware builds
+	// add to it). nil means os.Environ.
+	Environ func() []string
 	// Runner runs external commands. A nil Runner means the real one.
 	Runner proc.Runner
 	// PID is the pid run records in a run's state file, for a person
@@ -186,6 +190,14 @@ func runner(e *Env) proc.Runner {
 		return e.Runner
 	}
 	return proc.Exec{}
+}
+
+// environ is e.Environ(), or os.Environ().
+func environ(e *Env) []string {
+	if e.Environ != nil {
+		return e.Environ()
+	}
+	return os.Environ()
 }
 
 // logf writes one "vmavs <cmd>: ..." line to stderr.

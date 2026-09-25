@@ -28,6 +28,18 @@ func TestCancellingTheContextStopsTheChildPolitely(t *testing.T) {
 	}
 }
 
+func TestExecPassesTheEnvironmentItIsGiven(t *testing.T) {
+	var out strings.Builder
+	err := Exec{}.Run(context.Background(), Cmd{
+		Name: "sh", Args: []string{"-c", `printf %s "$VMAVS_PROC_TEST"`},
+		Env:    []string{"VMAVS_PROC_TEST=a\tb", "PATH=/usr/bin:/bin"},
+		Stdout: &out,
+	})
+	if err != nil || out.String() != "a\tb" {
+		t.Fatalf("out %q, err %v", out.String(), err)
+	}
+}
+
 func TestFakeRecordsAndAnswers(t *testing.T) {
 	f := &Fake{Paths: map[string]string{"qemu-img": "/usr/bin/qemu-img"}}
 	_ = f.Run(context.Background(), Cmd{Name: "qemu-img", Args: []string{"create"}})

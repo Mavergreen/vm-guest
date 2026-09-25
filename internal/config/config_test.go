@@ -169,3 +169,17 @@ func TestShellDownloadPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenCoreImageOutIgnoresTheShellTreesPath(t *testing.T) {
+	home := t.TempDir()
+	p := Paths{Home: home}
+	if err := os.MkdirAll(p.Work(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.Work(), "opencore-p3.img"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.OpenCoreImageOut(); got != filepath.Join(home, "build", "opencore.img") {
+		t.Fatalf("got %s", got)
+	}
+}

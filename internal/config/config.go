@@ -85,11 +85,17 @@ func (p Paths) ShellESD() string               { return filepath.Join(p.Home, "m
 func (p Paths) ShellOpenSSH(tag string) string { return filepath.Join(p.Home, "openssh", tag) }
 func (p Paths) ShellUpdates() string           { return filepath.Join(p.Home, "updates") }
 
+// OpenCoreImageOut is where vmavs writes the OpenCore EFI image it
+// builds: always build/opencore.img, never the shell tree's
+// work/opencore-p3.img, which OpenCoreImage still falls back to for
+// reading.
+func (p Paths) OpenCoreImageOut() string { return filepath.Join(p.Build(), "opencore.img") }
+
 // OpenCoreImage is build/opencore.img. Until the shell tree is retired
 // (spec §5, phase 6), an image it built keeps OpenCore at
 // work/opencore-p3.img, and that path is used when the new one is absent.
 func (p Paths) OpenCoreImage() string {
-	cur := filepath.Join(p.Build(), "opencore.img")
+	cur := p.OpenCoreImageOut()
 	if exists(cur) {
 		return cur
 	}
