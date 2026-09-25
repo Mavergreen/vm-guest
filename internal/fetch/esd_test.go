@@ -97,7 +97,7 @@ func TestAnAdoptedInstallerNeedsNoHandshake(t *testing.T) {
 	asset := []byte("already here")
 	_, reg := fakeApple(t, asset)
 	old := t.TempDir() + "/InstallESD.dmg"
-	if err := writeAtomic(old, asset); err != nil {
+	if err := writeCacheFile(old, asset); err != nil {
 		t.Fatal(err)
 	}
 	g := getter(t)

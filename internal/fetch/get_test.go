@@ -552,3 +552,44 @@ func TestAFailedGetLeavesNoDirectoryItCreated(t *testing.T) {
 		t.Fatalf("a directory Get did not create was removed: %v", err)
 	}
 }
+
+// TestCacheFileModes: what Get writes itself -- a download, the
+// SHA256SUMS it keeps -- is 0644 whatever the umask. What it adopts by
+// hard link keeps the original's mode: it IS the original's inode, and
+// changing its mode would change the user's own file.
+func TestCacheFileModes(t *testing.T) {
+	body := []byte("payload bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
+	defer srv.Close()
+	g := getter(t)
+	p, err := g.Get(context.Background(), Item{Name: "x", URL: srv.URL + "/x.zip", SHA256: sum(body)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("a download's mode is %v (%v), want 0644", fi.Mode().Perm(), err)
+	}
+
+	sums := g.Paths.OpenSSHSums("tag")
+	if err := writeCacheFile(sums, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(sums); err != nil || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("SHA256SUMS's mode is %v (%v), want 0644", fi.Mode().Perm(), err)
+	}
+
+	adopted := []byte("adopted bytes")
+	old := filepath.Join(t.TempDir(), "y.zip")
+	if err := os.WriteFile(old, adopted, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(old, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Get(context.Background(), Item{Name: "y", URL: "http://127.0.0.1:1/y.zip", SHA256: sum(adopted), Adopt: []string{old}}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(old); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Fatalf("adoption changed the original's mode to %v (%v), want 0640", fi.Mode().Perm(), err)
+	}
+}

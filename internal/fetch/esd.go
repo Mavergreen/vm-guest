@@ -211,7 +211,9 @@ func (rc Recovery) offer(ctx context.Context, reg *pins.Registry) (pins.Source, 
 }
 
 // InstallESD is Apple's InstallESD.dmg, verified: from the cache, else
-// adopted from an earlier download, else fetched from Apple.
+// adopted from an earlier download, else fetched from Apple. The returned
+// path may be a hard link to the user's original (see Get): read-only;
+// never open it for writing.
 func (g *Getter) InstallESD(ctx context.Context, reg *pins.Registry, rc Recovery, adopt []string) (string, error) {
 	src, err := reg.Lookup(ESDSource)
 	if err != nil {

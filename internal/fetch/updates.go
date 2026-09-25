@@ -48,7 +48,9 @@ func StagedName(n int, path string) string {
 }
 
 // Updates fetches one selection, verified against the registry, in the
-// order the guest must install them. "none" fetches nothing.
+// order the guest must install them. "none" fetches nothing. Each
+// Update's Path may be a hard link to the user's original (see Get):
+// read-only; never open it for writing.
 //
 // adoptDirs is tried in order for every update, like InstallESD's and
 // OpenSSH's adoption lists: a partial or stale copy in one directory must

@@ -99,12 +99,17 @@ func Filename(url string) (string, error) {
 // of it.Adopt (verified before AND after being placed -- see adoptCandidate),
 // else downloaded.
 //
-// A cached file may share an inode with a file elsewhere (the shell
-// tree's own download, adopted by a hard link): nothing in this package
-// ever opens a cached file for writing, truncates it or changes its mode.
-// Every write happens on a freshly created, uniquely named file, verified
-// in full, then renamed into place; nothing unverified is ever renamed to
-// its final name.
+// A returned path may be a hard link to the user's original (the shell
+// tree's own download, adopted): it is read-only -- never open it for
+// writing, truncate it or change its mode, here or in any caller, or the
+// user's original changes with it. Every write happens on a freshly
+// created, uniquely named file, verified in full, then renamed into
+// place; nothing unverified is ever renamed to its final name.
+//
+// A file Get writes itself (a download, or an adoption's copy when a
+// hard link is not possible) is made 0644 before it is renamed into
+// place. One adopted by a hard link keeps the original's mode: it is the
+// original's inode, and Get never chmods it.
 //
 // Get creates cache/<sha>/ (and any missing parent) only when it is about
 // to write into it -- an adoption's or a download's temp -- and removes
@@ -453,6 +458,11 @@ func (g *Getter) attempt(ctx context.Context, it Item, dir, name, dest string) (
 	if err := f.Sync(); err != nil {
 		return false, err
 	}
+	// CreateTemp made it 0600; a cache file is 0644 (see Get). This is
+	// this attempt's own fresh file, never a link to anyone else's.
+	if err := f.Chmod(0o644); err != nil {
+		return false, err
+	}
 	if err := f.Close(); err != nil {
 		return false, err
 	}
@@ -689,6 +699,12 @@ func copyFile(ctx context.Context, src, dst string) error {
 		return err
 	}
 	if _, err := io.Copy(out, &ctxReader{ctx: ctx, r: in}); err != nil {
+		out.Close()
+		return err
+	}
+	// 0644 whatever the umask: this is a copy, dst's own inode, so its
+	// mode is ours to set (unlike a hard link's -- see Get).
+	if err := out.Chmod(0o644); err != nil {
 		out.Close()
 		return err
 	}

@@ -64,6 +64,8 @@ func (p Paths) Cache() string            { return filepath.Join(p.Home, "cache")
 // CacheFile is where a downloaded input with this checksum and filename
 // lives: content-addressed, so a changed pin is a different file and a
 // cached file can always be re-verified against its own directory name.
+// A file here may be a hard link to the user's original (fetch adopts the
+// shell tree's downloads that way): read-only; never open it for writing.
 func (p Paths) CacheFile(sha256, filename string) string {
 	return filepath.Join(p.Cache(), sha256, filename)
 }

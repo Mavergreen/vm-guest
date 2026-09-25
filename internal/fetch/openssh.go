@@ -40,7 +40,8 @@ func OpenSSHTag() (string, error) {
 }
 
 // OpenSSH fetches the release's two packages, verified against the
-// release's own SHA256SUMS. Nothing constructs an asset name from a
+// release's own SHA256SUMS. A returned path may be a hard link to the
+// user's original (see Get): read-only; never open it for writing. Nothing constructs an asset name from a
 // prefix: the names are whatever SUMS says, so a renamed prefix cannot
 // 404 across a pin bump.
 //
@@ -171,7 +172,7 @@ func (g *Getter) fetchOpenSSHSums(ctx context.Context, url, tag string, adoptDir
 			continue
 		}
 		if _, _, _, perr := parseOpenSSHSums(b); perr == nil {
-			if err := writeAtomic(dest, b); err != nil {
+			if err := writeCacheFile(dest, b); err != nil {
 				return nil, err
 			}
 			return b, nil
@@ -187,7 +188,7 @@ func (g *Getter) fetchOpenSSHSums(ctx context.Context, url, tag string, adoptDir
 	if _, _, _, perr := parseOpenSSHSums(b); perr != nil {
 		return nil, fmt.Errorf("%s/SHA256SUMS: does not parse as SHA256SUMS: %w", url, perr)
 	}
-	if err := writeAtomic(dest, b); err != nil {
+	if err := writeCacheFile(dest, b); err != nil {
 		return nil, err
 	}
 	return b, nil
@@ -245,7 +246,13 @@ func (g *Getter) fetchSumsOnce(ctx context.Context, url, tag string) ([]byte, bo
 	return buf.Bytes(), false, nil
 }
 
-func writeAtomic(dest string, b []byte) error {
+// writeCacheFile writes b to dest, a cache file this package owns (the
+// release's SHA256SUMS), through a fresh temp directory of its own:
+// synced, made 0644, then renamed into place, so a reader never sees a
+// partial file and nothing is written through a name that already
+// exists. (payload has its own writer for its outputs, writeOutput:
+// neither package imports the other for it.)
+func writeCacheFile(dest string, b []byte) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err
 	}
@@ -255,11 +262,15 @@ func writeAtomic(dest string, b []byte) error {
 	}
 	defer os.RemoveAll(tmpDir)
 	tmp := filepath.Join(tmpDir, filepath.Base(dest))
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Chmod(0o644); err != nil {
 		f.Close()
 		return err
 	}
