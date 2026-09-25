@@ -594,7 +594,7 @@ lost:
 Out of scope there and here: 3D acceleration (Quartz Extreme / Core Image),
 shared folders (use SMB, NFS, or sshfs), and a virtio block driver.
 
-### P8 — `vmavs`, the front door (the product decision) — **implemented; exit not met**
+### P8 — `vmavs`, the front door (the product decision) — **implemented; exit met by the Go `vmavs run` + `vmavs ssh`**
 
 Added 2026-09-22, after `decisions/0007`. The four goals at the top of this
 document are about making something work. This phase is about making it
@@ -630,13 +630,23 @@ one of them maps onto a stage that already exists.
 someone from a clean checkout to a shell in a Mavericks guest; the README
 says so in its first thirty seconds; `./bin/run-tests.sh` green.
 
-**Where it stands, 2026-09-24:** everything above the exit landed. The exit
-itself does not hold: `vmavs run` boots only this project's development
-profiles, none of which points at the image `vmavs image` builds, so there
-is no shipped path from a clean checkout to a shell. The README says that
-plainly instead of claiming the exit. `emit packer`'s schema is MEASURED
-by `packer validate`, which CI runs on every profile's template; no
-`packer build` has run from it, so the drive mapping is still REASONED.
+**Where it stands, 2026-09-24:** everything above the exit landed. The
+shell `bin/vmavs run` still only boots this project's development
+profiles, none of which points at the image `vmavs image` builds — that
+half of the gap is unchanged. But the Go `vmavs run` + `vmavs ssh`
+(`docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md`, phase 1) close
+it from the other side: **MEASURED on 2026-09-24, against a shell-built
+image on this KVM host** (`vmavs run --image mavericks-20260922`, then
+`vmavs ssh`), a clean checkout that already has a shell-built image reaches
+a shell in it — `sw_vers` answers `10.9.5` within a minute, and the legacy
+image (`mavericks-a`, Apple's OpenSSH 6.2) does too once
+`internal/guest/ssh.go`'s legacy cipher list was fixed in the same pass.
+Full detail, including the legacy-SSH root cause and fix, is in NOTES.md,
+"P8 — the Go vmavs boots a built image and answers SSH". The exit's other
+clauses hold as before: `emit packer`'s schema is MEASURED by `packer
+validate`, which CI runs on every profile's template; no `packer build` has
+run from it, so the drive mapping is still REASONED; `./bin/run-tests.sh`
+stays green.
 
 Plan: `docs/superpowers/plans/2026-09-22-shipping-vmavs.md`.
 

@@ -6614,3 +6614,126 @@ whether a fixed `host_port_min/max` reaches a guest whose NIC came from
 `qemuargs`. No `packer build` has run from any of it. (The fix-round entry
 above calls the qemuargs override "documented behavior"; that too is
 REASONED from the plugin's docs and source, not measured here.)
+
+## 2026-09-24 — P8 — the Go vmavs boots a built image and answers SSH
+
+Task 9: point the Go `vmavs` at real, shell-built images on this KVM host
+and MEASURE what actually happens, instead of reasoning about it. Pre-flight
+clean (`pgrep -a qemu-system` empty, `127.0.0.1:2222` free) both times below.
+
+**The modern path (`mavericks-20260922`: `openssh` and `nic` lines in its
+manifest, e1000-82545em NIC).**
+
+```
+$ go build -o out/vmavs ./cmd/vmavs
+$ export VMAVS_HOME=$HOME/.local/share/mavericks-qemu-guest
+$ ./out/vmavs run --image mavericks-20260922 &
+vmavs run: booting mavericks-20260922 (Penryn,+ssse3,+sse4.1,+sse4.2, 4096 MiB, e1000-82545em); ssh on localhost:2222
+$ for i in $(seq 1 72); do ./out/vmavs ssh -- sw_vers -productVersion && break; sleep 10; done
+10.9.5    # attempt 3
+$ ./out/vmavs ssh -- sw_vers
+ProductName:	Mac OS X
+ProductVersion:	10.9.5
+BuildVersion:	13F1911
+$ ./out/vmavs ssh -- uname -a
+Darwin mavericks 13.4.0 Darwin Kernel Version 13.4.0: Mon Jan 11 18:17:34 PST 2016; root:xnu-2422.115.15~1/RELEASE_X86_64 x86_64
+```
+
+**MEASURED: wall clock from `vmavs run` start to the first successful
+`vmavs ssh` was 67 seconds** (2026-09-25T04:30:23Z → 04:31:29Z) — well
+inside the brief's ~10-minute estimate, and inside the ~12-minute budget
+used below. `kill -TERM` on the `run` process (its PID, not the reaped
+overlay directory's random suffix) stopped it cleanly (`qemu-system-x86_64:
+terminating on signal 15`); afterward no `qemu-system` process remained and
+`$VMAVS_HOME/run` was empty. The overlay lived at
+`run/mavericks-20260922-<random>/`, confirming `run/<image>-<random>/`
+(not `<pid>`) as the brief's "what changed" note said. The image file
+itself (`images/mavericks-20260922.qcow2`) was byte-identical and
+mtime-identical before and after (`stat -c '%Y %s'`): the overlay design
+holds.
+
+Also MEASURED while this guest was up: `./out/vmavs ssh -- true`, run early
+(before boot finished), gave the exact hint text: `vmavs ssh: error: the
+guest on port 2222 isn't answering SSH yet -- is it still booting? ...:
+ssh: handshake failed: read tcp ...: i/o timeout`. `./out/vmavs doctor` (run
+concurrently, with `VMAVS_HOME` set) reported all four host checks PASS and
+`GO -- ready: run ssh emit`.
+
+**The legacy path (`mavericks-a`: no `openssh`/`nic` lines →
+`LegacySSH()` true, `usb-net`, Apple's OpenSSH 6.2) — first attempt FAILED.**
+
+```
+$ ./out/vmavs run --image mavericks-a &
+vmavs run: booting mavericks-a (..., usb-net); ssh on localhost:2222
+$ for i in $(seq 1 72); do ./out/vmavs ssh -- sw_vers -productVersion && break; sleep 10; done
+# attempts 1-3: i/o timeout ("still booting")
+# attempts 4-72 (754s total): every one --
+vmavs ssh: error: the guest on port 2222 isn't answering SSH yet -- is it still booting? ...: ssh: handshake failed: EOF
+final rc=1
+```
+
+This was recorded as a finding, not papered over. A raw TCP read confirmed
+the guest was fully booted and sshd healthy (`SSH-2.0-OpenSSH_6.2` banner
+returned instantly), and the system `ssh` client, given legacy options,
+connected and ran a command in under a second — so the failure was in
+`vmavs ssh` itself, not the guest or the network path. A follow-up
+debugging session (see
+`.superpowers/sdd/2026-09-24-vmavs-go-phase-1/debug-legacy-ssh-report.md`)
+root-caused it live against the running guest: Apple's sshd (`OpenSSH_6.2p2,
+OSSLShim 0.9.8r 8 Dec 2011`, read from `/usr/sbin/sshd -V` on the guest)
+advertises `aes128-gcm@openssh.com` and `aes256-gcm@openssh.com` in its
+KEXINIT but cannot actually run them — its guest-side syslog shows `fatal:
+matching cipher is not supported: aes128-gcm@openssh.com [preauth]`, and it
+exits without sending a DISCONNECT, so the client sees a bare EOF.
+`golang.org/x/crypto/ssh`'s default cipher order puts the GCM ciphers
+first, and `internal/guest/ssh.go`'s legacy branch never overrode
+`cfg.Ciphers`, so negotiation picked GCM every time against this server.
+OpenSSH's own client puts `aes128-ctr` first, which is why it never hits
+this. Confirmed **not** CVE-2013-4548 (that bug is post-auth; this failure
+is pre-auth, during key exchange, before NEWKEYS).
+
+**The fix** (`aa3b7c3`, TDD'd): `internal/guest/guesttest/server.go`'s fake
+gained a `gcmTrap` that offers ciphers in Apple's order and closes the
+connection when the client picks a GCM one, exactly like Apple's `fatal()`
+— reproducing the real `handshake failed: EOF` offline for the first time
+(confirmed RED against the unpatched `ssh.go`, GREEN after). The fix itself
+is one line in `internal/guest/ssh.go`'s legacy branch: `cfg.Ciphers =
+[]string{ssh.CipherAES128CTR, ssh.CipherAES192CTR, ssh.CipherAES256CTR}` —
+the three ciphers both sides implement, and exactly what a legacy-configured
+native `ssh` client negotiates against this guest
+(`aes128-ctr`/`umac-64-etm@openssh.com`). The modern path is untouched.
+
+**Re-measured against the real guest with the fixed binary:**
+
+```
+$ go build -o out/vmavs ./cmd/vmavs
+$ ./out/vmavs run --image mavericks-a &
+$ for i in $(seq 1 72); do ./out/vmavs ssh -- sw_vers -productVersion && break; sleep 10; done
+# attempts 1-3: i/o timeout ("still booting")
+10.9.5    # attempt 4
+$ ./out/vmavs ssh -- sw_vers
+ProductName:	Mac OS X
+ProductVersion:	10.9.5
+BuildVersion:	13F34
+$ ./out/vmavs ssh -- uname -a
+Darwin mavericks 13.4.0 Darwin Kernel Version 13.4.0: Sun Aug 17 19:50:11 PDT 2014; root:xnu-2422.115.4~1/RELEASE_X86_64 x86_64
+```
+
+**MEASURED: 71 seconds** from `vmavs run` start (2026-09-25T05:03:05Z) to
+the first successful `vmavs ssh` (05:04:16Z). Stopped cleanly (`kill
+-TERM`); afterward no `qemu-system`/`vmavs` process remained, `$VMAVS_HOME/run`
+was empty, `127.0.0.1:2222` was free, and `images/mavericks-a.qcow2` was
+byte-identical and mtime-identical to before either run of this session.
+
+**Not measured: the interactive shell (Step 3).** No TTY was available to
+the executor; per the brief, this is recorded as not measured rather than
+claimed.
+
+**What's MEASURED and what isn't.** MEASURED: both images boot from a
+built shell pipeline and answer `vmavs ssh` on this host, within roughly a
+minute each, with the exact `sw_vers`/`uname -a` output above; the
+"still booting?" hint text; `vmavs doctor`'s verdict while a guest runs; the
+legacy-SSH root cause (guest syslog line, sshd version) and the fix (green
+test, live re-measurement). Not measured: the interactive shell
+(`vmavs ssh` with a real TTY, `Ctrl-C`, `sw_vers; exit`); any guest besides
+these two manifests; any host besides this one.

@@ -52,6 +52,36 @@ Apple's own EULA contemplates: virtualizing OS X on an Apple-branded
 machine. A non-Apple host is outside that license -- a legal constraint,
 not a technical one -- and is also, so far, untested.
 
+## The Go vmavs (in progress)
+
+A Go rewrite of `vmavs` is underway, one subcommand at a time
+(`docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md`). Build it with:
+
+```sh
+go build -o out/vmavs ./cmd/vmavs
+```
+
+So far it has `run`, `ssh`, `emit packer`, `doctor` and `version` -- the
+subcommands that boot a guest, reach it over SSH and report on the host,
+not the ones that build an image. Point it at an image the shell pipeline
+already built:
+
+```sh
+export VMAVS_HOME=~/.local/share/mavericks-qemu-guest
+out/vmavs run --image mavericks-20260922 &
+out/vmavs ssh -- sw_vers
+```
+
+MEASURED on this project's own KVM host, 2026-09-24: both a modern image
+and one running Apple's legacy OpenSSH 6.2 boot and answer SSH this way --
+see NOTES.md, "P8 -- the Go vmavs boots a built image and answers SSH".
+
+Everything else -- `fetch`, `media`, `install`, `image` and the whole
+build pipeline -- is still `bin/vmavs`, unchanged, and stays the shipped
+path until phase 6 of the Go design
+(`docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md#9-phases`), when
+the shell tree is re-measured against the Go one and retired.
+
 ## Will it work on my machine?
 
 `vmavs doctor` answers per subcommand: a host with QEMU and no
