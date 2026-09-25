@@ -64,6 +64,9 @@ func newRunFixture(t *testing.T) *runFixture {
 	lr := &logRecorder{}
 	b := fixtureBackend(root)
 	b.Runner, b.Log, b.Timeout = f, lr.logf, time.Minute
+	// Level 9 under the race detector costs seconds per test, and these
+	// tests read the archive back, whatever its compression.
+	b.gzipLevel = gzip.BestSpeed
 	return &runFixture{b: b, fake: f, log: lr, root: root, bb: bb}
 }
 
@@ -474,7 +477,7 @@ func TestRunStreamsTheConsoleToAFile(t *testing.T) {
 func TestRunSucceedsOnOKAndLogsThePayloadsLines(t *testing.T) {
 	fx := newRunFixture(t)
 	img := fx.images(t, "t.img")
-	fx.console(t, "[    0.123] foo\n\x1b[2J\x1b[?25l\nMQG-PRIVOPS-MOUNTED /dev/vda1\npayload says hi\r\n\nMQG-PRIVOPS-OK rc=0\n")
+	fx.console(t, "[    0.123] foo\n\x1b[2J\x1b[?25l\n\x1bc\x1b[?7l\x1b[2JMQG-PRIVOPS-MOUNTED /dev/vda1\npayload says hi\r\n\nMQG-PRIVOPS-OK rc=0\n")
 	if _, err := fx.b.Run(context.Background(), img[0], nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -602,6 +605,11 @@ func TestMarkers(t *testing.T) {
 	if got := Markers([]byte("AB 1\nA\n"), "A"); got != nil {
 		t.Fatalf("%q", got)
 	}
+	// The real console's first guest line comes after a terminal reset
+	// (ESC c) and two CSI sequences: the marker is still at its start.
+	if got := Markers([]byte("\x1bc\x1b[?7l\x1b[2JA 1\r\n\x1bDA 2\n"), "A"); !reflect.DeepEqual(got, []string{"1", "2"}) {
+		t.Fatalf("after escapes: %q", got)
+	}
 }
 
 // The real thing: the host's kernel, busybox and QEMU boot the initramfs
@@ -650,5 +658,98 @@ func TestTheMicroVMRunsAPayload(t *testing.T) {
 	}
 	if got := Markers(console, "MQG-TEST-WROTE"); !reflect.DeepEqual(got, []string{"hi"}) {
 		t.Fatalf("MQG-TEST-WROTE %q\nconsole:\n%s", got, console)
+	}
+}
+
+// The initramfs is gzip -9, as the shell's was, unless a Backend says
+// otherwise, which only tests do.
+func TestInitramfsIsGzipLevel9ByDefault(t *testing.T) {
+	fx := newRunFixture(t)
+	if fx.b.gzipLevel != gzip.BestSpeed {
+		t.Fatalf("the fixture's level is %d", fx.b.gzipLevel)
+	}
+	// A small stand-in for busybox, so that this test's own level-9
+	// compression is cheap.
+	small := filepath.Join(fx.root, "busybox")
+	write(t, small, bytes.Repeat([]byte("busybox "), 4096), 0o755)
+	fx.fake.Paths["busybox"] = small
+	for _, tc := range []struct{ set, want int }{{0, gzip.BestCompression}, {gzip.BestSpeed, gzip.BestSpeed}} {
+		b := fx.b
+		b.gzipLevel = tc.set
+		gz, err := b.buildInitramfs(context.Background(), []byte("true\n"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		zr, err := gzip.NewReader(bytes.NewReader(gz))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(zr)
+		var again bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&again, tc.want)
+		_, _ = zw.Write(raw)
+		_ = zw.Close()
+		if !bytes.Equal(gz, again.Bytes()) {
+			t.Errorf("gzipLevel %d: not compressed at level %d", tc.set, tc.want)
+		}
+	}
+}
+
+// funcRunner is a Fake whose QEMU is a function that sees the context.
+type funcRunner struct {
+	*proc.Fake
+	qemu func(ctx context.Context, c proc.Cmd) error
+}
+
+func (r funcRunner) Run(ctx context.Context, c proc.Cmd) error {
+	_ = r.Fake.Run(ctx, c)
+	if c.Name != "qemu-system-x86_64" {
+		return nil
+	}
+	return r.qemu(ctx, c)
+}
+
+// A pass that printed OK and exited 0 succeeded, even if its deadline
+// passed, or its caller cancelled, a moment after: the classification
+// as a timeout or a cancel is for a QEMU that did not finish.
+func TestAPassThatFinishedIsNotATimeout(t *testing.T) {
+	fx := newRunFixture(t)
+	img := fx.images(t, "t.img")
+	fx.b.Timeout = 20 * time.Millisecond
+	fx.b.Runner = funcRunner{fx.fake, func(ctx context.Context, c proc.Cmd) error {
+		_, _ = io.WriteString(c.Stdout, "MQG-PRIVOPS-OK rc=0\n")
+		<-ctx.Done() // the deadline passes before QEMU's exit is seen
+		return nil
+	}}
+	if _, err := fx.b.Run(context.Background(), img[0], nil, nil); err != nil {
+		t.Fatalf("deadline after success: %v", err)
+	}
+
+	fx.b.Timeout = time.Minute
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.b.Runner = funcRunner{fx.fake, func(_ context.Context, c proc.Cmd) error {
+		_, _ = io.WriteString(c.Stdout, "MQG-PRIVOPS-OK rc=0\n")
+		cancel() // interrupted just after QEMU exited
+		return nil
+	}}
+	if _, err := fx.b.Run(ctx, img[0], nil, nil); err != nil {
+		t.Fatalf("cancel after success: %v", err)
+	}
+}
+
+// A context that is already done stages nothing and boots nothing.
+func TestRunChecksTheContextFirst(t *testing.T) {
+	fx := newRunFixture(t)
+	img := fx.images(t, "t.img")
+	delete(fx.fake.Paths, "qemu-system-x86_64") // not even the requirements are looked at
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := fx.b.Run(ctx, img[0], nil, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(fx.fake.Calls) != 0 || len(fx.log.all()) != 0 {
+		t.Fatalf("calls %v, log %q", fx.fake.Calls, fx.log.all())
 	}
 }

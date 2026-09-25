@@ -27,7 +27,11 @@ const DefaultTimeout = 15 * time.Minute
 type Disk struct{ Role, Path string }
 
 var (
-	ansi       = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
+	// ansi is a terminal escape: a CSI sequence (ESC [ ... final), a
+	// two-byte ESC Fe sequence (ESC @ through _, but for [), or ESC c,
+	// the reset that precedes the guest's first line on the console. The
+	// shell's sed knew only CSI, and left that reset's "c" on the line.
+	ansi       = regexp.MustCompile(`\x1b(\[[0-9;?]*[a-zA-Z]|[@-Z\\-_]|c)`)
 	kernelLine = regexp.MustCompile(`^\[[ 0-9.]+\]`)
 )
 
@@ -45,6 +49,9 @@ func (b Backend) logf(f string, a ...any) {
 // the same command printed normally. stdin is /dev/null for the same
 // reason: a step must not compete with its caller for the terminal.
 func (b Backend) Run(ctx context.Context, target string, payload []byte, disks []Disk) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Every unmet requirement is reported before refusing, so that one
 	// run tells the whole story.
 	if m := b.Missing(); len(m) > 0 {
@@ -128,13 +135,16 @@ func (b Backend) Run(ctx context.Context, target string, payload []byte, disks [
 	}
 
 	// A timeout is distinguished from a guest that ran and failed: the
-	// remedies are unrelated.
-	if ctx.Err() != nil {
-		return console, ctx.Err()
-	}
-	if errors.Is(rctx.Err(), context.DeadlineExceeded) {
-		b.logTail(console)
-		return console, fmt.Errorf("the microVM did not finish within %s -- raise --privops-timeout if this host is slower, or see the console above if it hung", timeout)
+	// remedies are unrelated. Only a QEMU that did not finish is either:
+	// one that exited 0 finished, whenever its deadline passes.
+	if runErr != nil {
+		if ctx.Err() != nil {
+			return console, ctx.Err()
+		}
+		if errors.Is(rctx.Err(), context.DeadlineExceeded) {
+			b.logTail(console)
+			return console, fmt.Errorf("the microVM did not finish within %s -- raise --privops-timeout if this host is slower, or see the console above if it hung", timeout)
+		}
 	}
 	b.logPayload(console)
 	text := string(console)
@@ -205,13 +215,12 @@ func (b Backend) logTail(console []byte) {
 	}
 }
 
-// Markers is every value printed after "name " on the console, in order:
-// how a payload hands an answer -- a checksum, a count -- back to the
-// host.
+// Markers is every value printed after "name " at the start of a console
+// line, in order, with terminal escapes and carriage returns removed: how
+// a payload hands an answer -- a checksum, a count -- back to the host.
 func Markers(console []byte, name string) []string {
 	var v []string
-	for _, l := range strings.Split(string(console), "\n") {
-		l = strings.TrimRight(l, "\r")
+	for _, l := range cleanLines(console) {
 		if rest, ok := strings.CutPrefix(l, name+" "); ok {
 			v = append(v, rest)
 		}

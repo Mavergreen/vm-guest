@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
@@ -269,7 +270,7 @@ func TestNewBackendReadsTheReleaseFromUname(t *testing.T) {
 		return
 	}
 	if b.KVer != "6.1.0-test" || b.BootDir != "/boot" || b.ModulesDir != "/lib/modules" ||
-		b.MemMiB != 512 || b.Timeout.Minutes() != 15 || !reflect.DeepEqual(b.Modules, DefaultModules) {
+		b.MemMiB != 512 || b.Timeout != DefaultTimeout || DefaultTimeout != 15*time.Minute || !reflect.DeepEqual(b.Modules, DefaultModules) {
 		t.Fatalf("%+v", b)
 	}
 	if strings.Join(DefaultModules, " ") != "nls_base nls_utf8 hfsplus virtio virtio_ring virtio_pci virtio_blk" {

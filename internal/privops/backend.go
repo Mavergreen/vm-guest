@@ -41,6 +41,11 @@ type Backend struct {
 	Timeout    time.Duration // the bound on one pass: 15m
 	GOOS       string        // runtime.GOOS: the backend runs on linux only
 	Log        func(string, ...any)
+
+	// gzipLevel compresses the initramfs; 0 means gzip.BestCompression,
+	// the shell's gzip -9. Only tests set it: level 9 under the race
+	// detector costs seconds per archive.
+	gzipLevel int
 }
 
 // NewBackend is a Backend for this host: /boot, /lib/modules, the running
@@ -48,7 +53,7 @@ type Backend struct {
 // asks nothing, and Missing says why it cannot run.
 func NewBackend(r proc.Runner, qemu string, log func(string, ...any)) (Backend, error) {
 	b := Backend{Runner: r, QEMU: qemu, BootDir: "/boot", ModulesDir: "/lib/modules",
-		Modules: DefaultModules, MemMiB: 512, Timeout: 15 * time.Minute, GOOS: runtime.GOOS, Log: log}
+		Modules: DefaultModules, MemMiB: 512, Timeout: DefaultTimeout, GOOS: runtime.GOOS, Log: log}
 	if b.GOOS != "linux" {
 		return b, nil
 	}

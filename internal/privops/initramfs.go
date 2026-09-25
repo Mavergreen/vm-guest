@@ -90,7 +90,11 @@ func (b Backend) buildInitramfs(ctx context.Context, payload []byte, roles []str
 	w.add("TRAILER!!!", 0, nil)
 
 	var gz bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&gz, gzip.BestCompression)
+	level := b.gzipLevel
+	if level == 0 {
+		level = gzip.BestCompression
+	}
+	zw, err := gzip.NewWriterLevel(&gz, level)
 	if err != nil {
 		return nil, err
 	}
