@@ -12,8 +12,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/Mavergreen/vm-guest/internal/doctor"
+	"github.com/Mavergreen/vm-guest/internal/pins"
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
 
@@ -36,6 +38,16 @@ type Env struct {
 	// it a fake doctor.Host so it can describe a machine instead of
 	// depending on the one the test runs on.
 	Host *doctor.Host
+
+	// HTTP is what cmdFetch downloads with. nil means http.DefaultClient.
+	HTTP *http.Client
+	// Endpoints is where cmdFetch reaches osrecovery and the OpenSSH
+	// releases. nil means the real ones (fetch.DefaultRecovery,
+	// fetch.DefaultOpenSSHReleases); a test points both at httptest servers.
+	Endpoints *Endpoints
+	// Registry is the source registry cmdFetch verifies downloads
+	// against. nil means the one embedded in this binary (pins.Embedded).
+	Registry *pins.Registry
 }
 
 type command struct {
@@ -48,6 +60,7 @@ type command struct {
 func commandTable() []command {
 	return []command{
 		{"doctor", "What this host can do, subcommand by subcommand", cmdDoctor},
+		{"fetch", "Fetch and verify the pinned inputs (Apple's installer, updates, OpenSSH)", cmdFetch},
 		{"run", "Boot a built image on a throwaway overlay", cmdRun},
 		{"ssh", "Open a shell in the running guest", cmdSSH},
 		{"emit", "Write a Packer template for this machine", cmdEmit},

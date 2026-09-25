@@ -63,10 +63,13 @@ A Go rewrite of `vmavs` is underway, one subcommand at a time
 go build -o out/vmavs ./cmd/vmavs
 ```
 
-So far it has `run`, `ssh`, `emit packer`, `doctor` and `version` -- the
-subcommands that boot a guest, reach it over SSH and report on the host,
-not the ones that build an image. Point it at an image the shell pipeline
-already built:
+So far it has `fetch`, `run`, `ssh`, `emit packer`, `doctor` and `version`
+-- the subcommands that fetch and verify Apple's installer and the
+guest's OpenSSH, boot a guest, reach it over SSH and report on the host,
+not the ones that build an image. `fetch` adopts the shell tree's own
+downloads (verified, never moved or deleted) when they are already there,
+so switching to the Go binary does not mean downloading Apple's 5 GB
+installer again. Point it at an image the shell pipeline already built:
 
 ```sh
 export VMAVS_HOME="$HOME/.local/share/mavericks-qemu-guest"
@@ -78,9 +81,9 @@ MEASURED on this project's own KVM host, 2026-09-25: both a modern image
 and one running Apple's legacy OpenSSH 6.2 boot and answer SSH this way --
 see NOTES.md, "P8 -- the Go vmavs boots a built image and answers SSH".
 
-Everything else -- `fetch`, `media`, `install`, `image` and the whole
-build pipeline -- is still `bin/vmavs`, unchanged, and stays the shipped
-path until phase 6 of the Go design
+Everything else -- `media`, `install`, `image` and the whole build
+pipeline -- is still `bin/vmavs`, unchanged, and stays the shipped path
+until phase 6 of the Go design
 (`docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md#9-phases`), when
 the shell tree is re-measured against the Go one and retired.
 

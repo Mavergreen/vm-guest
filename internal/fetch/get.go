@@ -155,9 +155,12 @@ func (g *Getter) Get(ctx context.Context, it Item) (string, error) {
 	return dest, nil
 }
 
-// stallDuration is StallTimeout, defaulted: 0 means 2 minutes.
+// stallDuration is StallTimeout, defaulted: 0 or negative means 2
+// minutes. A negative value is never meaningful (time.NewTimer treats it
+// as "fire immediately", which would abort every attempt as instantly
+// stalled), so it gets the same default as unset.
 func (g *Getter) stallDuration() time.Duration {
-	if g.StallTimeout == 0 {
+	if g.StallTimeout <= 0 {
 		return 2 * time.Minute
 	}
 	return g.StallTimeout

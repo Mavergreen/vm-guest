@@ -49,7 +49,7 @@ app:
 
 ```
 vmavs doctor                          can this host do it, per subcommand
-vmavs fetch    [esd|openssh|updates]  fetch pinned inputs (default: all of them)
+vmavs fetch    [esd|openssh|updates] [--updates …] [--probe]   fetch pinned inputs (default: all of them)
 vmavs firmware                        OpenCore + OVMF + the EFI image, from pinned source
 vmavs media                           installer media
 vmavs install                         target disk + unattended install

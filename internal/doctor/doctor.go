@@ -91,6 +91,12 @@ func cpuinfo(s string) (vendor, flags string) {
 }
 
 func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
+	// fetch needs no external tool: the Go binary does its own downloads
+	// and verification, so it is always READY. Its only real dependency
+	// -- the network, unless the shell tree's own downloads can be
+	// adopted instead -- is not something doctor can check in advance.
+	fetch := Readiness{Subcommand: "fetch",
+		Notes: []string{"needs the network, unless the shell tree's downloads can be adopted"}}
 	run := Readiness{Subcommand: "run"}
 	for _, t := range []string{qemu, "qemu-img"} {
 		if _, err := h.LookPath(t); err != nil {
@@ -109,7 +115,7 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 	if _, err := h.LookPath("packer"); err != nil {
 		emit.Notes = append(emit.Notes, "--check needs packer on PATH")
 	}
-	return []Readiness{run, {Subcommand: "ssh"}, emit}
+	return []Readiness{fetch, run, {Subcommand: "ssh"}, emit}
 }
 
 func Verdict(host []Row, subs []Readiness) (bool, string) {

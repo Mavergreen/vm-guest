@@ -378,6 +378,35 @@ func TestAStalledDownloadIsAbortedAndRetried(t *testing.T) {
 	}
 }
 
+// TestNegativeStallTimeoutIsTreatedAsDefault: time.NewTimer treats a
+// negative duration as "fire immediately", so a negative StallTimeout
+// would otherwise abort every attempt as instantly stalled. stallDuration
+// must default it exactly like 0.
+func TestNegativeStallTimeoutIsTreatedAsDefault(t *testing.T) {
+	g := &Getter{StallTimeout: -1}
+	if got := g.stallDuration(); got != 2*time.Minute {
+		t.Fatalf("stallDuration() = %v, want the 2-minute default", got)
+	}
+}
+
+// TestANegativeStallTimeoutDoesNotAbortAnOrdinaryDownload: the behavioural
+// version of the above -- a real (if slow-ish) download must still
+// succeed on the first attempt, not be aborted and retried as if it had
+// stalled.
+func TestANegativeStallTimeoutDoesNotAbortAnOrdinaryDownload(t *testing.T) {
+	body := []byte("ok, no stall here")
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&n, 1)
+		w.Write(body)
+	}))
+	defer srv.Close()
+	g := &Getter{Paths: config.Paths{Home: t.TempDir()}, Backoff: time.Millisecond, StallTimeout: -1, Log: func(string, ...any) {}}
+	if _, err := g.Get(context.Background(), Item{Name: "t", URL: srv.URL + "/t", SHA256: sum(body)}); err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+}
+
 // TestStaleTempsAreRemovedBeforeADownloadFreshOnesAreLeftAlone: a temp
 // file or adopt directory left behind by a killed process (SIGKILL, OOM,
 // power loss) is stale once it is older than the cleanup threshold and

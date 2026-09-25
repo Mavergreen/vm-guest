@@ -99,7 +99,7 @@ func TestRunNeedsAnImageFirmwareAndQEMU(t *testing.T) {
 	}
 	subs = Subcommands(linux(intel, "Y", true, "qemu-system-x86_64", "qemu-img"), p, "qemu-system-x86_64")
 	ok, line := Verdict(HostRows(linux(intel, "Y", true)), subs)
-	if !ok || !strings.Contains(line, "ready: run") {
+	if !ok || !strings.Contains(line, "ready: fetch run") {
 		t.Fatalf("ok=%v %s", ok, line)
 	}
 }
@@ -120,6 +120,26 @@ func TestRunReadinessAsksTheHostWhetherFirmwareExists(t *testing.T) {
 		if s.Subcommand == "run" && !s.Ready() {
 			t.Fatalf("run missing %v, though Host.Exists says the firmware is there", s.Missing)
 		}
+	}
+}
+
+// TestFetchIsAlwaysReady: the Go binary does its own downloads and
+// verification, so fetch needs no external tool -- unlike run, ssh or
+// emit, it is READY even on a bare host with nothing built yet.
+func TestFetchIsAlwaysReady(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	subs := Subcommands(linux("vendor_id\t: AuthenticAMD\nflags\t\t: fpu svm\n", "N", false), p, "qemu-system-x86_64")
+	var fetch Readiness
+	for _, s := range subs {
+		if s.Subcommand == "fetch" {
+			fetch = s
+		}
+	}
+	if !fetch.Ready() {
+		t.Fatalf("fetch missing %v, want it always READY", fetch.Missing)
+	}
+	if len(fetch.Notes) == 0 || !strings.Contains(fetch.Notes[0], "network") {
+		t.Fatalf("fetch.Notes = %v, want a note about the network", fetch.Notes)
 	}
 }
 
