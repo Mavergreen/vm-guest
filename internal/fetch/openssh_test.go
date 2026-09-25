@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -45,7 +47,7 @@ func TestOpenSSHFetchesByTheNamesSUMSGivesBaseFirst(t *testing.T) {
 		"OpenSSH-10.5p1-mavericks.2-System-Replace.pkg": xar("replace"),
 	}
 	srv := release(t, "10.5p1-mavericks.2", pkgs, nil)
-	got, err := getter(t).OpenSSH(context.Background(), srv.URL, "10.5p1-mavericks.2", "")
+	got, err := getter(t).OpenSSH(context.Background(), srv.URL, "10.5p1-mavericks.2", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +61,7 @@ func TestARenamedAssetPrefixDoesNotBreakTheFetch(t *testing.T) {
 	// because a name was constructed from a prefix.
 	pkgs := map[string][]byte{"ssh10-a.pkg": xar("b"), "ssh10-a-system-replace.pkg": xar("r")}
 	srv := release(t, "t", pkgs, nil)
-	if _, err := getter(t).OpenSSH(context.Background(), srv.URL, "t", ""); err != nil {
+	if _, err := getter(t).OpenSSH(context.Background(), srv.URL, "t", nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -77,7 +79,7 @@ func TestOpenSSHRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		srv := release(t, "t", c.pkgs, c.over)
-		_, err := getter(t).OpenSSH(context.Background(), srv.URL, "t", "")
+		_, err := getter(t).OpenSSH(context.Background(), srv.URL, "t", nil)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v", name, err)
 		}
@@ -86,7 +88,7 @@ func TestOpenSSHRefusals(t *testing.T) {
 
 func TestAMissingReleaseNamesTheTag(t *testing.T) {
 	srv := release(t, "real", nil, nil)
-	_, err := getter(t).OpenSSH(context.Background(), srv.URL, "9.9p9-mavericks.9", "")
+	_, err := getter(t).OpenSSH(context.Background(), srv.URL, "9.9p9-mavericks.9", nil)
 	if err == nil || !strings.Contains(err.Error(), "9.9p9-mavericks.9") {
 		t.Fatalf("err = %v", err)
 	}
@@ -104,7 +106,7 @@ func TestOpenSSHRejectsACaptivePortalSUMSThenSucceedsAgainstARealServer(t *testi
 	defer portal.Close()
 	g := getter(t)
 
-	_, err := g.OpenSSH(context.Background(), portal.URL, "t", "")
+	_, err := g.OpenSSH(context.Background(), portal.URL, "t", nil)
 	if err == nil {
 		t.Fatal("a captive-portal response must be refused")
 	}
@@ -118,7 +120,7 @@ func TestOpenSSHRejectsACaptivePortalSUMSThenSucceedsAgainstARealServer(t *testi
 
 	pkgs := map[string][]byte{"a.pkg": xar("b"), "a-System-Replace.pkg": xar("r")}
 	real := release(t, "t", pkgs, nil)
-	got, err := g.OpenSSH(context.Background(), real.URL, "t", "")
+	got, err := g.OpenSSH(context.Background(), real.URL, "t", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +144,7 @@ func TestOpenSSHRefusesAnOversizedSUMSResponse(t *testing.T) {
 		w.Write([]byte(body.String()))
 	}))
 	defer srv.Close()
-	_, err := getter(t).OpenSSH(context.Background(), srv.URL, "t", "")
+	_, err := getter(t).OpenSSH(context.Background(), srv.URL, "t", nil)
 	if err == nil || !strings.Contains(err.Error(), srv.URL) || !strings.Contains(err.Error(), "refusing to buffer") {
 		t.Fatalf("err = %v, want a refusal naming the URL, not a checksum mismatch from a truncated-but-plausible response", err)
 	}
@@ -157,6 +159,61 @@ func TestParseOpenSSHSumsRefusesAPathInAPackageName(t *testing.T) {
 	_, _, _, err := parseOpenSSHSums([]byte(bad))
 	if err == nil || !strings.Contains(err.Error(), "../../evil.pkg") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestOpenSSHAdoptsFromTheSecondDirWhenTheFirstIsPartial reproduces the
+// review's finding: OpenSSH used to take a single adoptDir, and the CLI
+// picked one directory by mere existence, so a partial copy in that one
+// (present but wrong, or simply incomplete) shadowed a perfectly good
+// copy elsewhere and forced a fetch that, offline, would just fail. Every
+// directory in adoptDirs must be tried, in order, like InstallESD's own
+// adopt list -- with no directory here having any usable content, only
+// the network could satisfy this, which the unreachable server proves is
+// never contacted.
+func TestOpenSSHAdoptsFromTheSecondDirWhenTheFirstIsPartial(t *testing.T) {
+	tag := "t"
+	baseName, replaceName := "a.pkg", "a-System-Replace.pkg"
+	baseBody, replaceBody := xar("base"), xar("replace")
+
+	// partialDir: base.pkg is there but WRONG, and replace.pkg and
+	// SHA256SUMS are simply missing -- an incomplete/corrupted copy.
+	partialDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(partialDir, baseName), []byte("wrong bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// goodDir: everything, correct.
+	goodDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(goodDir, baseName), baseBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(goodDir, replaceName), replaceBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var sums strings.Builder
+	fmt.Fprintf(&sums, "%s  %s\n", sum(baseBody), baseName)
+	fmt.Fprintf(&sums, "%s  %s\n", sum(replaceBody), replaceName)
+	if err := os.WriteFile(filepath.Join(goodDir, "SHA256SUMS"), []byte(sums.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var contacted atomic.Bool
+	unreachable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contacted.Store(true)
+		w.WriteHeader(500)
+	}))
+	defer unreachable.Close()
+
+	got, err := getter(t).OpenSSH(context.Background(), unreachable.URL, tag, []string{partialDir, goodDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contacted.Load() {
+		t.Fatal("the network must not be contacted when the second directory has a good copy")
+	}
+	if !strings.HasSuffix(got.Base, baseName) || !strings.HasSuffix(got.Replace, replaceName) {
+		t.Fatalf("%+v", got)
 	}
 }
 

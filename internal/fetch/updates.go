@@ -44,7 +44,11 @@ func StagedName(n int, path string) string {
 
 // Updates fetches one selection, verified against the registry, in the
 // order the guest must install them. "none" fetches nothing.
-func (g *Getter) Updates(ctx context.Context, reg *pins.Registry, selection, adoptDir string) ([]Update, error) {
+//
+// adoptDirs is tried in order for every update, like InstallESD's and
+// OpenSSH's adoption lists: a partial or stale copy in one directory must
+// not shadow a good one in another.
+func (g *Getter) Updates(ctx context.Context, reg *pins.Registry, selection string, adoptDirs []string) ([]Update, error) {
 	names, err := UpdateNames(selection)
 	if err != nil {
 		return nil, err
@@ -56,9 +60,12 @@ func (g *Getter) Updates(ctx context.Context, reg *pins.Registry, selection, ado
 			return nil, err
 		}
 		it := Item{Name: n, URL: src.URL, SHA256: src.SHA256}
-		if adoptDir != "" {
-			if fn, err := Filename(src.URL); err == nil {
-				it.Adopt = []string{filepath.Join(adoptDir, fn)}
+		if fn, err := Filename(src.URL); err == nil {
+			for _, dir := range adoptDirs {
+				if dir == "" {
+					continue
+				}
+				it.Adopt = append(it.Adopt, filepath.Join(dir, fn))
 			}
 		}
 		path, err := g.Get(ctx, it)

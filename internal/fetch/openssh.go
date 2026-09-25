@@ -44,10 +44,17 @@ func OpenSSHTag() (string, error) {
 // release's own SHA256SUMS. Nothing constructs an asset name from a
 // prefix: the names are whatever SUMS says, so a renamed prefix cannot
 // 404 across a pin bump.
-func (g *Getter) OpenSSH(ctx context.Context, releases, tag, adoptDir string) (OpenSSHPkgs, error) {
+//
+// adoptDirs is tried in order, like InstallESD's adopt list: a partial or
+// stale copy in the first directory must not shadow a good one in the
+// second -- Get's own adoption loop already tries every candidate and
+// verifies each one, so handing it every directory (rather than picking
+// one here by existence alone) is what makes that guarantee reach this
+// far.
+func (g *Getter) OpenSSH(ctx context.Context, releases, tag string, adoptDirs []string) (OpenSSHPkgs, error) {
 	url := releases + "/" + tag
 	sumsPath := g.Paths.OpenSSHSums(tag)
-	sums, err := g.fetchOpenSSHSums(ctx, url, tag, adoptDir, sumsPath)
+	sums, err := g.fetchOpenSSHSums(ctx, url, tag, adoptDirs, sumsPath)
 	if err != nil {
 		return OpenSSHPkgs{}, err
 	}
@@ -61,8 +68,11 @@ func (g *Getter) OpenSSH(ctx context.Context, releases, tag, adoptDir string) (O
 		dst  *string
 	}{{base, &out.Base}, {replace, &out.Replace}} {
 		it := Item{Name: p.name, URL: url + "/" + p.name, SHA256: want[p.name]}
-		if adoptDir != "" {
-			it.Adopt = []string{filepath.Join(adoptDir, p.name)}
+		for _, dir := range adoptDirs {
+			if dir == "" {
+				continue
+			}
+			it.Adopt = append(it.Adopt, filepath.Join(dir, p.name))
 		}
 		path, err := g.Get(ctx, it)
 		if err != nil {
@@ -127,18 +137,20 @@ func parseOpenSSHSums(b []byte) (base, replace string, want map[string]string, e
 }
 
 // fetchOpenSSHSums returns the release's own SHA256SUMS: reused from the
-// cache, or adopted from the shell tree's download, when either already
-// parses to exactly one base and one replacement package; otherwise
-// fetched from the network with the same retry/backoff as a download.
-// Content that does not parse is never persisted -- a cached SUMS that
-// somehow fails to parse is an error naming its path, not a silent
-// re-fetch, because a hand-edited or hand-restored cache file deserves
-// attention, not to be quietly discarded.
+// cache, or adopted from the shell tree's download (trying every dir in
+// adoptDirs in order, like OpenSSH's own package adoption, so a partial
+// copy in one directory cannot shadow a good one in another), when either
+// already parses to exactly one base and one replacement package;
+// otherwise fetched from the network with the same retry/backoff as a
+// download. Content that does not parse is never persisted -- a cached
+// SUMS that somehow fails to parse is an error naming its path, not a
+// silent re-fetch, because a hand-edited or hand-restored cache file
+// deserves attention, not to be quietly discarded.
 //
 // SHA256SUMS itself is not pinned: it is trusted as the release's
 // statement of its own checksums (INHERITED from fetch-openssh.sh), and
 // it comes over TLS from GitHub.
-func (g *Getter) fetchOpenSSHSums(ctx context.Context, url, tag, adoptDir, dest string) ([]byte, error) {
+func (g *Getter) fetchOpenSSHSums(ctx context.Context, url, tag string, adoptDirs []string, dest string) ([]byte, error) {
 	if b, err := os.ReadFile(dest); err == nil {
 		if len(b) > 0 {
 			if _, _, _, perr := parseOpenSSHSums(b); perr != nil {
@@ -150,17 +162,22 @@ func (g *Getter) fetchOpenSSHSums(ctx context.Context, url, tag, adoptDir, dest 
 		return nil, fmt.Errorf("%s: %w", dest, err)
 	}
 
-	if adoptDir != "" {
-		old := filepath.Join(adoptDir, "SHA256SUMS")
-		if b, err := os.ReadFile(old); err == nil && len(b) > 0 {
-			if _, _, _, perr := parseOpenSSHSums(b); perr == nil {
-				if err := writeAtomic(dest, b); err != nil {
-					return nil, err
-				}
-				return b, nil
-			} else {
-				g.logf("not adopting %s: %v", old, perr)
+	for _, dir := range adoptDirs {
+		if dir == "" {
+			continue
+		}
+		old := filepath.Join(dir, "SHA256SUMS")
+		b, err := os.ReadFile(old)
+		if err != nil || len(b) == 0 {
+			continue
+		}
+		if _, _, _, perr := parseOpenSSHSums(b); perr == nil {
+			if err := writeAtomic(dest, b); err != nil {
+				return nil, err
 			}
+			return b, nil
+		} else {
+			g.logf("not adopting %s: %v", old, perr)
 		}
 	}
 

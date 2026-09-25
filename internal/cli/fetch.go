@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -50,16 +51,9 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	updates := fs.String("updates", config.DefaultUpdates,
 		fmt.Sprintf("which post-10.9.5 updates to fetch (%s)", strings.Join(config.UpdateChoices, "|")))
 	probe := fs.Bool("probe", false, "esd only: print the asset URL and size from the osrecovery handshake; download nothing")
-	// flag.FlagSet stops parsing at the first non-flag argument, but the
-	// usage this command was given puts targets before flags (vmavs fetch
-	// updates --updates none). Splitting them out first lets both orders
-	// work.
-	flagArgs, targetArgs := splitFetchArgs(args)
-	if err := parse(fs, e, fetchHelp, flagArgs); err != nil {
+	targetArgs, err := parseFetchArgs(fs, e, fetchHelp, args)
+	if err != nil {
 		return err
-	}
-	if fs.NArg() != 0 {
-		return usagef("unexpected argument %q", fs.Arg(0))
 	}
 	targets, err := fetchTargets(targetArgs)
 	if err != nil {
@@ -108,12 +102,8 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	for _, t := range targets {
 		switch t {
 		case "esd":
-			adopt := []string{filepath.Join(p.Home, "media", "InstallESD.dmg")}
-			if legacyBase != "" {
-				adopt = append(adopt, filepath.Join(legacyBase, "media", "InstallESD.dmg"))
-			}
 			rc := fetch.Recovery{Base: ep.Recovery, Client: e.HTTP}
-			path, err := g.InstallESD(ctx, reg, rc, adopt)
+			path, err := g.InstallESD(ctx, reg, rc, adoptCandidates(p.Home, legacyBase, "media", "InstallESD.dmg"))
 			if err != nil {
 				return err
 			}
@@ -124,12 +114,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 			if err != nil {
 				return err
 			}
-			home := filepath.Join(p.Home, "openssh", tag)
-			dir := home
-			if legacyBase != "" {
-				dir = adoptDir(home, filepath.Join(legacyBase, "openssh", tag))
-			}
-			pkgs, err := g.OpenSSH(ctx, ep.OpenSSHReleases, tag, dir)
+			pkgs, err := g.OpenSSH(ctx, ep.OpenSSHReleases, tag, adoptCandidates(p.Home, legacyBase, "openssh", tag))
 			if err != nil {
 				return err
 			}
@@ -137,12 +122,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 			fmt.Fprintln(e.Stdout, pkgs.Replace)
 
 		case "updates":
-			home := filepath.Join(p.Home, "updates")
-			dir := home
-			if legacyBase != "" {
-				dir = adoptDir(home, filepath.Join(legacyBase, "updates"))
-			}
-			ups, err := g.Updates(ctx, reg, *updates, dir)
+			ups, err := g.Updates(ctx, reg, *updates, adoptCandidates(p.Home, legacyBase, "updates"))
 			if err != nil {
 				return err
 			}
@@ -154,40 +134,56 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	return nil
 }
 
-// splitFetchArgs separates args into flag tokens (with any value token
-// that belongs to them) and positional target names, so flags and
-// targets can appear in either order -- flag.FlagSet.Parse itself stops
-// at the first non-flag argument and never looks past it.
-func splitFetchArgs(args []string) (flagArgs, targets []string) {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "-" || !strings.HasPrefix(a, "-") {
-			targets = append(targets, a)
-			continue
-		}
-		flagArgs = append(flagArgs, a)
-		if fetchFlagTakesValue(a) && i+1 < len(args) {
-			i++
-			flagArgs = append(flagArgs, args[i])
-		}
+// adoptCandidates is VMAVS_HOME's own copy of the shell tree's file or
+// directory at elem..., and, when legacyBase is set (the shell tree's
+// own legacy home, when it differs from VMAVS_HOME), that copy too --
+// both tried in order by Getter's own adoption loop, which verifies each
+// candidate itself. Listing both here, rather than picking one by mere
+// existence, is what stops a partial or stale copy in one directory from
+// shadowing a good copy in the other.
+func adoptCandidates(home, legacyBase string, elem ...string) []string {
+	dirs := []string{filepath.Join(append([]string{home}, elem...)...)}
+	if legacyBase != "" {
+		dirs = append(dirs, filepath.Join(append([]string{legacyBase}, elem...)...))
 	}
-	return flagArgs, targets
+	return dirs
 }
 
-// fetchFlagTakesValue reports whether a flag token (as typed, dashes and
-// all) consumes the next argument as its value: --updates X does,
-// --updates=X carries its own, and every other fetch flag is boolean.
-func fetchFlagTakesValue(token string) bool {
-	if strings.Contains(token, "=") {
-		return false
+// parseFetchArgs lets targets and flags appear in either order (the usage
+// this command was given puts a target first: "vmavs fetch updates
+// --updates none"), which flag.FlagSet.Parse does not support on its own
+// -- it stops permanently at the first non-flag argument. Instead this
+// parses repeatedly: fs.Parse consumes a run of flags (deciding for
+// itself, the standard way, which take a value -- including "--updates
+// X", "--updates=X" and "-updates X"), then the first remaining argument
+// is taken as one target and parsing resumes on the rest. "--" is
+// handled the standard way for free: fs.Parse consumes it and stops, so
+// everything after becomes plain targets, never looked at as flags again
+// even if one of them starts with "-".
+func parseFetchArgs(fs *flag.FlagSet, e *Env, help string, args []string) ([]string, error) {
+	var targets []string
+	remaining := args
+	for {
+		if err := parse(fs, e, help, remaining); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return targets, nil
+		}
+		targets = append(targets, fs.Arg(0))
+		remaining = fs.Args()[1:]
 	}
-	return strings.TrimLeft(token, "-") == "updates"
 }
 
 // fetchTargets validates args against fetchOrder and returns the
 // requested targets in canonical order (esd, openssh, updates),
-// regardless of the order or repetition they were named in. No args
-// means all three.
+// regardless of the order they were named in. No args means all three.
+//
+// A repeated target (e.g. "esd esd") is deduplicated, not an error:
+// naming the same target twice is redundant, not contradictory (unlike,
+// say, two different --updates values would be), and each target already
+// runs at most once regardless of how many times it appears -- there is
+// nothing here worth stopping the user over.
 func fetchTargets(args []string) ([]string, error) {
 	if len(args) == 0 {
 		return fetchOrder, nil
@@ -214,16 +210,4 @@ func endpoints(e *Env) Endpoints {
 		return *e.Endpoints
 	}
 	return Endpoints{Recovery: fetch.DefaultRecovery, OpenSSHReleases: fetch.DefaultOpenSSHReleases}
-}
-
-// adoptDir picks between VMAVS_HOME's own copy of the shell tree's layout
-// (home) and the shell tree's own legacy home's copy (legacy), preferring
-// home -- VMAVS_HOME may itself be the shell tree's home -- unless only
-// legacy exists. Neither existing is not an error: OpenSSH and Updates
-// simply find nothing to adopt there.
-func adoptDir(home, legacy string) string {
-	if !config.Exists(home) && config.Exists(legacy) {
-		return legacy
-	}
-	return home
 }

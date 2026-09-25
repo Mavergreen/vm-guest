@@ -6,13 +6,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/fetch"
 	"github.com/Mavergreen/vm-guest/internal/pins"
 )
@@ -198,6 +201,101 @@ func TestFetchESDProbePrintsURLAndSizeAndDownloadsNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "cache")); !os.IsNotExist(err) {
 		t.Fatal("--probe must create no cache file")
+	}
+}
+
+// TestFetchArgOrderingsParseCorrectly is a table-driven test over the
+// orderings the fix-round-1 review asked for: targets and flags mixed in
+// either order, --updates in its "X", "=X" and single-dash forms, and the
+// standard "--" terminator. It calls parseFetchArgs/fetchTargets
+// directly (rather than a full Run(), which would need a working network
+// fake for every combination) because what is under test here is
+// argument parsing, not fetching.
+func TestFetchArgOrderingsParseCorrectly(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		wantTargets []string // nil means fetchOrder (all three, no target named)
+		wantUpdates string
+		wantProbe   bool
+	}{
+		{"target, flag+value, target", []string{"esd", "--updates", "none", "openssh"}, []string{"esd", "openssh"}, "none", false},
+		{"--updates=value form, then target", []string{"--updates=all", "esd"}, []string{"esd"}, "all", false},
+		{"single-dash long flag, no target", []string{"-updates", "all"}, nil, "all", false},
+		{"--probe before its target", []string{"--probe", "esd"}, []string{"esd"}, config.DefaultUpdates, true},
+		{"-- terminates flag parsing; both sides are targets", []string{"esd", "--", "openssh"}, []string{"esd", "openssh"}, config.DefaultUpdates, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fs := newFlags("fetch")
+			updates := fs.String("updates", config.DefaultUpdates, "")
+			probe := fs.Bool("probe", false, "")
+			e := &Env{Stdout: io.Discard, Stderr: io.Discard}
+			targetArgs, err := parseFetchArgs(fs, e, fetchHelp, c.args)
+			if err != nil {
+				t.Fatalf("parseFetchArgs(%v): %v", c.args, err)
+			}
+			targets, err := fetchTargets(targetArgs)
+			if err != nil {
+				t.Fatalf("fetchTargets(%v): %v", targetArgs, err)
+			}
+			wantTargets := c.wantTargets
+			if wantTargets == nil {
+				wantTargets = fetchOrder
+			}
+			if !slices.Equal(targets, wantTargets) {
+				t.Errorf("targets = %v, want %v", targets, wantTargets)
+			}
+			if *updates != c.wantUpdates {
+				t.Errorf("updates = %q, want %q", *updates, c.wantUpdates)
+			}
+			if *probe != c.wantProbe {
+				t.Errorf("probe = %v, want %v", *probe, c.wantProbe)
+			}
+		})
+	}
+}
+
+// TestFetchArgErrorsExitTwo covers the two ways fetch's arguments can be
+// wrong: an unknown flag (the flag package's own error, wrapped as a
+// UsageError) and an unknown target (fetchTargets' own check, naming all
+// three choices).
+func TestFetchArgErrorsExitTwo(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want []string // substrings the message must contain
+	}{
+		{"unknown flag", []string{"fetch", "--bogus-flag"}, []string{"bogus-flag"}},
+		{"unknown target", []string{"fetch", "bogus"}, []string{"esd", "openssh", "updates"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()}
+			e, _, errb := fetchEnv(env)
+			code := Run(context.Background(), c.args, e)
+			if code != 2 {
+				t.Fatalf("code=%d stderr=%s", code, errb.String())
+			}
+			for _, want := range c.want {
+				if !strings.Contains(errb.String(), want) {
+					t.Errorf("stderr=%q lacks %q", errb.String(), want)
+				}
+			}
+		})
+	}
+}
+
+// TestFetchDuplicateTargetsAreDeduped: naming the same target twice is
+// redundant, not contradictory, so fetchTargets dedupes rather than
+// erroring (the comment on fetchTargets says why).
+func TestFetchDuplicateTargetsAreDeduped(t *testing.T) {
+	got, err := fetchTargets([]string{"esd", "openssh", "esd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"esd", "openssh"}) {
+		t.Fatalf("got %v, want esd and openssh each once, in canonical order", got)
 	}
 }
 
