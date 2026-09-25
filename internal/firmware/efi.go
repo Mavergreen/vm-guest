@@ -21,13 +21,16 @@ import (
 // configDir is where a derived config.plist goes: build/config.
 func (b *Builder) configDir() string { return filepath.Join(b.Paths.Build(), "config") }
 
-// verifySums checks every file dir/SHA256SUMS lists, as `sha256sum -c`.
-func verifySums(dir string) error {
+// verifySums checks every file dir/SHA256SUMS lists, as `sha256sum -c`,
+// and that it lists every name in required: a file the list leaves out
+// is a file nothing checked.
+func verifySums(dir string, required []string) error {
 	sums := filepath.Join(dir, "SHA256SUMS")
 	data, err := os.ReadFile(sums)
 	if err != nil {
 		return err
 	}
+	listed := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
 		want, name, ok := strings.Cut(line, "  ")
 		if !ok || len(want) != 64 || name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
@@ -39,6 +42,12 @@ func verifySums(dir string) error {
 		}
 		if got != want {
 			return fmt.Errorf("%s does not match %s -- rebuild", filepath.Join(dir, name), sums)
+		}
+		listed[name] = true
+	}
+	for _, n := range required {
+		if !listed[n] {
+			return fmt.Errorf("%s does not list %s -- rebuild", sums, n)
 		}
 	}
 	return nil
@@ -85,7 +94,7 @@ func (b *Builder) EFIImage(ctx context.Context, model string) (string, error) {
 	if _, err := os.Stat(art); err != nil {
 		return "", fmt.Errorf("no artifacts at %s -- run 'vmavs firmware opencore' first", art)
 	}
-	if err := verifySums(art); err != nil {
+	if err := verifySums(art, ShipNames()); err != nil {
 		return "", err
 	}
 	payload := int64(len(plist))
@@ -108,7 +117,7 @@ func (b *Builder) EFIImage(ctx context.Context, model string) (string, error) {
 	for _, k := range Kexts {
 		bundle := filepath.Join(b.kextsDir(), k.Name+".kext")
 		if err := checkKext(bundle, k.Name); err != nil {
-			return "", fmt.Errorf("%w -- run 'vmavs firmware efi'", err)
+			return "", fmt.Errorf("%w -- remove %s and re-run 'vmavs firmware efi'", err, bundle)
 		}
 		n, err := treeSize(bundle)
 		if err != nil {
@@ -151,9 +160,6 @@ func (b *Builder) EFIImage(ctx context.Context, model string) (string, error) {
 	out := b.Paths.OpenCoreImageOut()
 	sum, err := writeImage(out, fat)
 	if err != nil {
-		return "", err
-	}
-	if err := writeFileAtomic(out+".sha256", []byte(sum+"\n"), 0o644); err != nil {
 		return "", err
 	}
 	b.logf("built %s (sha256 %s)", out, sum)
@@ -229,7 +235,10 @@ func addTree(fat *diskimg.FAT, src, dst string) error {
 	})
 }
 
-// treeSize is the bytes of every regular file under dir.
+// treeSize is the bytes of every regular file under dir. Directories
+// count for nothing, where efi_fits' `du -sb` counts each one's size too
+// (4096 bytes a directory on ext4), so Fits is marginally laxer than
+// build-efi-image.sh: by a few KiB against a margin of the payload again.
 func treeSize(dir string) (int64, error) {
 	var n int64
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -253,9 +262,12 @@ func serial(seed string) uint32 {
 }
 
 // writeImage writes a GPT disk of EFIImageMiB with one EFI System
-// Partition holding fat, to a temp file beside out, then renames it into
-// place: out is never half-written, and a failed build leaves the
-// previous image alone. It returns the image's sha256.
+// Partition holding fat, and its .sha256 sidecar, each to a temp file
+// beside where it goes. Both are written and synced before either is
+// renamed, then the image and the sidecar are renamed in that order: out
+// is never half-written, a failed build leaves the previous image and
+// sidecar alone, and the two disagree only between the two renames. It
+// returns the image's sha256.
 func writeImage(out string, fat *diskimg.FAT) (string, error) {
 	const sectors = uint64(EFIImageMiB) * 1024 * 1024 / diskimg.SectorSize
 	part := diskimg.Partition{Type: diskimg.TypeEFISystem, GUID: diskimg.DerivedGUID("opencore esp"),
@@ -265,7 +277,7 @@ func writeImage(out string, fat *diskimg.FAT) (string, error) {
 		return "", err
 	}
 	var sum string
-	err = writeAtomicFile(out, 0o644, func(f *os.File) error {
+	img, err := stageFile(out, 0o644, func(f *os.File) error {
 		if err := f.Truncate(int64(sectors) * diskimg.SectorSize); err != nil {
 			return err
 		}
@@ -285,5 +297,25 @@ func writeImage(out string, fat *diskimg.FAT) (string, error) {
 		sum = hex.EncodeToString(h.Sum(nil))
 		return nil
 	})
-	return sum, err
+	if err != nil {
+		return "", err
+	}
+	side, err := stageFile(out+".sha256", 0o644, func(f *os.File) error {
+		_, err := io.WriteString(f, sum+"\n")
+		return err
+	})
+	if err != nil {
+		os.Remove(img)
+		return "", err
+	}
+	if err := os.Rename(img, out); err != nil {
+		os.Remove(img)
+		os.Remove(side)
+		return "", err
+	}
+	if err := os.Rename(side, out+".sha256"); err != nil {
+		os.Remove(side)
+		return "", err
+	}
+	return sum, nil
 }

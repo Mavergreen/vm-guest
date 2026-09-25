@@ -274,7 +274,7 @@ func TestEFIImageNamesTheMissingPiece(t *testing.T) {
 	}
 	_, err = g.efiImage("")
 	if err == nil || !strings.Contains(err.Error(), bundle) || !strings.Contains(err.Error(), "Contents/Info.plist") ||
-		!strings.Contains(err.Error(), "vmavs firmware efi") {
+		!strings.Contains(err.Error(), "remove "+bundle+" and re-run 'vmavs firmware efi'") {
 		t.Fatalf("err = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(g.home, "build", "opencore.img")); !errors.Is(err, fs.ErrNotExist) {
@@ -405,5 +405,169 @@ func TestEFIImageMatchesBuildEFIImageSh(t *testing.T) {
 		sp.FirstLBA, sp.LastLBA, sp.Name, gg, sh.fat.G.HiddenSectors, g.fat.G.HiddenSectors, len(g.paths), len(g.files))
 	if b, _ := os.ReadFile(shellImg + ".sha256"); string(b) != sha(t, shellImg)+"\n" {
 		t.Errorf("the shell's sidecar is not bare hex and a newline: %q", b)
+	}
+}
+
+func TestKextsMarkWhatTheyUnpacked(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range Kexts {
+		marker := filepath.Join(f.home, "build", "kexts", "."+k.Name+".kext.sha256")
+		if b, _ := os.ReadFile(marker); string(b) != sha(t, f.in[k.Source])+"\n" {
+			t.Errorf("%s holds %q", marker, b)
+		}
+	}
+}
+
+// liluZip is a Lilu release whose Info.plist says body.
+func liluZip(t *testing.T, body string) string {
+	return makeZip(t, t.TempDir(), "Lilu-RELEASE.zip",
+		entry{name: "Lilu.kext/Contents/Info.plist", body: body},
+		entry{name: "Lilu.kext/Contents/MacOS/Lilu", body: "macho Lilu", mode: 0o755})
+}
+
+// noTemps fails t if anything but the bundles and their markers is in
+// build/kexts.
+func noTemps(t *testing.T, f *fixture) {
+	t.Helper()
+	ents, _ := os.ReadDir(filepath.Join(f.home, "build", "kexts"))
+	for _, e := range ents {
+		switch e.Name() {
+		case "Lilu.kext", "VirtualSMC.kext", ".Lilu.kext.sha256", ".VirtualSMC.kext.sha256":
+		default:
+			t.Errorf("left behind in build/kexts: %s", e.Name())
+		}
+	}
+}
+
+func TestKextsReplaceTheirOwnBundleWhenThePinMoves(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(f.home, "build", "kexts", "Lilu.kext")
+	sentinel := filepath.Join(bundle, "Contents", "sentinel")
+	if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.repin("lilu-release", liluZip(t, "plist Lilu, the next release"))
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist")); string(b) != "plist Lilu, the next release" {
+		t.Errorf("the bundle was not replaced: Info.plist holds %q", b)
+	}
+	if _, err := os.Stat(sentinel); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the old bundle survives: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(f.home, "build", "kexts", ".Lilu.kext.sha256")); string(b) != sha(t, f.in["lilu-release"])+"\n" {
+		t.Errorf("the marker holds %q", b)
+	}
+	noTemps(t, f)
+}
+
+func TestKextsAdoptAnUnmarkedBundleThatMatches(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(f.home, "build", "kexts", ".Lilu.kext.sha256")
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	plist := filepath.Join(f.home, "build", "kexts", "Lilu.kext", "Contents", "Info.plist")
+	before, err := os.Stat(plist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(plist)
+	if err != nil || !os.SameFile(before, after) {
+		t.Errorf("the matching bundle was replaced: %v", err)
+	}
+	if b, _ := os.ReadFile(marker); string(b) != sha(t, f.in["lilu-release"])+"\n" {
+		t.Errorf("the marker holds %q", b)
+	}
+	noTemps(t, f)
+}
+
+func TestKextsNeverRemoveAnUnmarkedBundleThatDiffers(t *testing.T) {
+	f := newFixture(t)
+	bundle := filepath.Join(f.home, "build", "kexts", "Lilu.kext")
+	for _, p := range []string{"Contents/Info.plist", "Contents/MacOS/Lilu"} {
+		if err := os.MkdirAll(filepath.Join(bundle, filepath.Dir(p)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bundle, p), []byte("an older "+p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := f.b.Kexts(context.Background(), f.in)
+	want := bundle + " does not match the pinned lilu-release (" + sha(t, f.in["lilu-release"]) + "); remove it and re-run"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant %s", err, want)
+	}
+	if b, _ := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist")); string(b) != "an older Contents/Info.plist" {
+		t.Errorf("the bundle was touched: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(f.home, "build", "kexts", ".Lilu.kext.sha256")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a marker for a bundle that does not match: %v", err)
+	}
+	noTemps(t, f)
+}
+
+func TestEFIImageLeavesNoTempWhenTheSidecarCannotBeWritten(t *testing.T) {
+	f := newFixture(t)
+	shipped(f)
+	side := filepath.Join(f.home, "build", "opencore.img.sha256")
+	if err := os.MkdirAll(filepath.Join(side, "in-the-way"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.efiImage(""); err == nil {
+		t.Fatal("wrote a sidecar over a directory")
+	}
+	temps, _ := filepath.Glob(filepath.Join(f.home, "build", ".opencore.img*"))
+	if len(temps) != 0 {
+		t.Errorf("temp files left behind: %v", temps)
+	}
+}
+
+func TestEFIImageRefusesSHA256SUMSMissingAnArtifact(t *testing.T) {
+	f := newFixture(t)
+	shipped(f)
+	art := filepath.Join(f.home, "build", "artifacts")
+	var names []string
+	for _, n := range ShipNames() {
+		if n != "OpenRuntime.efi" {
+			names = append(names, n)
+		}
+	}
+	if err := writeSums(art, names); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.efiImage("")
+	if err == nil || !strings.Contains(err.Error(), "OpenRuntime.efi") || !strings.Contains(err.Error(), "SHA256SUMS") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEFIImageValidatesWithAnOcvalidateOnPATH(t *testing.T) {
+	f := newFixture(t)
+	shipped(f)
+	f.fake.Paths["ocvalidate"] = "/usr/local/bin/ocvalidate"
+	if _, err := f.efiImage("MacPro5,1"); err != nil {
+		t.Fatal(err)
+	}
+	derived := filepath.Join(f.home, "build", "config", "config-MacPro5,1.plist")
+	cs := f.calls("/usr/local/bin/ocvalidate")
+	if len(cs) != 1 || !reflect.DeepEqual(cs[0].Args, []string{derived}) {
+		t.Errorf("ocvalidate calls: %v", cs)
+	}
+	if !strings.Contains(f.log.String(), "ocvalidate accepts the derived config") {
+		t.Errorf("log:\n%s", f.log.String())
 	}
 }

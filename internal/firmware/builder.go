@@ -233,13 +233,28 @@ func writeAtomic(path string, perm os.FileMode, fill func(io.Writer) error) erro
 // closes and renames it to path; on any error the temp file is removed
 // and path is untouched. fill gets the file itself, for a caller that
 // needs to Truncate it, write at offsets and read it back.
-func writeAtomicFile(path string, perm os.FileMode, fill func(*os.File) error) (err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+func writeAtomicFile(path string, perm os.FileMode, fill func(*os.File) error) error {
+	tmp, err := stageFile(path, perm, fill)
+	if err != nil {
 		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// stageFile is writeAtomicFile up to the rename: the name of a temp file
+// beside path, filled, made perm, synced and closed, for a caller that
+// renames it into place itself (or removes it). On error nothing is left.
+func stageFile(path string, perm os.FileMode, fill func(*os.File) error) (name string, err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() {
 		if err != nil {
@@ -248,18 +263,18 @@ func writeAtomicFile(path string, perm os.FileMode, fill func(*os.File) error) (
 		}
 	}()
 	if err = fill(tmp); err != nil {
-		return err
+		return "", err
 	}
 	if err = tmp.Chmod(perm); err != nil {
-		return err
+		return "", err
 	}
 	if err = tmp.Sync(); err != nil {
-		return err
+		return "", err
 	}
 	if err = tmp.Close(); err != nil {
-		return err
+		return "", err
 	}
-	return os.Rename(tmp.Name(), path)
+	return tmp.Name(), nil
 }
 
 // writeSums writes dir/SHA256SUMS for names, in order, as sha256sum
