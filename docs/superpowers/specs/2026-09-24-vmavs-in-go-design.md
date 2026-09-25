@@ -185,13 +185,17 @@ These are the findings `packer validate` confirmed on 2026-09-24.
 
 1. Choose the image: `NAME`, or the image whose manifest was written most
    recently.
-2. Create `run/<name>-<pid>/`, holding a qcow2 overlay backed by the image
-   and this VM's own copy of the NVRAM template.
+2. Create `run/<name>-<random>/` (`os.MkdirTemp`, mode 0700 -- not
+   `<name>-<pid>`: a recycled pid would otherwise reuse, and silently
+   truncate, another run's directory), holding a qcow2 overlay backed by
+   the image and this VM's own copy of the NVRAM template.
 3. Boot `machine.ForRun`. QEMU runs in the foreground, so Ctrl-C stops the
    VM.
 4. Remove the run directory on exit, unless `--keep`.
 
-SSH forwards on the port `vmavs ssh` defaults to (2222).
+SSH forwards on `127.0.0.1` only, on the port `vmavs ssh` defaults to
+(2222): unbound, the guest's sshd (Apple's OpenSSH 6.2, with no other
+access control) would be reachable from the network.
 
 **`vmavs ssh`** uses `x/crypto/ssh`, not the `ssh` binary:
 
@@ -231,8 +235,28 @@ fallback is deleted with the shell tree.
 
 **Locks.** A build takes a lock on its work directory. The lock is a
 directory holding a pid, which is portable to 10.9, and a stale holder's
-lock can be taken over, as the media lock does today. `run` needs no
-lock.
+lock can be taken over, as the media lock does today.
+
+A run has its own kind of lock: `run/<name>-<random>/state` (a
+`key<TAB>value` file naming the image, the forwarded port, the pid, and
+whether `--keep` was given) is held with an exclusive, non-blocking
+`flock` for as long as the run is alive. `vmavs ssh` and a reaper (below)
+tell a live run from a dead one by whether that lock is still held, not
+by whether its recorded pid is running: a pid can be recycled, and
+checking for one (`kill(pid, 0)`) cannot tell "no such process" apart
+from "a different process now has it". The state file is created, locked,
+and only then written to (in that order), so a concurrent reader never
+sees a state file that exists but is not yet lockable. Once QEMU is
+running, the run passes it the locked file as an inherited descriptor, so
+the lock survives `vmavs run` itself being killed outright (a `SIGKILL`
+it has no chance to release the lock for) for as long as QEMU keeps
+running.
+
+There is no separate reaper process. `vmavs run` and `vmavs ssh` each
+remove every dead run directory that is not `--keep` (and any run
+directory old enough to have no state file at all, meaning it crashed
+before ever writing one) before doing anything else, and log what they
+removed.
 
 ## 6. How the pipeline runs
 
