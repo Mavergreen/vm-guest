@@ -114,6 +114,15 @@ func status(err error) (int, error) {
 	if errors.As(err, &xe) {
 		return xe.ExitStatus(), nil
 	}
+	var missing *ssh.ExitMissingError
+	if errors.As(err, &missing) {
+		// The server closed the session without ever sending an
+		// exit-status or exit-signal message -- RFC 4254 §6.10 allows
+		// this, and it is what an interactive shell's session commonly
+		// looks like when it ends by the connection simply dropping.
+		// OpenSSH's own ssh(1) exits 255 in that case, so vmavs does too.
+		return 255, nil
+	}
 	if err != nil {
 		return 0, err
 	}
