@@ -133,6 +133,17 @@ inside the guest or the microVM. They stay files in the repository, so
 they are reviewed and diffed as files, and they are compiled into the
 binary. Renovate's managers and CI's pin checks point at their new paths.
 
+Until phase 6, `embed.go` embeds these files from their current paths
+(`assets/pins/sources.tsv`, `components/openssh/version`,
+`boot/config/config.plist`, `media/apple-packages.sha256`,
+`image/payload/firstboot.sh`, `image/payload/postinstall`,
+`image/payload/com.mqg.firstboot.plist`), not from `assets/` as shown
+above. The move to `assets/` happens together with the shell tree's
+removal, because the shell tree, Renovate's `managerFilePatterns`, CI's
+`verify-changed-sources.sh` and the path-keyed ingredient fingerprints all
+read them at their current paths today; moving them sooner would change
+every stage digest of every built image.
+
 **Dependencies:**
 
 - the standard library;
