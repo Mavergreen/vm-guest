@@ -45,11 +45,7 @@ func (b *Builder) OpenCore(ctx context.Context, in Inputs) ([]string, error) {
 		}
 		files[n] = p
 	}
-	// git: efibuild.sh insists on it, and patches are applied with it.
-	// zip: efibuild.sh will not start without it. nasm and iasl: it
-	// needs both, and where it cannot find them (macOS) it offers to
-	// fetch and install them with curl and sudo.
-	if err := b.requireTools("bash", "git", "zip", "make", "python3", "nasm", "iasl", b.Toolchain.GCC()); err != nil {
+	if err := b.requireTools(openCoreTools(b.Toolchain.GCC())...); err != nil {
 		return nil, err
 	}
 	if err := b.requireHeaders(ctx); err != nil {
@@ -282,6 +278,11 @@ var headerPackages = map[string]string{
 	"uuid/uuid.h": "the uuid development package: uuid-dev on Debian, util-linux-libs on Arch",
 }
 
+// HeaderPackage is what to install for header, one of Headers: the words
+// both the build and vmavs doctor use when it is missing. "" for a
+// header this package does not name.
+func HeaderPackage(header string) string { return headerPackages[header] }
+
 // HeaderCompiles asks gcc whether it can find and compile against
 // header: "gcc -fsyntax-only -x c -", fed a one-line source that only
 // #includes it, run through r with env (nil means the child gets r's own
@@ -311,7 +312,7 @@ func (b *Builder) requireHeaders(ctx context.Context) error {
 			return ctx.Err()
 		}
 		m := h
-		if p := headerPackages[h]; p != "" {
+		if p := HeaderPackage(h); p != "" {
 			m += " (" + p + ")"
 		}
 		missing = append(missing, m)

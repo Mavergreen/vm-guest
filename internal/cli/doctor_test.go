@@ -12,6 +12,7 @@ import (
 
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/doctor"
+	"github.com/Mavergreen/vm-guest/internal/firmware"
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
 
@@ -129,14 +130,14 @@ func TestDoctorRealHostWiresGCCBinAndTheHeaderProbe(t *testing.T) {
 	var out bytes.Buffer
 	e.Stdout = &out
 	Run(context.Background(), []string{"doctor"}, e)
-	if !strings.Contains(out.String(), "uuid/uuid.h (a C header: the uuid development package)") {
+	if !strings.Contains(out.String(), "uuid/uuid.h ("+firmware.HeaderPackage("uuid/uuid.h")+")") {
 		t.Fatalf("stdout lacks the missing header -- Host.Header should have called x86_64-elf-gcc, which refuses it:\n%s", out.String())
 	}
 
 	compiles = true
 	out.Reset()
 	Run(context.Background(), []string{"doctor"}, e)
-	if strings.Contains(out.String(), "uuid/uuid.h (a C header") {
+	if strings.Contains(out.String(), "uuid/uuid.h (") {
 		t.Fatalf("stdout still lists the header as missing though the fake x86_64-elf-gcc now accepts it:\n%s", out.String())
 	}
 }

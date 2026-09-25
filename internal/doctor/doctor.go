@@ -115,7 +115,12 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 	if h.Header != nil {
 		for _, hdr := range firmware.Headers {
 			if !h.Header(hdr) {
-				fw.Missing = append(fw.Missing, hdr+" (a C header: the uuid development package)")
+				// The build's own words for it (firmware.HeaderPackage).
+				what := firmware.HeaderPackage(hdr)
+				if what == "" {
+					what = "a C header"
+				}
+				fw.Missing = append(fw.Missing, hdr+" ("+what+")")
 			}
 		}
 	}

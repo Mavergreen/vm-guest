@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -172,4 +174,49 @@ func registryWith(t *testing.T, name, url, sha string) *pins.Registry {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// One list per build is what each build requires and what doctor asks
+// about: Tools is their union, each once, in the order they first appear.
+func TestToolsIsEachBuildsListTogether(t *testing.T) {
+	want := []string{"bash", "make", "x-gcc", "git", "python3", "nasm", "iasl", "zip"}
+	if got := Tools("x-gcc"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Tools = %q, want %q", got, want)
+	}
+	for _, list := range [][]string{openCoreTools("x-gcc"), ovmfTools("x-gcc")} {
+		for _, tool := range list {
+			if !slices.Contains(Tools("x-gcc"), tool) {
+				t.Errorf("Tools lacks %s", tool)
+			}
+		}
+	}
+}
+
+// Each build refuses to start without any one of its own list.
+func TestEachBuildRequiresEveryToolOnItsList(t *testing.T) {
+	for _, tool := range openCoreTools("gcc") {
+		f := newFixture(t)
+		delete(f.fake.Paths, tool)
+		if _, err := f.openCore(); err == nil || !strings.Contains(err.Error(), "missing build tools: "+tool) {
+			t.Errorf("OpenCore without %s: %v", tool, err)
+		}
+	}
+	for _, tool := range ovmfTools("gcc") {
+		f := ovmfFixture(t)
+		delete(f.fake.Paths, tool)
+		if _, err := f.ovmf(); err == nil || !strings.Contains(err.Error(), "missing build tools: "+tool) {
+			t.Errorf("OVMF without %s: %v", tool, err)
+		}
+	}
+}
+
+func TestHeaderPackageIsWhatPrereqsShSays(t *testing.T) {
+	if got := HeaderPackage("uuid/uuid.h"); got != "the uuid development package: uuid-dev on Debian, util-linux-libs on Arch" {
+		t.Errorf("HeaderPackage(uuid/uuid.h) = %q", got)
+	}
+	for _, h := range Headers {
+		if HeaderPackage(h) == "" {
+			t.Errorf("no package named for %s", h)
+		}
+	}
 }

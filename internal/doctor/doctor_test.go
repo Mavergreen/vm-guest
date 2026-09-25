@@ -180,7 +180,7 @@ func TestDoctorFirmwareRow(t *testing.T) {
 	h = linux(intel, "Y", true, have...)
 	h.Header = func(string) bool { return false }
 	fw = firmwareRow(Subcommands(h, p, "qemu-system-x86_64"))
-	want := "nasm, zip, uuid/uuid.h (a C header: the uuid development package)"
+	want := "nasm, zip, uuid/uuid.h (the uuid development package: uuid-dev on Debian, util-linux-libs on Arch)"
 	if got := strings.Join(fw.Missing, ", "); got != want {
 		t.Fatalf("firmware.Missing = %q, want %q", got, want)
 	}

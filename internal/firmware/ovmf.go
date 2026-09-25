@@ -47,8 +47,7 @@ func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
 	if fi, err := os.Stat(filepath.Join(b.udk(), "BaseTools", "Source", "C", "bin", "GenFv")); err != nil || fi.Mode()&0o111 == 0 {
 		return nil, fmt.Errorf("BaseTools are not built in %s -- run 'vmavs firmware opencore' first", b.udk())
 	}
-	// nasm assembles the reset vector; iasl compiles the ACPI tables.
-	if err := b.requireTools("bash", "git", "make", "python3", "nasm", "iasl", b.Toolchain.GCC()); err != nil {
+	if err := b.requireTools(ovmfTools(b.Toolchain.GCC())...); err != nil {
 		return nil, err
 	}
 	dsc := filepath.Join(b.udk(), filepath.FromSlash(OVMFDsc))

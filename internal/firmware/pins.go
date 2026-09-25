@@ -12,6 +12,7 @@ package firmware
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Mavergreen/vm-guest/internal/pins"
@@ -103,12 +104,34 @@ var EFIDrivers = []string{"OpenRuntime.efi", "OpenPartitionDxe.efi", "OpenHfsPlu
 // own search path.
 var Headers = []string{"uuid/uuid.h"}
 
-// Tools is every external program the firmware builds run, for doctor:
-// gcc is the Toolchain's GCC() (GCC_BIN-prefixed). bash runs edksetup.sh,
-// build_oc.tool and efibuild.sh; git and zip are efibuild.sh's own
-// requirements; nasm and iasl are OvmfPkg's.
-func Tools(gcc string) []string {
+// openCoreTools is every external program the OpenCore build needs
+// before it starts; gcc is the Toolchain's GCC() (GCC_BIN-prefixed).
+// bash runs build_oc.tool, efibuild.sh and edksetup.sh. git: efibuild.sh
+// insists on it, and patches are applied with it. zip: efibuild.sh will
+// not start without it. nasm and iasl: it needs both, and where it
+// cannot find them (macOS) it offers to fetch and install them with curl
+// and sudo.
+func openCoreTools(gcc string) []string {
 	return []string{"bash", "make", gcc, "git", "python3", "nasm", "iasl", "zip"}
+}
+
+// ovmfTools is every external program the OVMF build needs: bash runs
+// edksetup.sh, git applies our dsc patches, nasm assembles the reset
+// vector and iasl compiles the ACPI tables.
+func ovmfTools(gcc string) []string {
+	return []string{"bash", "make", gcc, "git", "python3", "nasm", "iasl"}
+}
+
+// Tools is every external program the firmware builds run, for doctor:
+// the union of each build's own list, in the order they first appear.
+func Tools(gcc string) []string {
+	var all []string
+	for _, t := range append(openCoreTools(gcc), ovmfTools(gcc)...) {
+		if !slices.Contains(all, t) {
+			all = append(all, t)
+		}
+	}
+	return all
 }
 
 // A Pin is one registry source the OpenCore build needs and the commit
