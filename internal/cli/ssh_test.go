@@ -150,9 +150,23 @@ func TestSSHWithNoLiveGuestButAPortFallsBackToTheChosenImage(t *testing.T) {
 	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey()})
 	port := addr[strings.LastIndex(addr, ":")+1:]
 
-	code, out, errs := sshVmavs(t, home, "--port", port, "--", "sw_vers")
+	code, out, errs := sshVmavs(t, home, "--ssh-port", port, "--", "sw_vers")
 	if code != 0 || out != "ran: sw_vers\n" {
 		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
+	}
+}
+
+// TestSSHSpellsThePortFlagAsRunAndEmitDo: one machine-option name for the
+// forwarded port across every subcommand (spec §2), and no alias.
+func TestSSHSpellsThePortFlagAsRunAndEmitDo(t *testing.T) {
+	home := shortTempDir(t)
+	code, _, errs := sshVmavs(t, home, "--port", "2222", "--", "true")
+	if code != 2 || !strings.Contains(errs, "-port") {
+		t.Fatalf("code=%d err=%q, want --port to be a usage error", code, errs)
+	}
+	_, out, _ := sshVmavs(t, home, "--help")
+	if !strings.Contains(out, "[--ssh-port N]") || strings.Contains(out, "--port") {
+		t.Fatalf("help=%q, want --ssh-port and no --port", out)
 	}
 }
 
@@ -241,7 +255,7 @@ func TestSSHRefusesAnUnreachablePortWithTheBootingHint(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close() // now refused: nothing listens there any more
 
-	code, _, errs := sshVmavs(t, home, "--port", strconv.Itoa(port), "--key", keyPath, "--", "true")
+	code, _, errs := sshVmavs(t, home, "--ssh-port", strconv.Itoa(port), "--key", keyPath, "--", "true")
 	if code != 1 || !strings.Contains(errs, "isn't answering SSH yet") {
 		t.Fatalf("code=%d err=%q", code, errs)
 	}

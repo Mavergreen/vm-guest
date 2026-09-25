@@ -20,7 +20,7 @@ import (
 	"github.com/Mavergreen/vm-guest/internal/vm"
 )
 
-const sshHelp = `usage: vmavs ssh [--image NAME] [--port N] [--user U] [--key PATH] [-- command...]
+const sshHelp = `usage: vmavs ssh [--image NAME] [--ssh-port N] [--user U] [--key PATH] [-- command...]
 
 Open a shell in the running guest, or run one command there and exit with
 its status. The guest is the one "vmavs run" started (--image picks one if
@@ -32,7 +32,7 @@ overlay has fresh ones.
 func cmdSSH(ctx context.Context, e *Env, args []string) error {
 	fs := newFlags("ssh")
 	name := fs.String("image", "", "which running image (when more than one is)")
-	port := fs.Int("port", 0, "host port forwarded to the guest's 22 (default: the running guest's)")
+	port := fs.Int("ssh-port", 0, "host port forwarded to the guest's 22 (default: the running guest's)")
 	user := fs.String("user", config.DefaultSSHUser, "guest account")
 	keyPath := fs.String("key", "", "private key (default: the one the image authorized)")
 	if err := parse(fs, e, sshHelp, args); err != nil {
@@ -116,7 +116,7 @@ func bootingHint(err error, port int) error {
 }
 
 // sshTarget is the image to talk to and the port its run forwards. With
-// --port and no running guest, the image is --image or the latest built.
+// --ssh-port and no running guest, the image is --image or the latest built.
 func sshTarget(e *Env, p config.Paths, name string, port int) (manifest.Manifest, int, error) {
 	live, err := vm.Live(p)
 	if err != nil {
@@ -146,6 +146,6 @@ func sshTarget(e *Env, p config.Paths, name string, port int) (manifest.Manifest
 	case name != "" && len(live) > 0:
 		return manifest.Manifest{}, 0, usagef("no running guest named %q; running: %s", name, strings.Join(running, ", "))
 	default:
-		return manifest.Manifest{}, 0, errors.New("no guest is running; start one with `vmavs run`, or pass --port")
+		return manifest.Manifest{}, 0, errors.New("no guest is running; start one with `vmavs run`, or pass --ssh-port")
 	}
 }

@@ -55,7 +55,7 @@ vmavs media                           installer media
 vmavs install                         target disk + unattended install
 vmavs image    [--describe] [--freshness] [--stage a,b,…]   the whole chain
 vmavs run      [--image NAME] [--keep]                      boot a built image
-vmavs ssh      [-- command…]                                a shell in the running guest
+vmavs ssh      [--ssh-port N] [-- command…]                 a shell in the running guest
 vmavs emit     packer                                       Packer template for the machine `run` boots
 vmavs version | help
 ```
@@ -88,7 +88,8 @@ Changes from the shell `vmavs`:
 - **Machine options.** One set, parsed once and accepted by `install`,
   `image`, `run` and `emit`: `--accel`, `--cpu`, `--memory`, `--smp`,
   `--nic`, `--ssh-port`, and `--image NAME` where it applies. Defaults live
-  in `internal/config` and nowhere else.
+  in `internal/config` and nowhere else. `ssh` names the port it connects
+  to `--ssh-port` as well, so one port has one flag name everywhere.
 - **Environment.** Only a few variables:
   - `VMAVS_HOME`, the state root;
   - `VMAVS_QEMU`, the QEMU binary;
