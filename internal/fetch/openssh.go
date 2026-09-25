@@ -95,6 +95,9 @@ func parseOpenSSHSums(b []byte) (base, replace string, want map[string]string, e
 			continue
 		}
 		name := f[1]
+		if err := validateFilename(name); err != nil {
+			return "", "", nil, fmt.Errorf("entry %q: %w", name, err)
+		}
 		if err := validateSHA256(f[0]); err != nil {
 			return "", "", nil, fmt.Errorf("entry for %s: %w", name, err)
 		}
@@ -175,7 +178,8 @@ func (g *Getter) fetchOpenSSHSums(ctx context.Context, url, tag, adoptDir, dest 
 }
 
 // fetchSums fetches url with the same retry/backoff policy as a download,
-// capped at maxSumsBytes.
+// and the same stall timeout: a captive portal is as happy to hold a SUMS
+// request open as a 5 GB one.
 func (g *Getter) fetchSums(ctx context.Context, url, tag string) ([]byte, error) {
 	retries := g.Retries
 	switch {
@@ -210,7 +214,11 @@ func (g *Getter) fetchSums(ctx context.Context, url, tag string) ([]byte, error)
 }
 
 func (g *Getter) fetchSumsOnce(ctx context.Context, url, tag string) ([]byte, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	stall := g.stallDuration()
+	attemptCtx, watch := newStallWatch(ctx, stall)
+	defer watch.Stop()
+
+	req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -220,15 +228,25 @@ func (g *Getter) fetchSumsOnce(ctx context.Context, url, tag string) ([]byte, bo
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, classifyErr(err), fmt.Errorf("cannot fetch %s: %w", url, err)
+		retry, werr := classifyAttemptErr(ctx, watch, stall, url, err)
+		return nil, retry, werr
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, resp.StatusCode >= 500, fmt.Errorf("cannot fetch %s (%s) -- is %s a real release?", url, resp.Status, tag)
 	}
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, io.LimitReader(resp.Body, maxSumsBytes)); err != nil {
-		return nil, classifyErr(err), fmt.Errorf("%s: %w", url, err)
+	// Read one byte past the cap: reaching it means the real response is
+	// too big (or unbounded) rather than silently truncating a response
+	// that happens to be exactly the cap, or worse, one just over it.
+	src := watch.Reader(resp.Body)
+	n, err := io.Copy(&buf, io.LimitReader(src, maxSumsBytes+1))
+	if err != nil {
+		retry, werr := classifyAttemptErr(ctx, watch, stall, url, err)
+		return nil, retry, werr
+	}
+	if n > maxSumsBytes {
+		return nil, false, fmt.Errorf("%s: response is at least %d bytes -- refusing to buffer more of what should be a small text file", url, n)
 	}
 	return buf.Bytes(), false, nil
 }
@@ -243,7 +261,19 @@ func writeAtomic(dest string, b []byte) error {
 	}
 	defer os.RemoveAll(tmpDir)
 	tmp := filepath.Join(tmpDir, filepath.Base(dest))
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, dest)

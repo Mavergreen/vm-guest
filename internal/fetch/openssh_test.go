@@ -127,6 +127,39 @@ func TestOpenSSHRejectsACaptivePortalSUMSThenSucceedsAgainstARealServer(t *testi
 	}
 }
 
+// TestOpenSSHRefusesAnOversizedSUMSResponse: the two valid .pkg lines sit
+// first, followed by more padding than fits under the cap. A reader that
+// silently stops at the cap would still see two complete, valid lines and
+// accept the (truncated) response as legitimate SUMS; reading one byte
+// past the cap and refusing anything that reaches it catches this even
+// when truncation happens not to corrupt the part that was kept.
+func TestOpenSSHRefusesAnOversizedSUMSResponse(t *testing.T) {
+	var body strings.Builder
+	fmt.Fprintf(&body, "%s  a.pkg\n", sum([]byte("b")))
+	fmt.Fprintf(&body, "%s  a-System-Replace.pkg\n", sum([]byte("r")))
+	body.WriteString(strings.Repeat("#", maxSumsBytes)) // padding alone exceeds the cap
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(body.String()))
+	}))
+	defer srv.Close()
+	_, err := getter(t).OpenSSH(context.Background(), srv.URL, "t", "")
+	if err == nil || !strings.Contains(err.Error(), srv.URL) || !strings.Contains(err.Error(), "refusing to buffer") {
+		t.Fatalf("err = %v, want a refusal naming the URL, not a checksum mismatch from a truncated-but-plausible response", err)
+	}
+}
+
+// TestParseOpenSSHSumsRefusesAPathInAPackageName: a SUMS row naming a
+// package outside the release directory ("../../evil.pkg") must not reach
+// Item.Adopt (filepath.Join(adoptDir, name)), which would otherwise let a
+// malicious or corrupted SUMS read or overwrite outside adoptDir.
+func TestParseOpenSSHSumsRefusesAPathInAPackageName(t *testing.T) {
+	bad := fmt.Sprintf("%s  ../../evil.pkg\n%s  a-System-Replace.pkg\n", sum([]byte("x")), sum([]byte("y")))
+	_, _, _, err := parseOpenSSHSums([]byte(bad))
+	if err == nil || !strings.Contains(err.Error(), "../../evil.pkg") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestOpenSSHTagIsTheEmbeddedPin(t *testing.T) {
 	tag, err := OpenSSHTag()
 	if err != nil || !strings.Contains(tag, "-mavericks.") {
