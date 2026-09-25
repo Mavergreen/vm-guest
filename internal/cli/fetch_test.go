@@ -269,6 +269,10 @@ func TestFetchArgErrorsExitTwo(t *testing.T) {
 	}{
 		{"unknown flag", []string{"fetch", "--bogus-flag"}, []string{"bogus-flag"}},
 		{"unknown target", []string{"fetch", "bogus"}, []string{"esd", "openssh", "updates"}},
+		// After "--", everything is a plain target -- a flag-shaped one
+		// too, which is then an unknown target, not a flag.
+		{"-- then a flag-shaped target", []string{"fetch", "--", "esd", "--probe"}, []string{`"--probe"`}},
+		{"-- then a flag and its value", []string{"fetch", "--", "esd", "--updates", "all"}, []string{`"--updates"`}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -383,5 +387,24 @@ func TestACancelledFetchExitsNonZero(t *testing.T) {
 	}
 	if out.String() != "" {
 		t.Fatalf("stdout=%q, want no path from a cancelled fetch", out.String())
+	}
+}
+
+// TestAnEndpointLeftEmptyIsTheRealOne: Endpoints is filled field by
+// field, so a test (or anything else) that sets only one of them gets the
+// real other one -- stated, not implied by some fetch type's zero value.
+// Here that is GitHub, which the tests' loopback-only transport refuses:
+// no test reaches the internet.
+func TestAnEndpointLeftEmptyIsTheRealOne(t *testing.T) {
+	e, _, errb := fetchEnv(map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()})
+	e.Endpoints = &Endpoints{Recovery: "http://127.0.0.1:1"}
+	if code := Run(context.Background(), []string{"fetch", "openssh"}, e); code != 1 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), fetch.DefaultOpenSSHReleases) || !strings.Contains(errb.String(), "loopback-only") {
+		t.Fatalf("stderr=%s, want the real releases URL, refused by the test transport", errb.String())
+	}
+	if got := endpoints(&Env{Endpoints: &Endpoints{OpenSSHReleases: "http://127.0.0.1:1"}}); got.Recovery != fetch.DefaultRecovery {
+		t.Fatalf("Recovery = %q, want %q", got.Recovery, fetch.DefaultRecovery)
 	}
 }

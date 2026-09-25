@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Mavergreen/vm-guest/internal/pins"
 )
@@ -29,10 +30,42 @@ const (
 // Recovery is Apple's osrecovery service. The transfer is plain HTTP by
 // Apple's design (the token is a cookie and the payload is unencrypted),
 // so the checksum is the only thing between this and a middlebox.
+//
+// Every request it makes -- the handshake's two and Probe's HEAD -- has
+// its own timeout, and a transient failure (a network error, a timeout, a
+// 5xx) is retried the way a download is: the shell tree ran each under
+// curl --retry 3.
 type Recovery struct {
 	Base   string       // "" means DefaultRecovery
 	Client *http.Client // nil means http.DefaultClient
 	Rand   io.Reader    // nil means crypto/rand
+
+	Retries int                           // as Getter's: 0 means 3, negative means none
+	Backoff time.Duration                 // as Getter's: 0 means 1s
+	Timeout time.Duration                 // per request; 0 (or negative) means 1 minute
+	Log     func(format string, a ...any) // retries are reported here; nil means nowhere
+}
+
+// defaultRequestTimeout bounds each of Recovery's requests. They are
+// small -- a cookie, a few lines of text, a HEAD -- so a minute is
+// generous; without it, a server that accepts and never answers would
+// hang the handshake for good.
+const defaultRequestTimeout = time.Minute
+
+func (rc Recovery) timeout() time.Duration {
+	if rc.Timeout <= 0 {
+		return defaultRequestTimeout
+	}
+	return rc.Timeout
+}
+
+func (rc Recovery) retryPolicy() retryPolicy { return newRetryPolicy(rc.Retries, rc.Backoff, rc.Log) }
+
+// retryable reports whether a failed request is worth another attempt:
+// never once ctx itself is done (a signal), otherwise as classifyErr says
+// -- which includes the per-request timeout firing.
+func retryable(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && classifyErr(err)
 }
 
 func (rc Recovery) base() string {
@@ -71,6 +104,8 @@ func deriveKey(clientID, serverID string) (string, error) {
 }
 
 // Handshake asks osrecovery for the installer's URL and a download token.
+// A transient failure retries the whole handshake -- the session request
+// and the payload request -- with the same client id.
 func (rc Recovery) Handshake(ctx context.Context) (assetURL, token string, err error) {
 	rnd := rc.Rand
 	if rnd == nil {
@@ -81,18 +116,34 @@ func (rc Recovery) Handshake(ctx context.Context) (assetURL, token string, err e
 		return "", "", err
 	}
 	clientID := strings.ToUpper(hex.EncodeToString(cid))
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rc.base()+"/", nil)
+	err = rc.retryPolicy().do(ctx, "osrecovery handshake", func() (bool, error) {
+		var retry bool
+		var err error
+		assetURL, token, retry, err = rc.handshakeOnce(ctx, clientID)
+		return retry, err
+	})
 	if err != nil {
 		return "", "", err
 	}
+	return assetURL, token, nil
+}
+
+// handshakeOnce is one attempt at Handshake, each request under its own
+// timeout. It says whether a failure is worth retrying.
+func (rc Recovery) handshakeOnce(ctx context.Context, clientID string) (assetURL, token string, retry bool, err error) {
+	reqCtx, cancel := context.WithTimeout(ctx, rc.timeout())
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, rc.base()+"/", nil)
+	if err != nil {
+		return "", "", false, err
+	}
 	resp, err := rc.client().Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("cannot reach osrecovery for a session id: %w", err)
+		return "", "", retryable(ctx, err), fmt.Errorf("cannot reach osrecovery for a session id: %w", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("osrecovery refused the session request: %s", resp.Status)
+		return "", "", resp.StatusCode >= 500, fmt.Errorf("osrecovery refused the session request: %s", resp.Status)
 	}
 	serverID := ""
 	for _, c := range resp.Cookies() {
@@ -103,22 +154,25 @@ func (rc Recovery) Handshake(ctx context.Context) (assetURL, token string, err e
 	}
 	key, err := deriveKey(clientID, serverID)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	body := fmt.Sprintf("cid=%s\nsn=%s\nbid=%s\nk=%s", clientID, boardSerial, boardID, key)
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, rc.base()+"/InstallationPayload/OSInstaller", strings.NewReader(body))
+
+	reqCtx, cancel = context.WithTimeout(ctx, rc.timeout())
+	defer cancel()
+	req, err = http.NewRequestWithContext(reqCtx, http.MethodPost, rc.base()+"/InstallationPayload/OSInstaller", strings.NewReader(body))
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	req.Header.Set("Content-Type", "text/plain")
 	req.AddCookie(&http.Cookie{Name: "session", Value: serverID})
 	resp, err = rc.client().Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("InstallationPayload request failed: %w", err)
+		return "", "", retryable(ctx, err), fmt.Errorf("InstallationPayload request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("InstallationPayload request was refused: %s", resp.Status)
+		return "", "", resp.StatusCode >= 500, fmt.Errorf("InstallationPayload request was refused: %s", resp.Status)
 	}
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
@@ -130,12 +184,12 @@ func (rc Recovery) Handshake(ctx context.Context) (assetURL, token string, err e
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return "", "", fmt.Errorf("reading Apple's installation payload: %w", err)
+		return "", "", retryable(ctx, err), fmt.Errorf("reading Apple's installation payload: %w", err)
 	}
 	if assetURL == "" || token == "" {
-		return "", "", fmt.Errorf("apple's installation payload had no asset URL or token")
+		return "", "", false, fmt.Errorf("the installation payload Apple sent had no asset URL or token")
 	}
-	return assetURL, token, nil
+	return assetURL, token, false, nil
 }
 
 func (rc Recovery) offer(ctx context.Context, reg *pins.Registry) (pins.Source, string, error) {
@@ -151,7 +205,7 @@ func (rc Recovery) offer(ctx context.Context, reg *pins.Registry) (pins.Source, 
 	// entitled to; silently installing a different one would be a long
 	// afternoon (get.sh checks this too).
 	if url != src.URL {
-		return pins.Source{}, "", fmt.Errorf("apple offered %s, not the Mavericks InstallESD URL %s", url, src.URL)
+		return pins.Source{}, "", fmt.Errorf("the installer Apple offered is %s, not the Mavericks InstallESD URL %s", url, src.URL)
 	}
 	return src, token, nil
 }
@@ -209,29 +263,36 @@ func withNothingRenamed(err error) error {
 
 // Probe performs the handshake and asks the CDN for the size, downloading
 // nothing: a measurement of Apple's side without 5 GB of traffic.
-func (rc Recovery) Probe(ctx context.Context, reg *pins.Registry, c *http.Client) (string, int64, error) {
+func (rc Recovery) Probe(ctx context.Context, reg *pins.Registry) (string, int64, error) {
 	src, token, err := rc.offer(ctx, reg)
 	if err != nil {
 		return "", 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, src.URL, nil)
+	var size int64
+	err = rc.retryPolicy().do(ctx, "HEAD "+src.URL, func() (bool, error) {
+		reqCtx, cancel := context.WithTimeout(ctx, rc.timeout())
+		defer cancel()
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodHead, src.URL, nil)
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("Cookie", "AssetToken="+token)
+		resp, err := rc.client().Do(req)
+		if err != nil {
+			return retryable(ctx, err), err
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return resp.StatusCode >= 500, fmt.Errorf("HEAD %s: %s", src.URL, resp.Status)
+		}
+		if resp.ContentLength < 0 {
+			return false, fmt.Errorf("HEAD %s: no Content-Length in the response", src.URL)
+		}
+		size = resp.ContentLength
+		return false, nil
+	})
 	if err != nil {
 		return "", 0, err
 	}
-	req.Header.Set("Cookie", "AssetToken="+token)
-	if c == nil {
-		c = rc.client()
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return "", 0, err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("HEAD %s: %s", src.URL, resp.Status)
-	}
-	if resp.ContentLength < 0 {
-		return "", 0, fmt.Errorf("HEAD %s: no Content-Length in the response", src.URL)
-	}
-	return src.URL, resp.ContentLength, nil
+	return src.URL, size, nil
 }

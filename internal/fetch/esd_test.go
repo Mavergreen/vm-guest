@@ -7,11 +7,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Mavergreen/vm-guest/internal/pins"
 )
@@ -168,8 +172,129 @@ func TestInstallESDWithARottenCacheNeverHandshakes(t *testing.T) {
 func TestProbeReportsTheSizeAndDownloadsNothing(t *testing.T) {
 	asset := []byte("0123456789")
 	srv, reg := fakeApple(t, asset)
-	url, size, err := Recovery{Base: srv.URL, Rand: fixedRand()}.Probe(context.Background(), reg, nil)
+	url, size, err := Recovery{Base: srv.URL, Rand: fixedRand()}.Probe(context.Background(), reg)
 	if err != nil || size != int64(len(asset)) || !strings.HasSuffix(url, "/InstallESD.dmg") {
 		t.Fatalf("%q %d %v", url, size, err)
+	}
+}
+
+// flakyFront stands in front of fakeApple's server: fail says, for the
+// n-th (1-based) request of a method and path, whether to answer 503
+// ("503"), hang past any sane timeout ("hang"), refuse it ("403"), or
+// pass it through (""). It counts every request it sees.
+func flakyFront(t *testing.T, backend *httptest.Server, fail func(method, path string, n int) string) (*httptest.Server, func(method, path string) int) {
+	t.Helper()
+	target, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	var mu sync.Mutex
+	counts := map[string]int{}
+	stop := make(chan struct{})
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		counts[r.Method+" "+r.URL.Path]++
+		n := counts[r.Method+" "+r.URL.Path]
+		mu.Unlock()
+		switch fail(r.Method, r.URL.Path, n) {
+		case "503":
+			w.WriteHeader(503)
+		case "403":
+			w.WriteHeader(403)
+		case "hang":
+			// Drain the body first: only then does the server watch
+			// the connection, and notice the client giving up.
+			io.Copy(io.Discard, r.Body)
+			select {
+			case <-r.Context().Done():
+			case <-stop:
+			}
+		default:
+			proxy.ServeHTTP(w, r)
+		}
+	}))
+	t.Cleanup(front.Close)
+	t.Cleanup(func() { close(stop) }) // runs first: no handler outlives the test
+	return front, func(method, path string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return counts[method+" "+path]
+	}
+}
+
+// TestTheHandshakeRetriesTransientFailures: the shell's handshake used
+// curl --retry 3. A 503 and a request that hangs (cut off by the
+// per-request timeout) are both worth another try.
+func TestTheHandshakeRetriesTransientFailures(t *testing.T) {
+	backend, _ := fakeApple(t, []byte("x"))
+	front, count := flakyFront(t, backend, func(method, path string, n int) string {
+		switch {
+		case method == "GET" && path == "/" && n == 1:
+			return "503"
+		case method == "POST" && n == 1:
+			return "hang"
+		}
+		return ""
+	})
+	rc := Recovery{Base: front.URL, Rand: fixedRand(), Backoff: time.Millisecond, Timeout: 200 * time.Millisecond}
+	au, tok, err := rc.Handshake(context.Background())
+	if err != nil || tok != "tok123" || !strings.HasSuffix(au, "/content/InstallESD.dmg") {
+		t.Fatalf("%q %q %v", au, tok, err)
+	}
+	if got := count("POST", "/InstallationPayload/OSInstaller"); got != 2 {
+		t.Fatalf("%d POSTs, want 2 (one hung, one answered)", got)
+	}
+}
+
+// TestTheHandshakeDoesNotRetryARefusal: a 4xx is an answer, not a
+// hiccup; asking again gets the same one.
+func TestTheHandshakeDoesNotRetryARefusal(t *testing.T) {
+	backend, _ := fakeApple(t, []byte("x"))
+	front, count := flakyFront(t, backend, func(method, path string, n int) string {
+		if method == "POST" {
+			return "403"
+		}
+		return ""
+	})
+	rc := Recovery{Base: front.URL, Rand: fixedRand(), Backoff: time.Millisecond}
+	if _, _, err := rc.Handshake(context.Background()); err == nil {
+		t.Fatal("a refused handshake must be an error")
+	}
+	if got := count("POST", "/InstallationPayload/OSInstaller"); got != 1 {
+		t.Fatalf("%d POSTs, want 1", got)
+	}
+}
+
+// TestProbeRetriesATransientHEAD: the HEAD Probe sends after the
+// handshake gets the same retries.
+func TestProbeRetriesATransientHEAD(t *testing.T) {
+	asset := []byte("0123456789")
+	var heads atomic.Int32
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/":
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "001~0A1B2C3D4E5F60718293A4B5C6D7E8F9"})
+		case r.Method == "POST":
+			fmt.Fprintf(w, "AU: %s/content/InstallESD.dmg\nAT: tok123\n", srv.URL)
+		case r.Method == "HEAD" && heads.Add(1) == 1:
+			w.WriteHeader(503)
+		case r.Method == "HEAD":
+			w.Header().Set("Content-Length", fmt.Sprint(len(asset)))
+		}
+	}))
+	defer srv.Close()
+	reg, err := pins.Parse(strings.NewReader(fmt.Sprintf("%s\t%s/content/InstallESD.dmg\t%s\n", ESDSource, srv.URL, sum(asset))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := Recovery{Base: srv.URL, Rand: fixedRand(), Backoff: time.Millisecond}
+	_, size, err := rc.Probe(context.Background(), reg)
+	if err != nil || size != int64(len(asset)) {
+		t.Fatalf("size=%d err=%v", size, err)
+	}
+	if heads.Load() != 2 {
+		t.Fatalf("%d HEADs, want 2", heads.Load())
 	}
 }

@@ -41,7 +41,8 @@ type Env struct {
 	// depending on the one the test runs on.
 	Host *doctor.Host
 
-	// HTTP is what cmdFetch downloads with. nil means http.DefaultClient.
+	// HTTP is what cmdFetch downloads with. nil means http.DefaultClient
+	// (in this package's tests, a client that refuses non-loopback hosts).
 	HTTP *http.Client
 	// Endpoints is where cmdFetch reaches osrecovery and the OpenSSH
 	// releases. nil means the real ones (fetch.DefaultRecovery,
@@ -164,6 +165,19 @@ func parse(fs *flag.FlagSet, e *Env, help string, args []string) error {
 		return usagef("%v", err)
 	}
 	return nil
+}
+
+// defaultHTTP is what an Env without HTTP downloads with. Only this
+// package's tests change it: to a client that refuses every host but
+// loopback, so no test can reach the internet.
+var defaultHTTP = http.DefaultClient
+
+// httpClient is e.HTTP, or defaultHTTP.
+func httpClient(e *Env) *http.Client {
+	if e.HTTP != nil {
+		return e.HTTP
+	}
+	return defaultHTTP
 }
 
 // runner is e.Runner, or the real one.

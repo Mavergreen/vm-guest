@@ -154,3 +154,18 @@ func mustWrite(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+// TestShellDownloadPaths: where the shell tree keeps what vmavs fetch
+// adopts, all in one place for phase 6 to delete.
+func TestShellDownloadPaths(t *testing.T) {
+	p := Paths{Home: "/h"}
+	for got, want := range map[string]string{
+		p.ShellESD():              "/h/media/InstallESD.dmg",
+		p.ShellOpenSSH("9.9p1-x"): "/h/openssh/9.9p1-x",
+		p.ShellUpdates():          "/h/updates",
+	} {
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	}
+}

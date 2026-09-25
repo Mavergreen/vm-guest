@@ -29,7 +29,7 @@ type Getter struct {
 	Paths   config.Paths
 	Log     func(format string, a ...any)
 	Retries int           // attempts after the first; 0 means 3, negative means 0
-	Backoff time.Duration // first retry's wait, doubling; 0 means 1s
+	Backoff time.Duration // first retry's wait, doubling; 0 (or negative) means 1s
 
 	// StallTimeout aborts (and retries) an attempt that has read no body
 	// bytes for this long: a captive portal or a stuck connection can hold
@@ -384,36 +384,13 @@ func (g *Getter) adoptCandidate(ctx context.Context, it Item, old, dest, dir, na
 // an adopted file's shared inode).
 func (g *Getter) download(ctx context.Context, it Item, dir, name, dest string) error {
 	g.cleanStaleTemps(it, dir, name)
-	retries := g.Retries
-	switch {
-	case retries == 0:
-		retries = 3
-	case retries < 0:
-		retries = 0
-	}
-	wait := g.Backoff
-	if wait == 0 {
-		wait = time.Second
-	}
-	var err error
-	for attempt := 0; attempt <= retries; attempt++ {
-		if attempt > 0 {
-			g.logf("%s: retrying in %v (%v)", it.Name, wait, err)
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-			wait *= 2
-		}
-		var retry bool
-		retry, err = g.attempt(ctx, it, dir, name, dest)
-		if err == nil || !retry {
-			return err
-		}
-	}
-	return err
+	return g.retryPolicy().do(ctx, it.Name, func() (bool, error) {
+		return g.attempt(ctx, it, dir, name, dest)
+	})
 }
+
+// retryPolicy is g's Retries and Backoff, defaulted.
+func (g *Getter) retryPolicy() retryPolicy { return newRetryPolicy(g.Retries, g.Backoff, g.logf) }
 
 // attempt is one full download try: a unique temp file, hashed while it is
 // written, verified and renamed into place on success. It removes its own

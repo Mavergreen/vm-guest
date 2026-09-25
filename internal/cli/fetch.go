@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -93,9 +92,11 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 		legacyBase = legacy
 	}
 
+	client := httpClient(e)
+	logFetch := func(format string, a ...any) { logf(e, "fetch", format, a...) }
+	rc := fetch.Recovery{Base: ep.Recovery, Client: client, Log: logFetch}
 	if *probe {
-		rc := fetch.Recovery{Base: ep.Recovery, Client: e.HTTP}
-		url, size, err := rc.Probe(ctx, reg, e.HTTP)
+		url, size, err := rc.Probe(ctx, reg)
 		if err != nil {
 			return err
 		}
@@ -103,13 +104,12 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 		return nil
 	}
 
-	g := &fetch.Getter{Paths: p, Client: e.HTTP, Log: func(format string, a ...any) { logf(e, "fetch", format, a...) }}
+	g := &fetch.Getter{Paths: p, Client: client, Log: logFetch}
 
 	for _, t := range targets {
 		switch t {
 		case "esd":
-			rc := fetch.Recovery{Base: ep.Recovery, Client: e.HTTP}
-			path, err := g.InstallESD(ctx, reg, rc, adoptCandidates(p.Home, legacyBase, "media", "InstallESD.dmg"))
+			path, err := g.InstallESD(ctx, reg, rc, adoptCandidates(p, legacyBase, config.Paths.ShellESD))
 			if err != nil {
 				return err
 			}
@@ -120,7 +120,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 			if err != nil {
 				return err
 			}
-			pkgs, err := g.OpenSSH(ctx, ep.OpenSSHReleases, tag, adoptCandidates(p.Home, legacyBase, "openssh", tag))
+			pkgs, err := g.OpenSSH(ctx, ep.OpenSSHReleases, tag, adoptCandidates(p, legacyBase, func(q config.Paths) string { return q.ShellOpenSSH(tag) }))
 			if err != nil {
 				return err
 			}
@@ -128,7 +128,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 			fmt.Fprintln(e.Stdout, pkgs.Replace)
 
 		case "updates":
-			ups, err := g.Updates(ctx, reg, *updates, adoptCandidates(p.Home, legacyBase, "updates"))
+			ups, err := g.Updates(ctx, reg, *updates, adoptCandidates(p, legacyBase, config.Paths.ShellUpdates))
 			if err != nil {
 				return err
 			}
@@ -140,17 +140,18 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	return nil
 }
 
-// adoptCandidates is VMAVS_HOME's own copy of the shell tree's file or
-// directory at elem..., and, when legacyBase is set (the shell tree's
-// own legacy home, when it differs from VMAVS_HOME), that copy too --
-// both tried in order by Getter's own adoption loop, which verifies each
-// candidate itself. Listing both here, rather than picking one by mere
-// existence, is what stops a partial or stale copy in one directory from
-// shadowing a good copy in the other.
-func adoptCandidates(home, legacyBase string, elem ...string) []string {
-	dirs := []string{filepath.Join(append([]string{home}, elem...)...)}
+// adoptCandidates is where to look for the shell tree's own download,
+// in order: VMAVS_HOME's copy (at, applied to it), and, when legacyBase
+// is set (the shell tree's own home, when it differs from VMAVS_HOME),
+// that home's copy too -- both tried by Getter's own adoption loop, which
+// verifies each candidate itself. Listing both here, rather than picking
+// one by mere existence, is what stops a partial or stale copy in one
+// directory from shadowing a good copy in the other. The paths
+// themselves are config's (Paths.ShellESD and friends).
+func adoptCandidates(p config.Paths, legacyBase string, at func(config.Paths) string) []string {
+	dirs := []string{at(p)}
 	if legacyBase != "" {
-		dirs = append(dirs, filepath.Join(append([]string{legacyBase}, elem...)...))
+		dirs = append(dirs, at(config.Paths{Home: legacyBase}))
 	}
 	return dirs
 }
@@ -162,16 +163,24 @@ func adoptCandidates(home, legacyBase string, elem ...string) []string {
 // parses repeatedly: fs.Parse consumes a run of flags (deciding for
 // itself, the standard way, which take a value -- including "--updates
 // X", "--updates=X" and "-updates X"), then the first remaining argument
-// is taken as one target and parsing resumes on the rest. "--" is
-// handled the standard way for free: fs.Parse consumes it and stops, so
-// everything after becomes plain targets, never looked at as flags again
-// even if one of them starts with "-".
+// is taken as one target and parsing resumes on the rest.
+//
+// "--" ends flag parsing for good: fs.Parse consumes it and stops, and
+// every argument after it is a plain target, never looked at as a flag
+// again even if it starts with "-" (so `-- esd --probe` names an unknown
+// target, "--probe"). fs.Parse stopped at a "--" when that is the last
+// argument it consumed. The one look-alike is "--" given as a flag's
+// value ("--updates --"), and --updates refuses that value anyway.
 func parseFetchArgs(fs *flag.FlagSet, e *Env, help string, args []string) ([]string, error) {
 	var targets []string
 	remaining := args
 	for {
 		if err := parse(fs, e, help, remaining); err != nil {
 			return nil, err
+		}
+		consumed := len(remaining) - fs.NArg()
+		if consumed > 0 && remaining[consumed-1] == "--" {
+			return append(targets, fs.Args()...), nil
 		}
 		if fs.NArg() == 0 {
 			return targets, nil
@@ -210,10 +219,21 @@ func fetchTargets(args []string) ([]string, error) {
 	return out, nil
 }
 
-// endpoints is e.Endpoints, or the real ones.
+// endpoints is e.Endpoints with every empty field filled with the real
+// one, field by field: an Endpoints that sets only Recovery still names
+// GitHub for OpenSSH explicitly, rather than leaving "" for some fetch
+// type's zero value to mean the real thing (or, for the releases, to
+// mean a URL with no host at all).
 func endpoints(e *Env) Endpoints {
+	var ep Endpoints
 	if e.Endpoints != nil {
-		return *e.Endpoints
+		ep = *e.Endpoints
 	}
-	return Endpoints{Recovery: fetch.DefaultRecovery, OpenSSHReleases: fetch.DefaultOpenSSHReleases}
+	if ep.Recovery == "" {
+		ep.Recovery = fetch.DefaultRecovery
+	}
+	if ep.OpenSSHReleases == "" {
+		ep.OpenSSHReleases = fetch.DefaultOpenSSHReleases
+	}
+	return ep
 }

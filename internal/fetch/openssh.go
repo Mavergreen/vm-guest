@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	vmguest "github.com/Mavergreen/vm-guest"
 	"github.com/Mavergreen/vm-guest/internal/pins"
@@ -198,35 +197,13 @@ func (g *Getter) fetchOpenSSHSums(ctx context.Context, url, tag string, adoptDir
 // and the same stall timeout: a captive portal is as happy to hold a SUMS
 // request open as a 5 GB one.
 func (g *Getter) fetchSums(ctx context.Context, url, tag string) ([]byte, error) {
-	retries := g.Retries
-	switch {
-	case retries == 0:
-		retries = 3
-	case retries < 0:
-		retries = 0
-	}
-	wait := g.Backoff
-	if wait == 0 {
-		wait = time.Second
-	}
 	var b []byte
-	var err error
-	for attempt := 0; attempt <= retries; attempt++ {
-		if attempt > 0 {
-			g.logf("%s: retrying in %v (%v)", url, wait, err)
-			select {
-			case <-time.After(wait):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			wait *= 2
-		}
+	err := g.retryPolicy().do(ctx, url, func() (bool, error) {
 		var retry bool
+		var err error
 		b, retry, err = g.fetchSumsOnce(ctx, url, tag)
-		if err == nil || !retry {
-			return b, err
-		}
-	}
+		return retry, err
+	})
 	return b, err
 }
 

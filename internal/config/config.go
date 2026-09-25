@@ -74,6 +74,15 @@ func (p Paths) OpenSSHSums(tag string) string {
 	return filepath.Join(p.Cache(), "openssh", tag, "SHA256SUMS")
 }
 
+// ShellESD, ShellOpenSSH and ShellUpdates are where the shell tree keeps
+// its downloads under a home laid out its way -- media/InstallESD.dmg,
+// openssh/<tag>/ and updates/ -- which vmavs fetch adopts (verified)
+// instead of downloading again. They go when the shell tree is retired
+// (spec §5, phase 6), all three together.
+func (p Paths) ShellESD() string               { return filepath.Join(p.Home, "media", "InstallESD.dmg") }
+func (p Paths) ShellOpenSSH(tag string) string { return filepath.Join(p.Home, "openssh", tag) }
+func (p Paths) ShellUpdates() string           { return filepath.Join(p.Home, "updates") }
+
 // OpenCoreImage is build/opencore.img. Until the shell tree is retired
 // (spec §5, phase 6), an image it built keeps OpenCore at
 // work/opencore-p3.img, and that path is used when the new one is absent.
