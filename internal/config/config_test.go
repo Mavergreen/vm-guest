@@ -183,3 +183,10 @@ func TestOpenCoreImageOutIgnoresTheShellTreesPath(t *testing.T) {
 		t.Fatalf("got %s", got)
 	}
 }
+
+func TestMediaPaths(t *testing.T) {
+	p := Paths{Home: "/h"}
+	if p.InstallerMedia() != "/h/build/installer-media.img" || p.MediaWork() != "/h/work/media" {
+		t.Fatal(p.InstallerMedia(), p.MediaWork())
+	}
+}

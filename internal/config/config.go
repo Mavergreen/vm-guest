@@ -61,6 +61,16 @@ func (p Paths) Run() string              { return filepath.Join(p.Home, "run") }
 func (p Paths) Keys() string             { return filepath.Join(p.Home, "keys") }
 func (p Paths) Cache() string            { return filepath.Join(p.Home, "cache") }
 
+// InstallerMedia is where vmavs media writes the installer disk image it
+// builds (Ruling 1 of phase 4): a build output reused by image builds, so
+// under build/ beside the firmware, never the shell tree's
+// media/installer-linux.img.
+func (p Paths) InstallerMedia() string { return filepath.Join(p.Build(), "installer-media.img") }
+
+// MediaWork is the media build's scratch: the raw conversions of the ESD
+// and BaseSystem (several GB), the injectables' tar, the microVM console.
+func (p Paths) MediaWork() string { return filepath.Join(p.Work(), "media") }
+
 // CacheFile is where a downloaded input with this checksum and filename
 // lives: content-addressed, so a changed pin is a different file and a
 // cached file can always be re-verified against its own directory name.

@@ -1,0 +1,15 @@
+# assets/privops/init.sh is the privops microVM's /init, carried BYTE FOR
+# BYTE as the heredoc inside lib/privops-qemu-linux.sh (Ruling 7 of phase
+# 4; TestInitIsTheShellTreesHeredoc holds the two equal until phase 6
+# deletes the heredoc). So it cannot carry a `# shellcheck` line of its
+# own, and it cannot be "fixed" here without drifting from the shell
+# tree's copy. Inside the heredoc shellcheck never saw it; as a file it
+# does, and this is how it is linted without lying about that.
+#
+# shell=dash: its shebang is `#!/bin/busybox sh`, busybox's ash, which
+#         shellcheck checks as dash anyway and warns about (SC2187).
+# SC2231: `for s in /sys/class/block/$mqg_base*` -- mqg_base is a device
+#         name like vdb, which cannot split, and the glob must expand.
+# SC2016: `awk '{print "/dev/" $2}'` -- $2 is awk's field, not the shell's.
+shell=dash
+disable=SC2231,SC2016

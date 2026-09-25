@@ -24,5 +24,11 @@ var UpstreamVersion string
 // them from the binary, not from the checkout, so a build can run from
 // nothing but the vmavs binary itself.
 //
-//go:embed assets/pins/sources.tsv components/openssh/version boot/config/config.plist media/apple-packages.sha256 image/payload/firstboot.sh image/payload/postinstall image/payload/com.mqg.firstboot.plist boot/patches/*.patch
+// The microVM's scripts travel in the binary for the same reason: its
+// /init (assets/privops/init.sh) and the media build's payloads
+// (media/privops/*.sh) run inside the privops guest, and the
+// unattended-install hooks (image/autoinstall/*) are injected into the
+// installer media it assembles.
+//
+//go:embed assets/pins/sources.tsv components/openssh/version boot/config/config.plist media/apple-packages.sha256 image/payload/firstboot.sh image/payload/postinstall image/payload/com.mqg.firstboot.plist boot/patches/*.patch media/privops/*.sh image/autoinstall/autoinstall.sh image/autoinstall/minstallconfig.xml image/autoinstall/OSInstall.collection assets/privops/init.sh
 var Files embed.FS
