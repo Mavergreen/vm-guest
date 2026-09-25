@@ -105,12 +105,17 @@ func quoteField(field, val string) (string, error) {
 
 // fieldErrorf is fmt.Errorf with a Config field name prefixed, for every
 // error Build and its validation report: "every error names the field or
-// path it concerns". Built at runtime rather than as a literal, so a
-// mixed-case field name like Updates does not trip staticcheck's
-// capitalized-error-string check (ST1005), which the rest of this
-// package's own errors already satisfy on their own.
+// path it concerns". The inner fmt.Errorf(format, a...) passes format and
+// a straight through, in that order, which is the shape go vet's printf
+// analyzer recognises as a wrapper -- so a call site's arguments are
+// still checked against its own format string, the same as any direct
+// fmt.Errorf call. (Confirmed by temporarily planting a mismatched call
+// and re-running go vet; the plant was not committed.) The outer call's
+// own format is the literal "%s: %w", not a field name, so this also
+// never trips staticcheck's capitalized-error-string check (ST1005) the
+// way a literal "Updates: ..." would.
 func fieldErrorf(field, format string, a ...any) error {
-	return fmt.Errorf(field+": "+format, a...)
+	return fmt.Errorf("%s: %w", field, fmt.Errorf(format, a...))
 }
 
 // Conf renders firstboot.conf, byte for byte as build-firstboot-pkg.sh's
@@ -251,23 +256,34 @@ func Postinstall(conf, key []byte) ([]byte, error) {
 
 var keyLineRE = regexp.MustCompile(`(?m)^(ssh|ecdsa)-`)
 
-// keyTypeAndBody is the first line's first two whitespace-separated
-// fields: the key type, and (if present) the key body, whose first 16
-// characters Build logs -- the same thing
-// `awk '{print $1, substr($2,1,16) "..."}'` does in build-firstboot-pkg.sh.
-func keyTypeAndBody(key []byte) (typ, body string) {
-	line := key
-	if i := bytes.IndexByte(key, '\n'); i >= 0 {
-		line = key[:i]
+// keyLines is every non-empty, non-comment line of an authorized_keys
+// file, trimmed: what carries a key. A line whose first non-whitespace
+// character is '#' is a comment and is never a key -- not for the
+// Ed25519 refusal below, not for the per-line "may not understand it"
+// warning, and not for Build's "authorized key:" log line.
+//
+// This is a deliberate ruling, not a literal port: build-firstboot-pkg.sh
+// runs `awk '{print $1}'` over EVERY line, comments included, and matches
+// `case *ed25519*` against the whole multi-line result -- so a key file
+// with a `# my laptop key` comment above an Ed25519 key IS refused by the
+// shell (MEASURED: awk's $1 for that comment line is "#", but the
+// Ed25519 line's "ssh-ed25519" is still present as a substring of the
+// joined multi-line string, which `*ed25519*` matches), while the Go
+// code here previously looked only at the first line and so missed it
+// entirely -- a mistake that ALSO made Build's "authorized key:" log line
+// print "#", not the key's real type. Scanning every non-comment line,
+// rather than reproducing the shell's join-then-glob quirk, fixes both:
+// see TestKeyRules for the failing case this replaces.
+func keyLines(key []byte) []string {
+	var out []string
+	for _, line := range strings.Split(string(key), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out = append(out, line)
 	}
-	fields := strings.Fields(string(line))
-	if len(fields) > 0 {
-		typ = fields[0]
-	}
-	if len(fields) > 1 {
-		body = fields[1]
-	}
-	return
+	return out
 }
 
 func matchesAny(s string, choices ...string) bool {
@@ -300,24 +316,39 @@ func validateKey(path string, key []byte, hasOpenSSH bool, tag string, log func(
 		return fieldErrorf("SSHKey", "%s does not look like an SSH public key", path)
 	}
 
-	typ, _ := keyTypeAndBody(key)
-	if hasOpenSSH {
-		if !matchesAny(typ, "ssh-ed25519", "ssh-rsa", "ssh-dss") &&
-			!strings.HasPrefix(typ, "ecdsa-sha2-") && !strings.HasPrefix(typ, "sk-") {
-			if log != nil {
-				log("%s is a %s key; OpenSSH %s may not understand it", path, typ, tag)
+	lines := keyLines(key)
+
+	// The Ed25519 refusal looks at EVERY non-comment line, not just the
+	// first: see keyLines' comment for the MEASURED shell behavior this
+	// fixes. Checked in its own pass, before any warning, so a later
+	// line's refusal is never preceded by an earlier line's warning.
+	if !hasOpenSSH {
+		for _, line := range lines {
+			typ := strings.Fields(line)[0]
+			if strings.Contains(typ, "ed25519") {
+				return fieldErrorf("SSHKey", "%s is an Ed25519 key, and a stock OS X 10.9 guest cannot use one: "+
+					"it ships OpenSSH 6.2, and Ed25519 arrived in 6.5. Build the image with the family's OpenSSH "+
+					"(the default -- see image/build-image.sh --openssh), or use an RSA or ECDSA key: "+
+					"ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa", path)
 			}
 		}
-		return nil
 	}
-	if strings.Contains(typ, "ed25519") {
-		return fieldErrorf("SSHKey", "%s is an Ed25519 key, and a stock OS X 10.9 guest cannot use one: "+
-			"it ships OpenSSH 6.2, and Ed25519 arrived in 6.5. Build the image with the family's OpenSSH "+
-			"(the default -- see image/build-image.sh --openssh), or use an RSA or ECDSA key: "+
-			"ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa", path)
-	}
-	if !matchesAny(typ, "ssh-rsa", "ssh-dss") && !strings.HasPrefix(typ, "ecdsa-sha2-") {
-		if log != nil {
+
+	for _, line := range lines {
+		typ := strings.Fields(line)[0]
+		var ok bool
+		if hasOpenSSH {
+			ok = matchesAny(typ, "ssh-ed25519", "ssh-rsa", "ssh-dss") ||
+				strings.HasPrefix(typ, "ecdsa-sha2-") || strings.HasPrefix(typ, "sk-")
+		} else {
+			ok = matchesAny(typ, "ssh-rsa", "ssh-dss") || strings.HasPrefix(typ, "ecdsa-sha2-")
+		}
+		if ok || log == nil {
+			continue
+		}
+		if hasOpenSSH {
+			log("%s is a %s key; OpenSSH %s may not understand it", path, typ, tag)
+		} else {
 			log("%s is a %s key; OS X 10.9's OpenSSH 6.2 may not understand it", path, typ)
 		}
 	}
@@ -431,7 +462,11 @@ func Build(ctx context.Context, r proc.Runner, c Config, out string, log func(st
 	if err := tmp.Close(); err != nil {
 		return "", err
 	}
-	if err := r.Run(ctx, proc.Cmd{Name: "sh", Args: []string{"-n", tmpName}}); err != nil {
+	var stderr bytes.Buffer
+	if err := r.Run(ctx, proc.Cmd{Name: "sh", Args: []string{"-n", tmpName}, Stderr: &stderr}); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", fmt.Errorf("the assembled postinstall is not valid shell: %s: %w", msg, err)
+		}
 		return "", fmt.Errorf("the assembled postinstall is not valid shell: %w", err)
 	}
 
@@ -443,27 +478,7 @@ func Build(ctx context.Context, r proc.Runner, c Config, out string, log func(st
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
-	tmpOut := out + ".tmp"
-	f, err := os.Create(tmpOut)
-	if err != nil {
-		return "", err
-	}
-	if _, err := f.Write(pkg); err != nil {
-		f.Close()
-		os.Remove(tmpOut)
-		return "", err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmpOut)
-		return "", err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmpOut)
-		return "", err
-	}
-	if err := os.Rename(tmpOut, out); err != nil {
-		os.Remove(tmpOut)
+	if err := writeAtomic(out, pkg); err != nil {
 		return "", err
 	}
 
@@ -472,16 +487,52 @@ func Build(ctx context.Context, r proc.Runner, c Config, out string, log func(st
 		return "", err
 	}
 	sidecar := fmt.Sprintf("%s  %s\n", sum, filepath.Base(out))
-	if err := os.WriteFile(out+".sha256", []byte(sidecar), 0o644); err != nil {
+	if err := writeAtomic(out+".sha256", []byte(sidecar)); err != nil {
 		return "", err
 	}
 
 	log("built %s (%d bytes), sha256 %s", out, len(pkg), sum)
-	typ, body := keyTypeAndBody(key)
-	if len(body) > 16 {
-		body = body[:16]
+	for _, line := range keyLines(key) {
+		fields := strings.Fields(line)
+		typ, body := fields[0], ""
+		if len(fields) > 1 {
+			body = fields[1]
+		}
+		if len(body) > 16 {
+			body = body[:16]
+		}
+		log("authorized key: %s %s...", typ, body)
 	}
-	log("authorized key: %s %s...", typ, body)
 
 	return sum, nil
+}
+
+// writeAtomic writes data to path by creating path+".tmp", syncing it,
+// and renaming it into place: a reader never sees a partial file. Build
+// uses this for both the package itself and its out.sha256 sidecar.
+func writeAtomic(path string, data []byte) error {
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }

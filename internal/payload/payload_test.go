@@ -90,6 +90,15 @@ func extractPostinstall(t *testing.T, pkg []byte) []byte {
 // bash is unavailable; CI has all three.
 func shellPostinstall(t *testing.T, args ...string) []byte {
 	t.Helper()
+	return shellPostinstallEnv(t, nil, args...)
+}
+
+// shellPostinstallEnv is shellPostinstall with extra environment
+// variables, e.g. MQG_FIRSTBOOT_PASSWORD=... -- build-firstboot-pkg.sh
+// takes a password only that way (its usage text: "Environment:
+// MQG_FIRSTBOOT_PASSWORD sets an account secret"), never as a flag.
+func shellPostinstallEnv(t *testing.T, extraEnv []string, args ...string) []byte {
+	t.Helper()
 	for _, cmd := range []string{"python3", "sha256sum", "bash"} {
 		if _, err := exec.LookPath(cmd); err != nil {
 			t.Skipf("%s not available", cmd)
@@ -100,7 +109,7 @@ func shellPostinstall(t *testing.T, args ...string) []byte {
 	script := filepath.Join(repoRoot(), "image", "payload", "build-firstboot-pkg.sh")
 	cmdArgs := append([]string{script, "--out", out}, args...)
 	cmd := exec.Command("bash", cmdArgs...)
-	cmd.Env = append(os.Environ(), "MQG_IMAGE_DIR="+dir)
+	cmd.Env = append(append(os.Environ(), "MQG_IMAGE_DIR="+dir), extraEnv...)
 	if combined, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build-firstboot-pkg.sh: %v: %s", err, combined)
 	}
@@ -202,6 +211,57 @@ func TestConfWithOpenSSHAndUpdatesMatchesTheShell(t *testing.T) {
 	}
 }
 
+// TestConfWithPasswordMatchesTheShell is fix round 1's minor 5:
+// build-firstboot-pkg.sh DOES support a password offline, via the
+// MQG_FIRSTBOOT_PASSWORD environment variable (never a flag, and never
+// committed to the repository -- see that script's usage text), so this
+// is a real parity test like the other two, not a placement assertion
+// against the brief alone.
+func TestConfWithPasswordMatchesTheShell(t *testing.T) {
+	dir := t.TempDir()
+	key := rsaPubKey(t)
+	keyPath := filepath.Join(dir, "rsa.pub")
+	if err := os.WriteFile(keyPath, key, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := DefaultConfig()
+	c.Password = "hunter2"
+	conf, err := Conf(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Postinstall(conf, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := shellPostinstallEnv(t, []string{"MQG_FIRSTBOOT_PASSWORD=hunter2"}, "--ssh-key", keyPath)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("postinstall with a password differs from the shell tree's:\n--- go ---\n%s\n--- shell ---\n%s", got, want)
+	}
+}
+
+// TestConfPlacesThePasswordLineLast checks the conf's line order directly
+// against the brief: header; account fields; MQG_FB_ADMIN_GID; OpenSSH
+// block; updates block; password last. TestConfWithPasswordMatchesTheShell
+// above already proves this against the shell tree byte for byte; this
+// test pins the same fact at the Conf level, independent of bash/python3
+// being present.
+func TestConfPlacesThePasswordLineLast(t *testing.T) {
+	c := DefaultConfig()
+	c.Password = "hunter2"
+	conf, err := Conf(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(conf), "\n"), "\n")
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, "MQG_FB_PASSWORD=") {
+		t.Fatalf("MQG_FB_PASSWORD is not the last line:\n%s", conf)
+	}
+}
+
 func TestANoneConfSaysNothingAboutUpdates(t *testing.T) {
 	conf, err := Conf(DefaultConfig())
 	if err != nil {
@@ -209,6 +269,18 @@ func TestANoneConfSaysNothingAboutUpdates(t *testing.T) {
 	}
 	if bytes.Contains(conf, []byte("MQG_FB_UPDATES")) {
 		t.Fatalf("a --updates none conf mentions updates:\n%s", conf)
+	}
+}
+
+// TestConfErrorsNameTheOffendingField is fix round 1's minor 5: a value
+// Conf cannot quote must say which Config field it came from, not just
+// bashQuote's own bare complaint about the byte it choked on.
+func TestConfErrorsNameTheOffendingField(t *testing.T) {
+	c := DefaultConfig()
+	c.RealName = "bad\x01name"
+	_, err := Conf(c)
+	if err == nil || !strings.Contains(err.Error(), "RealName") {
+		t.Fatalf("want an error naming RealName, got %v", err)
 	}
 }
 
@@ -266,6 +338,95 @@ func TestKeyRules(t *testing.T) {
 			t.Fatal("want an error")
 		}
 	})
+
+	// Fix round 1, Important 1: build-firstboot-pkg.sh's
+	// `awk '{print $1}'` runs over EVERY line of the key file, and its
+	// `case *ed25519*` matches that whole multi-line result -- so a
+	// comment above the real key does not hide it from the shell's own
+	// refusal. MEASURED: a key file with "# my laptop key" on line 1 and
+	// "ssh-ed25519 ..." on line 2 makes build-firstboot-pkg.sh exit 1
+	// with the Ed25519/6.5 message. The Go code before this fix looked
+	// only at the first line, returned nil, and (per Build's log)
+	// reported the key's type as "#".
+	t.Run("a commented Ed25519 key is refused without OpenSSH", func(t *testing.T) {
+		c := DefaultConfig()
+		c.SSHKey = write("commented-ed25519.pub", append([]byte("# my laptop key\n"), ed25519PubKey(t)...))
+		_, err := validateConfig(c, t.Logf)
+		if err == nil || !strings.Contains(err.Error(), "6.5") {
+			t.Fatalf("want an error mentioning 6.5, got %v", err)
+		}
+	})
+
+	t.Run("a commented Ed25519 key is accepted with OpenSSH", func(t *testing.T) {
+		c := DefaultConfig()
+		c.SSHKey = write("commented-ed25519-ok.pub", append([]byte("# my laptop key\n"), ed25519PubKey(t)...))
+		c.OpenSSHPkgs = []string{fakePkg(t, dir, "b3.pkg"), fakePkg(t, dir, "b4.pkg")}
+		c.OpenSSHTag = "10.5p1-mavericks.2"
+		if _, err := validateConfig(c, t.Logf); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("a blank first line does not hide an Ed25519 key on the second", func(t *testing.T) {
+		c := DefaultConfig()
+		c.SSHKey = write("blank-first-ed25519.pub", append([]byte("\n"), ed25519PubKey(t)...))
+		_, err := validateConfig(c, t.Logf)
+		if err == nil || !strings.Contains(err.Error(), "6.5") {
+			t.Fatalf("want an error mentioning 6.5, got %v", err)
+		}
+	})
+
+	t.Run("a comment above an RSA key is accepted with no bogus warning", func(t *testing.T) {
+		var logs []string
+		capture := func(format string, a ...any) { logs = append(logs, fmt.Sprintf(format, a...)) }
+		c := DefaultConfig()
+		c.SSHKey = write("commented-rsa.pub", append([]byte("# my laptop key\n"), rsaPubKey(t)...))
+		if _, err := validateConfig(c, capture); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, l := range logs {
+			if strings.Contains(l, "a # key") {
+				t.Errorf("bogus warning about the comment line, not the real key: %q", l)
+			}
+		}
+	})
+}
+
+// TestBuildLogsTheRealKeyType is fix round 1's Important 1: the
+// "authorized key:" line Build logs must name the key's real type, not
+// "#" -- the same bug as the refusal above, on the logging side.
+func TestBuildLogsTheRealKeyType(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "commented.pub")
+	if err := os.WriteFile(keyPath, append([]byte("# my laptop key\n"), rsaPubKey(t)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := DefaultConfig()
+	c.SSHKey = keyPath
+
+	var logs []string
+	capture := func(format string, a ...any) { logs = append(logs, fmt.Sprintf(format, a...)) }
+	out := filepath.Join(dir, "mqg-firstboot.pkg")
+	if _, err := Build(context.Background(), proc.Exec{}, c, out, capture); err != nil {
+		t.Fatal(err)
+	}
+
+	var found bool
+	for _, l := range logs {
+		if !strings.HasPrefix(l, "authorized key: ") {
+			continue
+		}
+		found = true
+		if strings.Contains(l, "authorized key: #") {
+			t.Errorf("logged the comment marker as the key type: %q", l)
+		}
+		if !strings.Contains(l, "ssh-rsa") {
+			t.Errorf("did not log the real key type: %q", l)
+		}
+	}
+	if !found {
+		t.Fatal(`no "authorized key:" log line`)
+	}
 }
 
 func TestPackageRules(t *testing.T) {
@@ -396,6 +557,15 @@ func TestBuildWritesThePackageAndSidecarDeterministically(t *testing.T) {
 	if string(sidecar) != want {
 		t.Fatalf("sidecar = %q, want %q", sidecar, want)
 	}
+
+	// Fix round 1, minor 4: the sidecar is written the same tmp-then-rename
+	// way as the package itself, so no .tmp file is left behind.
+	if _, err := os.Stat(out1 + ".sha256.tmp"); !os.IsNotExist(err) {
+		t.Fatalf("a sidecar .tmp file was left behind: %v", err)
+	}
+	if _, err := os.Stat(out1 + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("a package .tmp file was left behind: %v", err)
+	}
 }
 
 func TestTheBuiltPostinstallInstallsThePayloadOnATargetOffline(t *testing.T) {
@@ -525,5 +695,44 @@ func TestBuildRefusesAnInvalidPostinstall(t *testing.T) {
 	}
 	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
 		t.Fatal("Build wrote a package despite the invalid postinstall")
+	}
+
+	// Fix round 1, minor 3: Build must check the assembled postinstall
+	// with exactly one `sh -n <file>` call, not run anything else.
+	if len(fake.Calls) != 1 {
+		t.Fatalf("want exactly one command run, got %d: %+v", len(fake.Calls), fake.Calls)
+	}
+	if fake.Calls[0].Name != "sh" {
+		t.Fatalf("want sh run, got %q", fake.Calls[0].Name)
+	}
+	if len(fake.Calls[0].Args) == 0 || fake.Calls[0].Args[0] != "-n" {
+		t.Fatalf("want sh's first argument to be -n, got %v", fake.Calls[0].Args)
+	}
+}
+
+// TestBuildIncludesShStderrInTheError is fix round 1's minor 2: sh -n's
+// own complaint (e.g. "line 42: syntax error") is what actually says
+// what is wrong with the assembled postinstall, and Build's error must
+// carry it, not just report that sh exited non-zero.
+func TestBuildIncludesShStderrInTheError(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "id_rsa.pub")
+	if err := os.WriteFile(keyPath, rsaPubKey(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := DefaultConfig()
+	c.SSHKey = keyPath
+
+	out := filepath.Join(dir, "mqg-firstboot.pkg")
+	fake := &proc.Fake{Handle: func(cmd proc.Cmd) error {
+		if cmd.Stderr != nil {
+			cmd.Stderr.Write([]byte("sh: line 42: syntax error near unexpected token\n"))
+		}
+		return &proc.ExitError{Cmd: cmd.String(), Code: 2}
+	}}
+
+	_, err := Build(context.Background(), fake, c, out, t.Logf)
+	if err == nil || !strings.Contains(err.Error(), "syntax error near unexpected token") {
+		t.Fatalf("want sh -n's stderr in the error, got %v", err)
 	}
 }
