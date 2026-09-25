@@ -5,7 +5,9 @@ package manifest
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -115,7 +117,7 @@ func (m Manifest) SSHKeyFingerprint() string {
 // List is every manifest in dir that has its image beside it, newest
 // first.
 func List(dir string) ([]Manifest, error) {
-	paths, err := filepath.Glob(filepath.Join(dir, "*.manifest"))
+	paths, err := manifestFiles(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +139,7 @@ func List(dir string) ([]Manifest, error) {
 // beside it: whether List would find something, without reading any
 // manifest. A missing dir holds nothing.
 func Any(dir string) bool {
-	paths, err := filepath.Glob(filepath.Join(dir, "*.manifest"))
+	paths, err := manifestFiles(dir)
 	if err != nil {
 		return false
 	}
@@ -147,6 +149,27 @@ func Any(dir string) bool {
 		}
 	}
 	return false
+}
+
+// manifestFiles is every *.manifest in dir, sorted; none when dir does
+// not exist. The directory is read, not globbed, so that one holding a
+// glob character -- "[" is malformed, "a[1]" matches "a1" -- is taken
+// literally.
+func manifestFiles(dir string) ([]string, error) {
+	ents, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".manifest") {
+			paths = append(paths, filepath.Join(dir, e.Name()))
+		}
+	}
+	return paths, nil
 }
 
 // Find is the manifest for the image named name.

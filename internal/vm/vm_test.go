@@ -19,7 +19,12 @@ import (
 // home builds a VMAVS_HOME the way the shell pipeline leaves it.
 func home(t *testing.T) (config.Paths, manifest.Manifest) {
 	t.Helper()
-	p := config.Paths{Home: t.TempDir()}
+	return homeAt(t, t.TempDir())
+}
+
+func homeAt(t *testing.T, dir string) (config.Paths, manifest.Manifest) {
+	t.Helper()
+	p := config.Paths{Home: dir}
 	for _, f := range []string{p.OVMFCode(), p.OVMFVarsTemplate(), filepath.Join(p.Work(), "opencore-p3.img"),
 		filepath.Join(p.Images(), "img.qcow2")} {
 		os.MkdirAll(filepath.Dir(f), 0o755)
@@ -383,5 +388,24 @@ func TestCloseLeavesTheLockToAnyOtherHolder(t *testing.T) {
 	qemu.Close()
 	if held, err := locked(filepath.Join(r.Dir, "state")); err != nil || held {
 		t.Fatalf("after the last descriptor closed: held=%v err=%v, want released", held, err)
+	}
+}
+
+// VMAVS_HOME is taken literally: "[" alone is a malformed glob, and
+// "a[1]" one that matches "a1" and not itself.
+func TestLiveTakesTheHomeLiterally(t *testing.T) {
+	for _, name := range []string{"vmavs[", "a[1]"} {
+		t.Run(name, func(t *testing.T) {
+			p, m := homeAt(t, filepath.Join(t.TempDir(), name))
+			r, err := Prepare(context.Background(), &proc.Fake{}, p, m, m.Hardware(), "q", 4242, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Remove()
+			live, err := Live(p)
+			if err != nil || len(live) != 1 || live[0].Dir != r.Dir {
+				t.Fatalf("live=%+v err=%v", live, err)
+			}
+		})
 	}
 }

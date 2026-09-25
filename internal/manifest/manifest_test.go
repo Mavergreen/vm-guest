@@ -83,3 +83,28 @@ func TestAnyIsWhetherListWouldFindSomething(t *testing.T) {
 		t.Fatal("a manifest without its image is not an image")
 	}
 }
+
+// The directory is taken literally: "[" alone is a malformed glob, and
+// "a[1]" one that matches "a1" and not itself.
+func TestListTakesTheDirectoryLiterally(t *testing.T) {
+	for _, name := range []string{"images[", "a[1]"} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), name)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for f, body := range map[string]string{"x.manifest": "name\tx\n", "x.qcow2": "x"} {
+				if err := os.WriteFile(filepath.Join(dir, f), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ms, err := List(dir)
+			if err != nil || len(ms) != 1 || ms[0].Name != "x" {
+				t.Fatalf("List = %v, %v", names(ms), err)
+			}
+			if !Any(dir) {
+				t.Fatal("Any found nothing")
+			}
+		})
+	}
+}

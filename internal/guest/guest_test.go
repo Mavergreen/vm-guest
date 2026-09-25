@@ -285,3 +285,19 @@ func TestStatusTreatsAMissingExitStatusAs255(t *testing.T) {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
 }
+
+// HOME and the keys directory are taken literally: "[" alone is a
+// malformed glob, and "a[1]" one that matches "a1" and not itself.
+func TestKeyCandidatesTakeTheirDirectoriesLiterally(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "h[")
+	keys := filepath.Join(t.TempDir(), "a[1]", "keys")
+	os.MkdirAll(filepath.Join(home, ".ssh"), 0o700)
+	os.MkdirAll(keys, 0o700)
+	_, k, _ := ed25519.GenerateKey(rand.Reader)
+	user := writeKey(t, filepath.Join(home, ".ssh"), "id_ed25519", k)
+	built := writeKey(t, keys, "mqg_rsa", k)
+	getenv := func(n string) string { return map[string]string{"HOME": home}[n] }
+	if got := KeyCandidates(getenv, keys); !slices.Equal(got, []string{user, built}) {
+		t.Fatalf("got %v, want %v", got, []string{user, built})
+	}
+}

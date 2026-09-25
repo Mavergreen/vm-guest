@@ -2,6 +2,7 @@ package firmware
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -179,9 +180,15 @@ func (b *Builder) assembleUDK(ctx context.Context, files map[string]string) erro
 			return err
 		}
 	}
-	patches, err := filepath.Glob(filepath.Join(b.src(), "Patches", "*"))
-	if err != nil {
+	// Read, not globbed, so that a VMAVS_HOME holding a glob character
+	// -- "[" is malformed, "a[1]" matches "a1" -- is taken literally.
+	var patches []string
+	ents, err := os.ReadDir(filepath.Join(b.src(), "Patches"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	for _, e := range ents {
+		patches = append(patches, filepath.Join(b.src(), "Patches", e.Name()))
 	}
 	sort.Strings(patches)
 	for _, p := range patches {

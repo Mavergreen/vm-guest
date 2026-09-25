@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -172,12 +173,21 @@ func (r *Run) Remove() error {
 // but cannot yet be parsed, in the narrow window before that write lands,
 // is still a live run -- just not one Live can describe yet.
 func Live(p config.Paths) ([]State, error) {
-	states, err := filepath.Glob(filepath.Join(p.Run(), "*", "state"))
+	// Read, not globbed, so that a VMAVS_HOME holding a glob character
+	// -- "[" is malformed, "a[1]" matches "a1" -- is taken literally.
+	runs, err := os.ReadDir(p.Run())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	var out []State
-	for _, f := range states {
+	for _, e := range runs {
+		f := filepath.Join(p.Run(), e.Name(), "state")
+		if _, err := os.Lstat(f); err != nil {
+			continue
+		}
 		held, err := locked(f)
 		if err != nil || !held {
 			continue

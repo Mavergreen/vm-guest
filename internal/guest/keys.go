@@ -18,16 +18,29 @@ func KeyCandidates(getenv func(string) string, keysDir string) []string {
 	if k := getenv("VMAVS_SSH_KEY"); k != "" {
 		out = append(out, k)
 	}
-	for _, pattern := range []string{
-		filepath.Join(getenv("HOME"), ".ssh", "id_*.pub"),
-		filepath.Join(keysDir, "*.pub"),
+	for _, d := range []struct{ dir, prefix string }{
+		{filepath.Join(getenv("HOME"), ".ssh"), "id_"},
+		{keysDir, ""},
 	} {
-		pubs, _ := filepath.Glob(pattern)
-		for _, pub := range pubs {
+		for _, pub := range pubKeys(d.dir, d.prefix) {
 			priv := strings.TrimSuffix(pub, ".pub")
 			if _, err := os.Stat(priv); err == nil {
 				out = append(out, priv)
 			}
+		}
+	}
+	return out
+}
+
+// pubKeys is the shell's "$dir"/<prefix>*.pub, sorted. The directory is
+// read, not globbed, so that one holding a glob character -- "[" is
+// malformed, "a[1]" matches "a1" -- is taken literally.
+func pubKeys(dir, prefix string) []string {
+	ents, _ := os.ReadDir(dir)
+	var out []string
+	for _, e := range ents {
+		if n := e.Name(); strings.HasPrefix(n, prefix) && strings.HasSuffix(n, ".pub") {
+			out = append(out, filepath.Join(dir, n))
 		}
 	}
 	return out

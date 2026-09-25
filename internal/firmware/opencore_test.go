@@ -659,3 +659,28 @@ func TestOpenCoreAFailedUpstreamPatchLeavesNoMarker(t *testing.T) {
 		t.Errorf("the tree was not reassembled: %d upstream patch calls, then %d", before, after)
 	}
 }
+
+// VMAVS_HOME is taken literally when the upstream patches are listed:
+// "[" alone is a malformed glob, and "a[1]" one that matches "a1".
+func TestOpenCorePatchesAreFoundWhateverTheHome(t *testing.T) {
+	for _, name := range []string{"v[", "a[1]"} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.home = filepath.Join(f.home, name)
+			if err := os.MkdirAll(f.home, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			f.b.Paths.Home = f.home
+			f.mustOpenCore()
+			src := filepath.Join(f.home, "build", "OpenCorePkg-1.0.7")
+			var got []string
+			for _, c := range f.applies(filepath.Join(src, "UDK"), "--ignore-whitespace") {
+				got = append(got, c.Args[len(c.Args)-1])
+			}
+			want := []string{filepath.Join(src, "Patches", "0001-first.patch"), filepath.Join(src, "Patches", "0002-second.patch")}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("upstream patches applied: %v, want %v", got, want)
+			}
+		})
+	}
+}
