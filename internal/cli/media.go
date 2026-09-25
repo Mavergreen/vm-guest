@@ -29,9 +29,11 @@ with a .sha256 sidecar beside it, and its path is printed on stdout;
 progress goes to stderr. The scratch, several gigabytes of raw
 conversions, goes in $VMAVS_HOME/work/media/.
 
-The ESD is fetched and verified first, as 'vmavs fetch esd' does,
-adopting the shell tree's download (media/InstallESD.dmg) where it can.
-dmg2img converts it here, mkfs.hfsplus makes the empty volume, and every
+It first checks that this host can build media at all -- dmg2img,
+mkfs.hfsplus and the privops microVM's requirements, as 'vmavs doctor'
+reports them -- and only then fetches and verifies the ESD, as
+'vmavs fetch esd' does, adopting the shell tree's download
+(media/InstallESD.dmg) where it can. dmg2img converts it here, mkfs.hfsplus makes the empty volume, and every
 read and write of an HFS+ volume happens in the privops microVM -- the
 host's own kernel and a static busybox, booted under QEMU with the images
 as its disks, where the build is root and the host is not -- in four
@@ -76,6 +78,7 @@ the per-file list first.
 // mediaBuilder is what cmdMedia needs of *media.Builder: the one seam a
 // test replaces, to record what cmdMedia asked for without building.
 type mediaBuilder interface {
+	Preflight() error
 	Build(ctx context.Context, esd string, o media.Options) (string, error)
 	Describe(w io.Writer, esd string, o media.Options) error
 	ContentDigest(ctx context.Context, img string, listing io.Writer) (media.Digest, error)
@@ -83,8 +86,18 @@ type mediaBuilder interface {
 
 var newMediaBuilder = func(b *media.Builder) mediaBuilder { return b }
 
-// pathList is a repeatable flag's values, in the order given.
+// pathList is a package flag's values, in the order given: every
+// --extra-pkg, and --firstboot-pkg, of which the last one given counts,
+// as in the shell. Both refuse an empty path the same way.
 type pathList []string
+
+// last is the last value given, or "".
+func (l pathList) last() string {
+	if len(l) == 0 {
+		return ""
+	}
+	return l[len(l)-1]
+}
 
 func (l *pathList) String() string { return strings.Join(*l, " ") }
 
@@ -117,7 +130,8 @@ func (m *mibFlag) Set(s string) error {
 func cmdMedia(ctx context.Context, e *Env, args []string) error {
 	fs := newFlags("media")
 	autoinstall := fs.Bool("autoinstall", false, "add the unattended-install hooks (image/autoinstall/)")
-	firstboot := fs.String("firstboot-pkg", "", "carry this package and list it in OSInstall.collection (implies --autoinstall)")
+	var firstboot pathList
+	fs.Var(&firstboot, "firstboot-pkg", "carry this package and list it in OSInstall.collection (implies --autoinstall)")
 	var extras pathList
 	fs.Var(&extras, "extra-pkg", "carry this package too, NOT listed in OSInstall.collection; repeatable (implies --autoinstall)")
 	var space mibFlag
@@ -151,9 +165,6 @@ func cmdMedia(ctx context.Context, e *Env, args []string) error {
 	if *list {
 		return usagef("--list goes with digest only")
 	}
-	if set["firstboot-pkg"] && *firstboot == "" {
-		return usagef("--firstboot-pkg wants a path")
-	}
 	if *timeout <= 0 {
 		return usagef("--privops-timeout wants a positive duration, such as 30m, not %v", *timeout)
 	}
@@ -169,7 +180,7 @@ func cmdMedia(ctx context.Context, e *Env, args []string) error {
 	// Autoinstall is only what was asked for: a package enabling the
 	// injectables is media.Injectables.Enabled's to say.
 	o := media.Options{
-		Injectables:   media.Injectables{Autoinstall: *autoinstall, FirstbootPkg: *firstboot, ExtraPkgs: []string(extras)},
+		Injectables:   media.Injectables{Autoinstall: *autoinstall, FirstbootPkg: firstboot.last(), ExtraPkgs: []string(extras)},
 		ExtraSpaceMiB: int(space),
 		Force:         *force,
 		KeepWork:      *keepWork,
@@ -200,11 +211,17 @@ func cmdMedia(ctx context.Context, e *Env, args []string) error {
 	if b.VM, err = mediaBackend(e, *timeout); err != nil {
 		return err
 	}
+	mb := newMediaBuilder(b)
+	// Before the fetch: a host that cannot build media must not download
+	// 5.2 GB to find that out. Build asks again, as it always does.
+	if err := mb.Preflight(); err != nil {
+		return err
+	}
 	esd, err := installESD(ctx, e, "media", p, reg)
 	if err != nil {
 		return err
 	}
-	out, err := newMediaBuilder(b).Build(ctx, esd, o)
+	out, err := mb.Build(ctx, esd, o)
 	// A path with an error is media in place without its sidecar: the
 	// output exists, so it is printed, and the error still fails this.
 	if out != "" {

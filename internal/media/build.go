@@ -227,6 +227,36 @@ func staleSidecarTemps(out string) ([]string, error) {
 	return p, nil
 }
 
+// Preflight is whether this host can build media at all: the privops
+// microVM's requirements (VM.Missing) and dmg2img and mkfs.hfsplus on
+// PATH, every missing one named at once. Build asks it first, and so
+// does vmavs media before it fetches the ESD: a host that cannot boot the
+// microVM should find out in a second and by name, not after a 5.2 GB
+// download or twenty minutes of dmg2img. It reads nothing but PATH and
+// the backend's own checks.
+func (b *Builder) Preflight() error {
+	var parts []string
+	if m := b.VM.Missing(); len(m) > 0 {
+		for _, l := range m {
+			b.logf("  missing: %s", l)
+		}
+		parts = append(parts, fmt.Sprintf("the privops microVM is not available on this host, and it is how the media is built at all -- nothing here installs anything; see vmavs doctor. Missing: %s", strings.Join(m, "; ")))
+	}
+	var tools []string
+	for _, tool := range []string{"dmg2img", "mkfs.hfsplus"} {
+		if _, err := b.Runner.LookPath(tool); err != nil {
+			tools = append(tools, tool+" (not on PATH)")
+		}
+	}
+	if len(tools) > 0 {
+		parts = append(parts, "the media build needs "+strings.Join(tools, " and "))
+	}
+	if len(parts) > 0 {
+		return errors.New(strings.Join(parts, "; and "))
+	}
+	return nil
+}
+
 // Build makes the installer media from esd and returns its path,
 // Paths.InstallerMedia(), with a .sha256 sidecar beside it:
 //
@@ -252,19 +282,8 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	if err := checkSpace(o); err != nil {
 		return "", err
 	}
-	// Asked before five gigabytes of dmg2img, not when the microVM is
-	// first needed: a host that cannot boot it should find out in a
-	// second and by name, not after twenty minutes of wasted work.
-	if m := b.VM.Missing(); len(m) > 0 {
-		for _, l := range m {
-			b.logf("  missing: %s", l)
-		}
-		return "", fmt.Errorf("the privops microVM is not available on this host, and it is how the media is built at all -- nothing here installs anything; see vmavs doctor. Missing: %s", strings.Join(m, "; "))
-	}
-	for _, tool := range []string{"dmg2img", "mkfs.hfsplus"} {
-		if _, err := b.Runner.LookPath(tool); err != nil {
-			return "", fmt.Errorf("the media build needs %s (not on PATH)", tool)
-		}
+	if err := b.Preflight(); err != nil {
+		return "", err
 	}
 	if !regularFile(esd) {
 		return "", fmt.Errorf("no InstallESD.dmg at %s -- run vmavs fetch esd", esd)

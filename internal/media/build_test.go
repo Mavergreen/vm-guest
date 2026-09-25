@@ -481,6 +481,44 @@ func TestBuildRefusesWithoutTheBackend(t *testing.T) {
 	}
 }
 
+// TestPreflightNamesEverythingMissing: one check, in one place, that
+// both Build and vmavs media (before it fetches anything) ask. It names
+// every missing thing at once, the backend's lines and the host tools,
+// and Build refuses with exactly its error, having run nothing.
+func TestPreflightNamesEverythingMissing(t *testing.T) {
+	g := newRig(t)
+	if err := g.b.Preflight(); err != nil {
+		t.Fatalf("Preflight on a host with everything = %v", err)
+	}
+
+	g.vm.missing = []string{"qemu-system-x86_64 (not on PATH)", "busybox (not on PATH)"}
+	g.r.Paths = map[string]string{}
+	err := g.b.Preflight()
+	if err == nil {
+		t.Fatal("Preflight passed with nothing present")
+	}
+	for _, m := range append(g.vm.missing, "dmg2img (not on PATH)", "mkfs.hfsplus (not on PATH)") {
+		if !strings.Contains(err.Error(), m) {
+			t.Errorf("Preflight does not name %q: %v", m, err)
+		}
+	}
+	_, berr := g.b.Build(context.Background(), g.esd, Options{})
+	if berr == nil || berr.Error() != err.Error() {
+		t.Fatalf("Build refused with %v, want Preflight's %v", berr, err)
+	}
+	if len(g.r.Calls) != 0 || len(g.vm.calls) != 0 {
+		t.Fatalf("ran %v and %q", g.r.Calls, g.vm.names())
+	}
+	absent(t, g.b.Paths.Build())
+
+	// Each kind alone keeps the message Build has always given.
+	g.vm.missing = nil
+	g.r.Paths = map[string]string{"mkfs.hfsplus": "/usr/sbin/mkfs.hfsplus"}
+	if err := g.b.Preflight(); err == nil || err.Error() != "the media build needs dmg2img (not on PATH)" {
+		t.Fatalf("Preflight = %v", err)
+	}
+}
+
 func TestBuildRefuses(t *testing.T) {
 	dir := t.TempDir()
 	notXar := writeFile(t, filepath.Join(dir, "not-xar.pkg"), "PK\x03\x04 a zip")

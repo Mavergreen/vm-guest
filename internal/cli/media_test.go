@@ -29,18 +29,24 @@ type recordingMediaBuilder struct {
 	opts     media.Options
 	captured *media.Builder
 
-	buildPath   string
-	buildErr    error
-	describeErr error
-	digestImg   string
-	digest      media.Digest
-	listing     string
+	buildPath    string
+	buildErr     error
+	describeErr  error
+	preflightErr error
+	digestImg    string
+	digest       media.Digest
+	listing      string
 }
 
 func (r *recordingMediaBuilder) Build(_ context.Context, esd string, o media.Options) (string, error) {
 	r.calls = append(r.calls, "Build")
 	r.esd, r.opts = esd, o
 	return r.buildPath, r.buildErr
+}
+
+func (r *recordingMediaBuilder) Preflight() error {
+	r.calls = append(r.calls, "Preflight")
+	return r.preflightErr
 }
 
 func (r *recordingMediaBuilder) Describe(w io.Writer, esd string, o media.Options) error {
@@ -122,8 +128,8 @@ func TestMediaBuildsWithTheFlagsItWasGiven(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, errb.String())
 	}
-	if !slices.Equal(rec.calls, []string{"Build"}) {
-		t.Fatalf("calls=%v, want one Build", rec.calls)
+	if !slices.Equal(rec.calls, []string{"Preflight", "Build"}) {
+		t.Fatalf("calls=%v, want Preflight, then Build", rec.calls)
 	}
 	if rec.esd != esd {
 		t.Fatalf("Build got esd %q, want the adopted %q", rec.esd, esd)
@@ -308,8 +314,6 @@ func TestMediaRefusesBadArguments(t *testing.T) {
 		{"--privops-timeout", "0"},
 		{"--privops-timeout", "-5m"},
 		{"--privops-timeout", "soon"},
-		{"--firstboot-pkg", ""},
-		{"--extra-pkg", ""},
 		{"foo"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -373,5 +377,84 @@ func TestMediaHelpBeginsUsage(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// TestMediaPreflightsBeforeItFetches: a host that cannot build media
+// hears so, naming everything it lacks, before 5.2 GB is downloaded --
+// the osrecovery server sees no request at all. This is the real
+// builder and the real backend, on a Runner that knows no program.
+func TestMediaPreflightsBeforeItFetches(t *testing.T) {
+	asset := []byte("not really Apple's installer")
+	srv, reg := fakeAppleCDN(t, asset)
+	requests := trackRequests(srv)
+	home := t.TempDir()
+	e, out, errb := fetchEnv(map[string]string{"VMAVS_HOME": home, "HOME": t.TempDir()})
+	e.Registry, e.Endpoints, e.Runner = reg, &Endpoints{Recovery: srv.URL}, unameRunner()
+	if code := Run(context.Background(), []string{"media"}, e); code != 1 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
+	if len(*requests) != 0 {
+		t.Fatalf("fetched before the preflight: %v", *requests)
+	}
+	want := []string{"dmg2img (not on PATH)", "mkfs.hfsplus (not on PATH)"}
+	if runtime.GOOS == "linux" {
+		want = append(want, "qemu-system-x86_64 (not on PATH)", "busybox (not on PATH)", "a readable kernel image for 6.1.0-test")
+	} else {
+		want = append(want, "the qemu-linux privops backend")
+	}
+	for _, w := range want {
+		if !strings.Contains(errb.String(), w) {
+			t.Errorf("stderr does not name %q:\n%s", w, errb.String())
+		}
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout=%q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, "cache")); err == nil {
+		t.Fatal("the preflight's failure left a cache behind: something was fetched")
+	}
+}
+
+// TestMediaAFailedPreflightStopsTheBuild: with the builder stubbed, a
+// preflight refusal is the command's error, and neither Build nor a fetch
+// follows.
+func TestMediaAFailedPreflightStopsTheBuild(t *testing.T) {
+	rec := &recordingMediaBuilder{preflightErr: errors.New("the media build needs dmg2img (not on PATH)")}
+	stubMediaBuilder(t, rec)
+	e, _, errb, _, _ := mediaFixture(t)
+	if code := Run(context.Background(), []string{"media"}, e); code != 1 {
+		t.Fatalf("code=%d", code)
+	}
+	if !slices.Equal(rec.calls, []string{"Preflight"}) || !strings.Contains(errb.String(), "dmg2img (not on PATH)") {
+		t.Fatalf("calls=%v stderr=%s", rec.calls, errb.String())
+	}
+	if strings.Contains(errb.String(), "adopted") {
+		t.Fatalf("the ESD was fetched after a failed preflight: %s", errb.String())
+	}
+}
+
+// TestMediaEmptyPackagePathsAreRefusedAlike: --firstboot-pkg and
+// --extra-pkg are one kind of flag, and an empty path is refused by
+// both, in the same words.
+func TestMediaEmptyPackagePathsAreRefusedAlike(t *testing.T) {
+	for _, name := range []string{"--firstboot-pkg", "--extra-pkg"} {
+		rec := &recordingMediaBuilder{}
+		stubMediaBuilder(t, rec)
+		e, _, errb, _, _ := mediaFixture(t)
+		if code := Run(context.Background(), []string{"media", name, ""}, e); code != 2 {
+			t.Fatalf("%s '': code=%d", name, code)
+		}
+		want := fmt.Sprintf("invalid value \"\" for flag -%s: wants a path", strings.TrimPrefix(name, "--"))
+		if !strings.Contains(errb.String(), want) || len(rec.calls) != 0 {
+			t.Fatalf("%s '': calls=%v stderr=%s, want %q", name, rec.calls, errb.String(), want)
+		}
+	}
+	// The last --firstboot-pkg wins, as in the shell.
+	rec := &recordingMediaBuilder{buildPath: "/m"}
+	stubMediaBuilder(t, rec)
+	e, _, errb, _, _ := mediaFixture(t)
+	if code := Run(context.Background(), []string{"media", "--firstboot-pkg", "/a.pkg", "--firstboot-pkg", "/b.pkg"}, e); code != 0 || rec.opts.FirstbootPkg != "/b.pkg" {
+		t.Fatalf("code=%d opts=%+v stderr=%s", code, rec.opts, errb.String())
 	}
 }
