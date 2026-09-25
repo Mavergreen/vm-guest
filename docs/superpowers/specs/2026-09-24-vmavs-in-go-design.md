@@ -384,7 +384,7 @@ plan, and ends with the suite green and the shell reference still working.
 |---|---|
 | **1** | module skeleton, `cli`, `config`, `run`, `machine`, `vmavs run`, `vmavs ssh`, `emit packer`, `doctor`, `version`; the `go` CI job — delivered 2026-09-25 (NOTES.md, "P8 — the Go vmavs boots a built image and answers SSH") |
 | **2** | `pins`, `fetch`, `payload` (xar writer) — delivered 2026-09-25 (NOTES.md, "P8 — vmavs fetch and the Go payload") |
-| **3** | `firmware`, `diskimg` |
+| **3** | `firmware`, `diskimg` — delivered 2026-09-25 (NOTES.md, "P8 — vmavs firmware builds the boot stack, and a guest boots on it") |
 | **4** | `media`, privops |
 | **5** | `pipeline`: `install`, `verify`, manifest, freshness, `vmavs image` |
 | **6** | re-measurement on a KVM host; delete the shell tree and its tests; docs |

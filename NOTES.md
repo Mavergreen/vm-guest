@@ -6846,3 +6846,146 @@ positive.
 **Not measured:** an install that uses the Go-built payload. That waits for
 phase 5, when the Go pipeline can build an image. Also not measured: a full
 5 GB `InstallESD.dmg` download through Go, and any host besides this one.
+
+## 2026-09-25 — P8 — vmavs firmware builds the boot stack, and a guest boots on it
+
+Phase 3 of the Go port (`docs/superpowers/plans/2026-09-25-vmavs-go-phase-3.md`)
+added:
+- `internal/diskimg`: a deterministic GPT and FAT32 writer and reader;
+- `internal/firmware`: the OpenCore, OVMF and EFI-image builds, with the
+  compiler range, ccache and SMBIOS ported from `lib/`;
+- `vmavs fetch firmware`;
+- `vmavs firmware [opencore|ovmf|efi]`.
+
+This entry measures `vmavs firmware` against the shell tree's build on
+this host (gcc 13.3.0, Ubuntu). The binary is `go build -o out/vmavs
+./cmd/vmavs` at 2026-09-25T16:41:52Z. All HTTP went to a dead proxy
+(`HTTP_PROXY`/`HTTPS_PROXY`, and their lower-case forms, set to
+`http://127.0.0.1:9`, with `NO_PROXY` unset).
+
+**The firmware sources, with no network.** MEASURED 2026-09-25T16:45:36Z.
+`VMAVS_HOME=/tmp/vp3.hD7Z5x ./out/vmavs fetch firmware` adopted all 16
+sources from `~/.local/share/mavericks-qemu-guest/build/` in about 1 s:
+- OpenCorePkg 1.0.7;
+- ocbuild's `efibuild.sh`;
+- audk and its 11 submodule tarballs;
+- the Lilu and VirtualSMC release zips.
+
+`/tmp` is a different filesystem from `$HOME` here, so the adoption copied
+the files instead of hard-linking them. Nothing was written to the shell
+tree's home.
+
+**A finding first: the build directory's path length is an input.** The
+first reference build ran with `VMAVS_HOME` in the session scratchpad, a
+path 130 characters long. It died two minutes in with this, from EDK II's
+GenFw:
+
+```
+ERROR: Debug symbol path exceeds maximum allowed range of 255 bytes!
+```
+
+The deepest module's `…/DEBUG/*.dll` path under
+`build/OpenCorePkg-1.0.7/UDK/Build/OpenCorePkg/RELEASE_GCC/X64/` passed
+255 bytes. EDK II writes that path into each PE image, so the path both
+limits the build and is an input to its bytes (INHERITED:
+`lib/ccache.sh`'s note). The default homes are about 40 characters and
+fit. A long `VMAVS_HOME` does not, and today `vmavs firmware` would find
+that out after the fetch and minutes of compiling. The ledger records it
+as a follow-up: refuse too long a build path up front. Everything below
+ran in `/tmp/vp3.hD7Z5x`, which is 15 characters.
+
+**The shell tree's build as the reference, in the temp home.**
+- Started at 2026-09-25T16:45:43Z.
+- The cached tarballs were hard-linked into `$X/build/`. `boot/fetch-opencorepkg.sh`
+  and `boot/fetch-kexts.sh` found them present and verified them.
+- Then `boot/build-opencore.sh` (233 s), `boot/build-ovmf.sh` (135 s) and
+  `boot/build-efi-image.sh $X/work/opencore-shell.img` ran. All exited 0,
+  at 16:51:54Z.
+- The shell's `build/OpenCorePkg-1.0.7`, `artifacts`, `firmware` and
+  `kexts` were then removed. They were all created by these commands in
+  this temp home.
+
+**The Go build, cold, in the same directory.** MEASURED:
+- `vmavs firmware` exited 0 after 376 s, from 16:52:18Z to 16:58:34Z.
+- `build_oc.tool` took 3m59s and OVMF 2m11s.
+- It logged: `compiler: gcc 13.3.0 is inside this project's supported
+  range`, `gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0 (x86_64-linux-gnu)
+  -std=gnu17`.
+
+The eight checksums, identical for both builds (`diff` of the two
+SHA256SUMS pairs was empty):
+
+```
+3af75e7be135d553f39c849b69a2b0ce3d3cf13b35966be527c20c557b0cfc39  OpenCore.efi
+98279d2497151920de16c2b02a3b3323db46fced85346bdaef559cdc82704b3b  BOOTx64.efi
+23230f36f7cb418b946eee81b14f9027bf1e3ea59a5e50b4a192b42c48b1afd9  OpenRuntime.efi
+775877466abe9ae57f1a0e04cdbaceec03d943062050d3bc965680d1256545cd  OpenPartitionDxe.efi
+497ba380605f6ce9ba24fd587f68727e1ed3d7c8fe6d4cd4a8b67dc3f3b9afad  OpenHfsPlus.efi
+122cd54424f7005e0e231ba354d34f2728029e6cb6d78e7ae16483182454ef29  OVMF_CODE.fd
+5d2ac383371b408398accee7ec27c8c09ea5b74a0de0ceea6513388b15be5d1e  OVMF_VARS.fd
+b30ae37941d2b909c965b280562775f8ab845486ebc4686cc56a28132b89c3ad  OVMF.fd
+```
+
+These are not docs/decisions/0004's numbers (OVMF_CODE.fd `195c4dcf…`),
+and they are not expected to be. The build directory is part of the
+bytes, as the path-length finding shows. What this measures is that the
+Go orchestration produces the shell's bytes from the same inputs in the
+same place.
+
+**The EFI images, compared structurally.** A throwaway `go test` opened
+both images with `diskimg.ReadGPT` and `OpenFAT`, and then was deleted.
+Both images have:
+- partition 2048–393182, named `EFI`;
+- the label `EFI`;
+- the same FAT32 geometry: 391135 sectors, 4 sectors per cluster, 32
+  reserved, 2 FATs of 761 sectors, 97395 clusters. The one exception is
+  hidden sectors: 0 in the shell's image, 2048 in Go's. That difference
+  was chosen (plan Ruling 5).
+
+Both hold the same 24 paths, and all 10 files are byte-identical. Go's
+image is `6b95cb24c6a4c6d055a322e85a0702de9a70e44b20f34d0202b13d5fc47c421b`
+(its `.sha256` sidecar says the same). The Go image is deterministic;
+the shell's is not, because of sgdisk's GUIDs and mtools' serial and
+timestamps.
+
+**A guest boots on the Go-built firmware.** MEASURED 2026-09-25T16:59:47Z.
+- `mavericks-20260922`, the newest shell-built image, was *symlinked* into
+  `$X/images`, because `/tmp` cannot hard-link to `$HOME`.
+- `VMAVS_HOME=$X ./out/vmavs run --image mavericks-20260922` was started.
+- QEMU's command line named
+  `/tmp/vp3.hD7Z5x/build/firmware/OVMF_CODE.fd` (pflash 0, read-only), a
+  per-run copy of the Go-built `OVMF_VARS.fd`, and
+  `/tmp/vp3.hD7Z5x/build/opencore.img` (`snapshot=on`).
+- `vmavs ssh` answered after **69 s**, at 17:00:56Z, using
+  `VMAVS_SSH_KEY=~/.local/share/mavericks-qemu-guest/keys/mqg_rsa`:
+
+```
+ProductName:	Mac OS X
+ProductVersion:	10.9.5
+BuildVersion:	13F1911
+Darwin mavericks 13.4.0 Darwin Kernel Version 13.4.0: Mon Jan 11 18:17:34 PST 2016; root:xnu-2422.115.15~1/RELEASE_X86_64 x86_64
+hw.model: iMac14,2
+```
+
+`kill -TERM` stopped the run (`vmavs run: stopped`), and `$X/run` was
+left empty. The image and its manifest in the shell tree's home have the
+same size, mtime, inode and link count as before (`stat` before and
+after, `diff` empty).
+
+**Parity tests** (Tasks 2 and 5–8, 11). Each runs in `go test` on this
+host and skips cleanly where its tool is absent. They compare:
+- the pinned lists against the scripts' `--show-pins`/`--list-*`;
+- the compiler range, ccache and SMBIOS text and plist edit against
+  `lib/compiler.sh`, `lib/ccache.sh` and `lib/smbios.sh`, word for word;
+- the GPT against sgdisk 1.0.10;
+- the FAT32 geometry and the empty filesystem, byte for byte, against
+  mformat 4.0.43, at seven sizes;
+- Go-written images against `fsck.fat -n` and mtools;
+- the EFI image against `boot/build-efi-image.sh` (structural).
+
+**Not measured:**
+- a guest *installed* with Go-built firmware (phase 5);
+- another host;
+- another compiler;
+- ccache (not installed here);
+- `--smbios` other than the default in a real build (only in tests).
