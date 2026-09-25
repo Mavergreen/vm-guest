@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -144,5 +145,95 @@ func TestReleaseOnlyRemovesItsOwnLock(t *testing.T) {
 	}
 	if got := pidIn(t, dir); got != strconv.Itoa(other)+"\n" {
 		t.Fatalf("the later taker's lock was disturbed: %q", got)
+	}
+}
+
+// Many builders racing for one lock, fresh and stale, never both win: a
+// lock is never visible without its pid (the window a mkdir-then-write
+// lock has), and a stale lock is taken over by exactly one of them. Every
+// racer here has this process's pid, which is live, so every loser must be
+// refused. Nothing is left beside the lock but the lock itself.
+func TestRacingBuildersNeverBothWin(t *testing.T) {
+	dead := deadPID(t)
+	const racers, rounds = 8, 300
+	for _, stale := range []bool{false, true} {
+		for round := 0; round < rounds; round++ {
+			parent := t.TempDir()
+			dir := filepath.Join(parent, "out.img.lock")
+			if stale {
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(dead)+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var (
+				mu      sync.Mutex
+				winners []*Lock
+				errs    []error
+				start   = make(chan struct{})
+				wg      sync.WaitGroup
+			)
+			for i := 0; i < racers; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					l, err := Acquire(dir, os.Getpid())
+					mu.Lock()
+					defer mu.Unlock()
+					if err == nil {
+						winners = append(winners, l)
+					} else {
+						errs = append(errs, err)
+					}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			if len(winners) != 1 {
+				t.Fatalf("stale=%v round %d: %d holders (refusals: %v)", stale, round, len(winners), errs)
+			}
+			for _, err := range errs {
+				if !strings.Contains(err.Error(), "is already building") {
+					t.Fatalf("stale=%v round %d: a loser failed otherwise: %v", stale, round, err)
+				}
+			}
+			want := 0
+			if stale {
+				want = dead
+			}
+			if winners[0].TookOver != want {
+				t.Fatalf("stale=%v round %d: TookOver %d, want %d", stale, round, winners[0].TookOver, want)
+			}
+			if err := winners[0].Release(); err != nil {
+				t.Fatal(err)
+			}
+			if left, _ := os.ReadDir(parent); len(left) != 0 {
+				var names []string
+				for _, e := range left {
+					names = append(names, e.Name())
+				}
+				t.Fatalf("stale=%v round %d: left behind %v", stale, round, names)
+			}
+		}
+	}
+}
+
+// A lock that is gone -- removed by hand, say -- is reported as gone,
+// not as held by "pid 0".
+func TestReleaseOfAVanishedLockSaysItIsGone(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "out.img.lock")
+	l, err := Acquire(dir, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	err = l.Release()
+	if err == nil || !strings.Contains(err.Error(), "is gone") || strings.Contains(err.Error(), "pid 0") {
+		t.Fatalf("err = %v", err)
 	}
 }
