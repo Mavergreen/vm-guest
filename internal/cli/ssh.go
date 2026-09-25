@@ -96,10 +96,13 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 // was asked, so this is not a failure to explain.
 func ctrlC() error { return &ExitError{Code: 130} }
 
-// bootingHint explains a Dial failure that has the shape of a guest whose
-// sshd has not come up yet: refused (nothing listening), an EOF partway
-// through the handshake (the guest reset the connection), or a timeout
-// (nothing answered within Target.Timeout).
+// bootingHint explains a Dial failure. Refused (nothing listening), a
+// timeout (nothing answered within Target.Timeout) or an EOF before the
+// guest's sshd said anything (QEMU's forward accepted, then closed) are
+// the shape of a guest still booting. An EOF after its banner is not: the
+// sshd is up and the handshake failed, most likely on an algorithm it
+// advertised but could not run (as Apple's OpenSSH 6.2 does with
+// AES-GCM, NOTES.md 2026-09-25), so waiting would not help.
 func bootingHint(err error, port int) error {
 	if err == nil {
 		return nil
@@ -108,6 +111,11 @@ func bootingHint(err error, port int) error {
 	refused := errors.Is(err, syscall.ECONNREFUSED)
 	timedOut := errors.As(err, &netErr) && netErr.Timeout()
 	eof := errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	if eof && errors.Is(err, guest.ErrHandshakeAfterBanner) {
+		return fmt.Errorf("the guest on port %d answered, then the SSH handshake failed -- its sshd "+
+			"hung up, most likely on an algorithm it offers but cannot run (is the image's "+
+			"manifest right about which OpenSSH it has?): %w", port, err)
+	}
 	if refused || timedOut || eof {
 		return fmt.Errorf("the guest on port %d isn't answering SSH yet -- is it still booting? "+
 			"(vmavs run prints its port): %w", port, err)

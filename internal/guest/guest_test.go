@@ -111,6 +111,26 @@ func TestDialReturnsPromptlyAgainstASilentListener(t *testing.T) {
 	}
 }
 
+// TestDialSaysWhetherTheGuestsSSHDSpokeBeforeHangingUp: an EOF before
+// any banner is a guest whose sshd is not up; one after the banner is an
+// sshd that answered and then failed the handshake. The caller's advice
+// differs, so Dial marks the second.
+func TestDialSaysWhetherTheGuestsSSHDSpokeBeforeHangingUp(t *testing.T) {
+	for _, tc := range []struct {
+		banner string
+		after  bool
+	}{{"", false}, {"SSH-2.0-OpenSSH_6.2\r\n", true}} {
+		addr := guesttest.Hangup(t, tc.banner)
+		_, err := Dial(context.Background(), Target{Addr: addr, User: "mavsuser", Signer: mustEd(t), Timeout: 5 * time.Second})
+		if err == nil || !errors.Is(err, io.EOF) {
+			t.Fatalf("banner %q: err = %v, want an EOF", tc.banner, err)
+		}
+		if got := errors.Is(err, ErrHandshakeAfterBanner); got != tc.after {
+			t.Errorf("banner %q: errors.Is(err, ErrHandshakeAfterBanner) = %v, want %v (err = %v)", tc.banner, got, tc.after, err)
+		}
+	}
+}
+
 func TestDialReturnsCtxErrWhenCancelledMidHandshake(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

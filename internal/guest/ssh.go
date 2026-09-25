@@ -3,12 +3,14 @@
 package guest
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -62,6 +64,32 @@ func (t Target) ClientConfig() *ssh.ClientConfig {
 	return cfg
 }
 
+// ErrHandshakeAfterBanner marks a Dial error from a guest whose sshd is
+// up: it sent its version banner, and then the handshake failed (for an
+// EOF, typically an algorithm it advertised but could not run). Without
+// it an EOF looks the same whether or not anything was listening yet.
+var ErrHandshakeAfterBanner = errors.New("after the guest's sshd answered")
+
+// bannerConn notes whether the server has sent the start of an SSH
+// version line ("SSH-", RFC 4253 §4.2). x/crypto's handshake reads on
+// more than one goroutine, hence the atomic.
+type bannerConn struct {
+	net.Conn
+	seen   atomic.Bool
+	prefix []byte // the first bytes read, until "SSH-" is found in them
+}
+
+func (c *bannerConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 && !c.seen.Load() && len(c.prefix) < 4096 {
+		c.prefix = append(c.prefix, b[:n]...)
+		if bytes.Contains(c.prefix, []byte("SSH-")) {
+			c.seen.Store(true)
+		}
+	}
+	return n, err
+}
+
 // Dial connects and completes the SSH handshake. The handshake itself is
 // bounded by t.Timeout (net.Conn's deadline, since ssh.NewClientConn takes
 // no context); ctx bounds the dial and, if cancelled while the handshake
@@ -92,11 +120,15 @@ func Dial(ctx context.Context, t Target) (*ssh.Client, error) {
 	if t.Timeout > 0 {
 		conn.SetDeadline(time.Now().Add(t.Timeout))
 	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, t.Addr, t.ClientConfig())
+	bc := &bannerConn{Conn: conn}
+	c, chans, reqs, err := ssh.NewClientConn(bc, t.Addr, t.ClientConfig())
 	if err != nil {
 		conn.Close()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if bc.seen.Load() {
+			return nil, fmt.Errorf("ssh %s@%s: %w: %w", t.User, t.Addr, ErrHandshakeAfterBanner, err)
 		}
 		return nil, fmt.Errorf("ssh %s@%s: %w", t.User, t.Addr, err)
 	}

@@ -261,6 +261,31 @@ func TestSSHRefusesAnUnreachablePortWithTheBootingHint(t *testing.T) {
 	}
 }
 
+// TestSSHTellsAHandshakeFailureFromAGuestStillBooting: an EOF before the
+// guest's sshd says anything is a guest still booting; an EOF after its
+// banner is an sshd that is up and failed the handshake, and "still
+// booting?" would send the user to wait for nothing.
+func TestSSHTellsAHandshakeFailureFromAGuestStillBooting(t *testing.T) {
+	home := shortTempDir(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	s, _ := ssh.NewSignerFromKey(priv)
+	writeKeyedImage(t, home, "img", s)
+	block, _ := ssh.MarshalPrivateKey(priv, "explicit")
+	keyPath := filepath.Join(home, "explicit_ed25519")
+	os.WriteFile(keyPath, pem.EncodeToMemory(block), 0o600)
+	for _, tc := range []struct{ banner, want, not string }{
+		{"", "isn't answering SSH yet", "answered, then"},
+		{"SSH-2.0-OpenSSH_6.2\r\n", "answered, then the SSH handshake failed", "still booting"},
+	} {
+		addr := guesttest.Hangup(t, tc.banner)
+		port := addr[strings.LastIndex(addr, ":")+1:]
+		code, _, errs := sshVmavs(t, home, "--ssh-port", port, "--key", keyPath, "--", "true")
+		if code != 1 || !strings.Contains(errs, tc.want) || strings.Contains(errs, tc.not) {
+			t.Errorf("banner %q: code=%d err=%q, want %q and not %q", tc.banner, code, errs, tc.want, tc.not)
+		}
+	}
+}
+
 func TestSSHOnCtrlCExitsQuietlyWithStatus130(t *testing.T) {
 	home := guestHome(t)
 	ctx, cancel := context.WithCancel(context.Background())
