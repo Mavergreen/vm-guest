@@ -3,7 +3,8 @@ name: ci
 # What this repository can check without a Mac, a KVM host or 6 GB of
 # Apple's media: the whole test suite, the shell floor, the Tier 0/1/2
 # provenance gate, the three checks that guard the ingredient registry,
-# and that `vmavs emit packer`'s template validates against real Packer.
+# and that `vmavs emit packer`'s templates -- the Go one per NIC, the shell
+# one per profile -- validate against real Packer.
 #
 # What it deliberately does NOT check: that an image builds. That needs
 # nested virtualization, an InstallESD this project must never publish, and
@@ -98,18 +99,42 @@ jobs:
         with:
           version: ${{ env.PACKER_VERSION }}
 
-      # The Go vmavs emits one template: the machine it installs and boots
-      # (internal/machine). The shell emitter's per-profile templates retire
-      # with the shell tree in phase 6; until then, tests/emit.bats covers
-      # them.
-      - name: vmavs emit packer validates
+      # The Go vmavs emits one template per NIC it can install with: the
+      # machine it installs and boots (internal/machine), whose net_device
+      # (and so the qemu plugin's own -device) depends on --nic.
+      - name: vmavs emit packer validates, for every NIC
         run: |
           set -eu
           go build -o out/vmavs ./cmd/vmavs
-          out="$RUNNER_TEMP/mavericks.pkr.hcl"
-          ./out/vmavs emit packer --out "$out"
-          packer init "$out"
-          ./out/vmavs emit packer --out "$out" --check
+          for nic in usb-net e1000-82545em virtio-net-pci; do
+              out="$RUNNER_TEMP/mavericks-$nic.pkr.hcl"
+              echo "::group::$nic"
+              ./out/vmavs emit packer --nic "$nic" --out "$out"
+              packer init "$out"
+              ./out/vmavs emit packer --nic "$nic" --out "$out" --check
+              echo "::endgroup::"
+          done
+
+      # The shell emitter stays the shipped `emit packer` until phase 6, and
+      # its templates say CI re-validates every profile's on each push, so
+      # this is that check. Every profile, not one: the values and the drive
+      # mapping come from the profile, so each one is a different template.
+      # --check supplies placeholder variables and a throwaway key, which is
+      # what validate needs; it does not run init itself, because it will
+      # not download. (tests/emit.bats stubs packer; it cannot stand in for
+      # this.)
+      - name: Every profile's shell-emitted Packer template validates
+        run: |
+          set -eu
+          for f in vm/profiles/*.args; do
+              p=$(basename "$f" .args)
+              out="$RUNNER_TEMP/$p.pkr.hcl"
+              echo "::group::$p"
+              ./bin/vmavs emit packer --profile "$p" --out "$out"
+              packer init "$out"
+              ./bin/vmavs emit packer --profile "$p" --out "$out" --check
+              echo "::endgroup::"
+          done
 
   # The Go vmavs (docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md).
   # Builds for every host the tool targets, not only the one CI runs on:

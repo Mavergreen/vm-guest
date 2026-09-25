@@ -319,8 +319,10 @@ cleanup is `defer`, not traps.
 - **The `go` job:**
   - `go vet`, `staticcheck` and `go test ./...` on Linux;
   - cross-builds for `darwin/amd64`, `darwin/arm64` and `netbsd/amd64`.
-- **`packer-validate`** switches to `vmavs emit packer` once `emit` is
-  ported, validating every machine role that has a template.
+- **`packer-validate`** validates the Go `vmavs emit packer` template for
+  every NIC it can install with and, until phase 6, the shell emitter's
+  template for every profile: the shell emitter is still the shipped
+  `emit packer`, and its templates say CI re-validates them on each push.
 - **The shell jobs** run until phase 6, then go.
 - **`bin/no-apple-bytes.sh`** stays as repository tooling guarding
   releases. Porting it is a separate decision.
