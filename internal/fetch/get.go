@@ -139,12 +139,9 @@ func (g *Getter) Get(ctx context.Context, it Item) (string, error) {
 		return "", err
 	}
 
+	g.cleanStaleTemps(it, dir, name)
 	for _, old := range it.Adopt {
-		ok, err := g.adoptCandidate(it, old, dest, dir, name)
-		if err != nil {
-			return "", err
-		}
-		if ok {
+		if g.adoptCandidate(it, old, dest, dir, name) {
 			return dest, nil
 		}
 	}
@@ -156,6 +153,63 @@ func (g *Getter) Get(ctx context.Context, it Item) (string, error) {
 		return "", err
 	}
 	return dest, nil
+}
+
+// stallDuration is StallTimeout, defaulted: 0 means 2 minutes.
+func (g *Getter) stallDuration() time.Duration {
+	if g.StallTimeout == 0 {
+		return 2 * time.Minute
+	}
+	return g.StallTimeout
+}
+
+// cleanStaleTemps removes this item's own leftover temp files and
+// directories from an earlier attempt that never finished cleanly: a
+// process killed by SIGKILL, OOM, or power loss leaves a uniquely named
+// ".<name>.<rand>.part" file (attempt's own temp), or a ".adopt-*"
+// directory (adoptCandidate's), behind forever, since nothing else ever
+// removes them. A live attempt keeps its temp's mtime fresh with every
+// byte written, or self-aborts at the stall timeout, so anything older
+// than max(10x the stall timeout, 30 minutes) is provably dead -- and
+// provably ours, since nothing but vmavs creates anything inside this
+// directory. Removing a stale entry that happens to be a hard link
+// cannot hurt the file it points to: removing a directory entry only
+// drops that entry's reference to the inode, leaving every other link
+// (including whatever it might have been adopted from) untouched.
+func (g *Getter) cleanStaleTemps(it Item, dir, name string) {
+	threshold := 10 * g.stallDuration()
+	if threshold < 30*time.Minute {
+		threshold = 30 * time.Minute
+	}
+	cutoff := time.Now().Add(-threshold)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	prefix := "." + name + "."
+	for _, e := range entries {
+		n := e.Name()
+		isTempFile := !e.IsDir() && strings.HasPrefix(n, prefix) && strings.HasSuffix(n, ".part") && len(n) > len(prefix)+len(".part")
+		isAdoptDir := e.IsDir() && strings.HasPrefix(n, ".adopt-")
+		if !isTempFile && !isAdoptDir {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue // fresh (still being written), or gone already -- leave a live attempt alone
+		}
+		full := filepath.Join(dir, n)
+		if isAdoptDir {
+			if err := os.RemoveAll(full); err == nil {
+				g.logf("%s: removed a stale leftover directory %s (older than %v)", it.Name, full, threshold)
+			}
+			continue
+		}
+		if err := os.Remove(full); err == nil {
+			g.logf("%s: removed a stale leftover temp %s (older than %v)", it.Name, full, threshold)
+		}
+	}
 }
 
 // testAdoptHook, when set, runs after adoptCandidate has hashed a
@@ -171,17 +225,38 @@ var testAdoptHook func()
 // between the first hash and the link/copy, and only this second check
 // catches that -- hashing only once and trusting the placement would let
 // unverified bytes into the cache.
-func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string) (bool, error) {
-	got, err := SHA256File(old)
+//
+// old is resolved through any symlinks first (filepath.EvalSymlinks): on
+// Linux, os.Link on a symlink links the symlink itself, not its target,
+// which for a relative symlink then breaks as soon as it is moved to a
+// new directory (its relative target no longer resolves from there).
+// Resolving first means the link (or copy) is always of a real file.
+//
+// Every failure here -- old cannot be resolved or read, it does not
+// match, placing it fails, or the re-hash fails or does not match -- is
+// reported (via g.Log, except a candidate that simply does not exist)
+// and the candidate is skipped, never treated as a reason to fail the
+// whole Get: an adoption candidate is an optimization, and one candidate
+// being unusable says nothing about whether the next one, or a download,
+// will work.
+func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string) bool {
+	real, err := filepath.EvalSymlinks(old)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			g.logf("%s: cannot resolve %s for adoption: %v", it.Name, old, err)
+		}
+		return false
+	}
+	got, err := SHA256File(real)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			g.logf("%s: cannot check %s for adoption: %v", it.Name, old, err)
 		}
-		return false, nil
+		return false
 	}
 	if got != it.SHA256 {
 		g.logf("%s: not adopting %s: checksum %s, want %s", it.Name, old, got, it.SHA256)
-		return false, nil
+		return false
 	}
 	if testAdoptHook != nil {
 		testAdoptHook()
@@ -189,30 +264,34 @@ func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string) (bool, err
 
 	tmpDir, err := os.MkdirTemp(dir, ".adopt-*")
 	if err != nil {
-		return false, err
+		g.logf("%s: cannot prepare to adopt %s: %v", it.Name, old, err)
+		return false
 	}
 	defer os.RemoveAll(tmpDir)
 	tmp := filepath.Join(tmpDir, name)
 
-	if err := os.Link(old, tmp); err != nil {
-		if err := copyFile(old, tmp); err != nil {
-			return false, fmt.Errorf("adopting %s: %w", old, err)
+	if err := os.Link(real, tmp); err != nil {
+		if err := copyFile(real, tmp); err != nil {
+			g.logf("%s: cannot adopt %s: %v", it.Name, old, err)
+			return false
 		}
 	}
 
 	got2, err := SHA256File(tmp)
 	if err != nil {
-		return false, err
+		g.logf("%s: cannot verify the adopted copy of %s: %v", it.Name, old, err)
+		return false
 	}
 	if got2 != it.SHA256 {
 		g.logf("%s: not adopting %s: it changed while being adopted (now %s, want %s)", it.Name, old, got2, it.SHA256)
-		return false, nil
+		return false
 	}
 	if err := os.Rename(tmp, dest); err != nil {
-		return false, err
+		g.logf("%s: cannot place the adopted copy of %s: %v", it.Name, old, err)
+		return false
 	}
 	g.logf("%s: adopted %s (verified)", it.Name, old)
-	return true, nil
+	return true
 }
 
 // download tries the network, retrying failures worth retrying. Each
@@ -223,6 +302,7 @@ func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string) (bool, err
 // else (an earlier crash's leftover, or -- the bug this guards against --
 // an adopted file's shared inode).
 func (g *Getter) download(ctx context.Context, it Item, dir, name, dest string) error {
+	g.cleanStaleTemps(it, dir, name)
 	retries := g.Retries
 	switch {
 	case retries == 0:
@@ -273,47 +353,12 @@ func (g *Getter) attempt(ctx context.Context, it Item, dir, name, dest string) (
 		}
 	}()
 
-	stall := g.StallTimeout
-	if stall == 0 {
-		stall = 2 * time.Minute
-	}
-	attemptCtx, cancel := context.WithCancel(ctx)
-	reset := make(chan struct{}, 1)
-	finished := make(chan struct{})
-	var stalled atomic.Bool
-	go func() {
-		timer := time.NewTimer(stall)
-		defer timer.Stop()
-		for {
-			select {
-			case <-reset:
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				timer.Reset(stall)
-			case <-timer.C:
-				stalled.Store(true)
-				cancel()
-				return
-			case <-finished:
-				return
-			}
-		}
-	}()
-	defer cancel()
-	defer close(finished)
+	stall := g.stallDuration()
+	attemptCtx, watch := newStallWatch(ctx, stall)
+	defer watch.Stop()
 
 	classify := func(err error) (bool, error) {
-		if ctx.Err() != nil {
-			return false, err
-		}
-		if stalled.Load() {
-			return true, fmt.Errorf("%s: no data for %v: %w", it.URL, stall, err)
-		}
-		return classifyErr(err), fmt.Errorf("%s: %w", it.URL, err)
+		return classifyAttemptErr(ctx, watch, stall, it.URL, err)
 	}
 
 	req, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, it.URL, nil)
@@ -338,7 +383,7 @@ func (g *Getter) attempt(ctx context.Context, it Item, dir, name, dest string) (
 		return resp.StatusCode >= 500, fmt.Errorf("%s: HTTP %s", it.URL, resp.Status)
 	}
 
-	var src io.Reader = &stallGuard{r: resp.Body, reset: reset}
+	var src io.Reader = watch.Reader(resp.Body)
 	if resp.ContentLength > 64<<20 {
 		src = &progress{r: src, total: resp.ContentLength, name: it.Name, log: g.logf, next: time.Now().Add(10 * time.Second)}
 	}
@@ -398,7 +443,71 @@ func classifyErr(err error) bool {
 	return true
 }
 
-// stallGuard signals reset on every byte read, so attempt's watchdog
+// stallWatch cancels its context if Reader's returned reader goes d
+// without a successful read: a captive portal or a stuck connection can
+// hold a socket open, past headers, without ever failing outright.
+// Shared by attempt (downloads) and fetchSumsOnce (SHA256SUMS), so both
+// abort-and-retry a stalled response the same way.
+type stallWatch struct {
+	cancel  context.CancelFunc
+	reset   chan struct{}
+	done    chan struct{}
+	stalled atomic.Bool
+}
+
+func newStallWatch(ctx context.Context, d time.Duration) (context.Context, *stallWatch) {
+	attemptCtx, cancel := context.WithCancel(ctx)
+	w := &stallWatch{cancel: cancel, reset: make(chan struct{}, 1), done: make(chan struct{})}
+	go func() {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		for {
+			select {
+			case <-w.reset:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(d)
+			case <-timer.C:
+				w.stalled.Store(true)
+				cancel()
+				return
+			case <-w.done:
+				return
+			}
+		}
+	}()
+	return attemptCtx, w
+}
+
+// Reader wraps r so every successful read resets the watchdog.
+func (w *stallWatch) Reader(r io.Reader) io.Reader { return &stallGuard{r: r, reset: w.reset} }
+
+// Stop releases the watchdog goroutine and the context. Idempotent
+// callers defer this exactly once per newStallWatch.
+func (w *stallWatch) Stop() {
+	close(w.done)
+	w.cancel()
+}
+
+// classifyAttemptErr turns a network-level failure into (retry, error):
+// the overall context being done always wins (no retry); a confirmed
+// stall is retryable and says so; everything else goes through
+// classifyErr.
+func classifyAttemptErr(ctx context.Context, w *stallWatch, stall time.Duration, url string, err error) (bool, error) {
+	if ctx.Err() != nil {
+		return false, err
+	}
+	if w.stalled.Load() {
+		return true, fmt.Errorf("%s: no data for %v: %w", url, stall, err)
+	}
+	return classifyErr(err), fmt.Errorf("%s: %w", url, err)
+}
+
+// stallGuard signals reset on every byte read, so a stallWatch's
 // goroutine can tell "still receiving data" from "the connection is stuck".
 type stallGuard struct {
 	r     io.Reader
@@ -482,6 +591,10 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
 		out.Close()
 		return err
 	}

@@ -378,6 +378,101 @@ func TestAStalledDownloadIsAbortedAndRetried(t *testing.T) {
 	}
 }
 
+// TestStaleTempsAreRemovedBeforeADownloadFreshOnesAreLeftAlone: a temp
+// file or adopt directory left behind by a killed process (SIGKILL, OOM,
+// power loss) is stale once it is older than the cleanup threshold and
+// must be removed before the next attempt; one that is merely in
+// progress (a fresh mtime) must be left alone.
+func TestStaleTempsAreRemovedBeforeADownloadFreshOnesAreLeftAlone(t *testing.T) {
+	g := getter(t)
+	body := []byte("fresh download")
+	dest := g.Paths.CacheFile(sum(body), "x.zip")
+	dir := filepath.Dir(dest)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	old := time.Now().Add(-31 * time.Minute)
+
+	staleTemp := filepath.Join(dir, ".x.zip.123456.part")
+	if err := os.WriteFile(staleTemp, []byte("dead attempt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(staleTemp, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	staleAdoptDir := filepath.Join(dir, ".adopt-abc123")
+	if err := os.Mkdir(staleAdoptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(staleAdoptDir, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	freshTemp := filepath.Join(dir, ".x.zip.654321.part")
+	if err := os.WriteFile(freshTemp, []byte("in progress"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(body) }))
+	defer srv.Close()
+
+	if _, err := g.Get(context.Background(), Item{Name: "x", URL: srv.URL + "/x.zip", SHA256: sum(body)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(staleTemp); !os.IsNotExist(err) {
+		t.Fatal("a stale temp must be removed before a new download")
+	}
+	if _, err := os.Stat(staleAdoptDir); !os.IsNotExist(err) {
+		t.Fatal("a stale adopt directory must be removed before a new download")
+	}
+	if _, err := os.Stat(freshTemp); err != nil {
+		t.Fatal("a fresh temp must be left alone")
+	}
+}
+
+// TestAdoptionResolvesASymlinkCandidate: os.Link on Linux links a symlink
+// itself, not its target; for a relative symlink, once linked into a new
+// directory its relative target no longer resolves. adoptCandidate must
+// resolve the symlink first, so the cache entry is always a real file (or
+// a hard link to one), never a symlink -- and never a broken one.
+func TestAdoptionResolvesASymlinkCandidate(t *testing.T) {
+	body := []byte("target content")
+	for _, kind := range []string{"absolute", "relative"} {
+		t.Run(kind, func(t *testing.T) {
+			g := getter(t)
+			targetDir := t.TempDir()
+			target := filepath.Join(targetDir, "real.zip")
+			if err := os.WriteFile(target, body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(targetDir, "link.zip")
+			linkTo := target
+			if kind == "relative" {
+				linkTo = "real.zip"
+			}
+			if err := os.Symlink(linkTo, link); err != nil {
+				t.Fatal(err)
+			}
+			p, err := g.Get(context.Background(), Item{Name: "x", URL: "http://127.0.0.1:1/x.zip", SHA256: sum(body), Adopt: []string{link}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				t.Fatal("the cache entry must not be a symlink")
+			}
+			if b, err := os.ReadFile(p); err != nil || string(b) != string(body) {
+				t.Fatalf("content = %q, %v", b, err)
+			}
+		})
+	}
+}
+
 func TestHasXarMagic(t *testing.T) {
 	d := t.TempDir()
 	good, bad := filepath.Join(d, "g.pkg"), filepath.Join(d, "b.pkg")
