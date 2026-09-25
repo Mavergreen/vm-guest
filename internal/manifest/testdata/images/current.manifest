@@ -1,0 +1,6 @@
+# mavericks-qemu-guest image manifest
+name	current
+sshkey	SHA256:20V3dlDtWnv2FKbn3sB6ljy2Zb24Ka0RWHf4tjQbPqs build
+openssh	10.5p1-mavericks.2
+nic	e1000-82545em
+accel	kvm machine=q35 cpu=Penryn,+ssse3,+sse4.1,+sse4.2 ram=4096 smp=2 disk=60G
