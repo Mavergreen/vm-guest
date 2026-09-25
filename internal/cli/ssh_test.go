@@ -223,3 +223,19 @@ func TestSSHRefusesAnUnreachablePortWithTheBootingHint(t *testing.T) {
 		t.Fatalf("code=%d err=%q", code, errs)
 	}
 }
+
+func TestSSHOnCtrlCExitsQuietlyWithStatus130(t *testing.T) {
+	home := guestHome(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled: standing in for Ctrl-C landing before, or during, the dial
+	var out, errb bytes.Buffer
+	e := &Env{Stdin: strings.NewReader(""), Stdout: &out, Stderr: &errb,
+		Getenv: func(k string) string { return map[string]string{"VMAVS_HOME": home, "HOME": t.TempDir()}[k] }}
+	code := Run(ctx, []string{"ssh", "--", "true"}, e)
+	if code != 130 {
+		t.Fatalf("code=%d stderr=%q, want 130 (128+SIGINT, what a shell reports for a signal)", code, errb.String())
+	}
+	if errb.String() != "" {
+		t.Fatalf("stderr=%q, want silence: vmavs did exactly what was asked, not a failure to explain", errb.String())
+	}
+}

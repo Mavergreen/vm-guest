@@ -63,6 +63,9 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 		Signer: signer, Legacy: m.LegacySSH(), Timeout: 10 * time.Second}
 	c, err := guest.Dial(ctx, t)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return ctrlC()
+		}
 		return bootingHint(err, *port)
 	}
 	defer c.Close()
@@ -77,6 +80,9 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 		code, err = guest.Shell(ctx, c, in, e.Stdout, e.Stderr)
 	}
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return ctrlC()
+		}
 		return err
 	}
 	if code != 0 {
@@ -84,6 +90,11 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 	}
 	return nil
 }
+
+// ctrlC is Ctrl-C's own exit: 130 (128+SIGINT), what a shell reports for
+// a process a signal killed, and no error line -- vmavs did exactly what
+// was asked, so this is not a failure to explain.
+func ctrlC() error { return &ExitError{Code: 130} }
 
 // bootingHint explains a Dial failure that has the shape of a guest whose
 // sshd has not come up yet: refused (nothing listening), an EOF partway

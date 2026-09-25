@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -107,6 +108,33 @@ func TestDialReturnsPromptlyAgainstASilentListener(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("Dial took %v, want it to return within its Timeout", elapsed)
+	}
+}
+
+func TestDialReturnsCtxErrWhenCancelledMidHandshake(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			// Accepts and never speaks, same as above: only cancelling
+			// ctx (not the handshake completing on its own) ends this.
+			io.Copy(io.Discard, c)
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	_, err = Dial(ctx, Target{Addr: ln.Addr().String(), User: "mavsuser", Signer: mustEd(t), Timeout: 5 * time.Second})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled (not e.g. \"use of closed network connection\","+
+			" which a caller has no way to recognise as a plain Ctrl-C)", err)
 	}
 }
 

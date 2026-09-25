@@ -60,6 +60,13 @@ func Dial(ctx context.Context, t Target) (*ssh.Client, error) {
 	d := net.Dialer{Timeout: t.Timeout}
 	conn, err := d.DialContext(ctx, "tcp", t.Addr)
 	if err != nil {
+		if ctx.Err() != nil {
+			// A closed conn or a cancelled dial otherwise surfaces as
+			// "use of closed network connection" or some other network
+			// error a caller has to guess the meaning of; ctx.Err() (a
+			// Ctrl-C, say) says what actually happened.
+			return nil, ctx.Err()
+		}
 		return nil, err
 	}
 	done := make(chan struct{})
@@ -77,6 +84,9 @@ func Dial(ctx context.Context, t Target) (*ssh.Client, error) {
 	c, chans, reqs, err := ssh.NewClientConn(conn, t.Addr, t.ClientConfig())
 	if err != nil {
 		conn.Close()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("ssh %s@%s: %w", t.User, t.Addr, err)
 	}
 	conn.SetDeadline(time.Time{}) // handshake is over; the client manages its own I/O from here
