@@ -64,6 +64,22 @@ func TestLegacyHintOnlyWhenOnlyTheOldHomeExists(t *testing.T) {
 	}
 }
 
+func TestCacheFileIsContentAddressed(t *testing.T) {
+	p := Paths{Home: "/h"}
+	if got := p.CacheFile("abc123", "x.zip"); got != filepath.Join("/h", "cache", "abc123", "x.zip") {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestLegacyHome(t *testing.T) {
+	if got := LegacyHome(env(map[string]string{"HOME": "/h"})); got != "/h/.local/share/mavericks-qemu-guest" {
+		t.Fatalf("got %q", got)
+	}
+	if got := LegacyHome(env(nil)); got != "" {
+		t.Fatalf("without HOME, want \"\", got %q", got)
+	}
+}
+
 func TestOpenCoreImageFallsBackToTheShellTreesPath(t *testing.T) {
 	home := t.TempDir()
 	p := Paths{Home: home}

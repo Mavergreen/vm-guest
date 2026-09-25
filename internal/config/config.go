@@ -55,6 +55,13 @@ func (p Paths) Run() string              { return filepath.Join(p.Home, "run") }
 func (p Paths) Keys() string             { return filepath.Join(p.Home, "keys") }
 func (p Paths) Cache() string            { return filepath.Join(p.Home, "cache") }
 
+// CacheFile is where a downloaded input with this checksum and filename
+// lives: content-addressed, so a changed pin is a different file and a
+// cached file can always be re-verified against its own directory name.
+func (p Paths) CacheFile(sha256, filename string) string {
+	return filepath.Join(p.Cache(), sha256, filename)
+}
+
 // OpenCoreImage is build/opencore.img. Until the shell tree is retired
 // (spec §5, phase 6), an image it built keeps OpenCore at
 // work/opencore-p3.img, and that path is used when the new one is absent.
@@ -95,6 +102,15 @@ func Home(getenv func(string) string) (string, error) {
 	return filepath.Join(u, ".local", "share", "vmavs"), nil
 }
 
+// LegacyHome is the shell tree's state directory, whose downloads vmavs
+// fetch adopts (verified) instead of downloading again. "" without HOME.
+func LegacyHome(getenv func(string) string) string {
+	if h := getenv("HOME"); h != "" {
+		return filepath.Join(h, ".local", "share", "mavericks-qemu-guest")
+	}
+	return ""
+}
+
 // LegacyHint explains, when the default home does not exist and the shell
 // tree's does, how to point vmavs at it. It is "" otherwise. vmavs never
 // moves anything itself.
@@ -102,9 +118,8 @@ func LegacyHint(getenv func(string) string, exists func(string) bool) string {
 	if getenv("VMAVS_HOME") != "" || getenv("HOME") == "" {
 		return ""
 	}
-	u := getenv("HOME")
-	old := filepath.Join(u, ".local", "share", "mavericks-qemu-guest")
-	cur := filepath.Join(u, ".local", "share", "vmavs")
+	old := LegacyHome(getenv)
+	cur := filepath.Join(getenv("HOME"), ".local", "share", "vmavs")
 	if !exists(old) || exists(cur) {
 		return ""
 	}
