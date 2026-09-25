@@ -187,7 +187,7 @@ func (f *fixture) handle(c proc.Cmd) error {
 		if f.buildErr != nil {
 			return f.buildErr
 		}
-		built := filepath.Join(c.Dir, "UDK", "Build", "OpenCorePkg", Target+"_"+EDKToolchain, Arch)
+		built := filepath.Join(c.Dir, "UDK", "Build", "OpenCorePkg", EDKTarget+"_"+EDKToolchain, Arch)
 		os.MkdirAll(filepath.Join(built, "OpenCorePkg", "Library", "x"), 0o755)
 		os.WriteFile(filepath.Join(built, "OpenCorePkg", "Library", "x", "GNUmakefile"), []byte("CC_FLAGS = -Os "+f.flags+"\n"), 0o644)
 		for rel, flags := range f.makefiles {
@@ -208,7 +208,7 @@ func (f *fixture) handle(c proc.Cmd) error {
 		if f.buildErr != nil {
 			return f.buildErr
 		}
-		fv := filepath.Join(c.Dir, "Build", "OvmfX64", Target+"_"+EDKToolchain, "FV")
+		fv := filepath.Join(c.Dir, "Build", "OvmfX64", EDKTarget+"_"+EDKToolchain, "FV")
 		os.MkdirAll(fv, 0o755)
 		for _, n := range f.fv {
 			os.WriteFile(filepath.Join(fv, n), []byte("fd "+n), 0o644)

@@ -414,3 +414,22 @@ func TestFirmwareOVMFWithoutATreeSaysWhatToRun(t *testing.T) {
 		t.Fatalf("stderr=%q, want it to say what to run first", errb.String())
 	}
 }
+
+// TestFirmwareGivesFetchsLegacyHint: firmware fetches as fetch does, so
+// it gives fetch's hint (the export advice, never the mv), before
+// anything can fail.
+func TestFirmwareGivesFetchsLegacyHint(t *testing.T) {
+	home := shortTempDir(t)
+	legacyImages(t, home)
+	e, _, errb := fetchEnv(map[string]string{"HOME": home})
+	e.Runner = &proc.Fake{}
+	if code := Run(context.Background(), []string{"firmware", "ovmf"}, e); code != 1 {
+		t.Fatalf("code=%d stderr=%s, want 1 (no EDK II tree)", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "vmavs firmware: ") || !strings.Contains(errb.String(), "export VMAVS_HOME=") {
+		t.Fatalf("stderr=%s, want the legacy-home hint", errb.String())
+	}
+	if strings.Contains(errb.String(), "mv ") {
+		t.Fatalf("stderr=%s, want the export advice only, no mv", errb.String())
+	}
+}

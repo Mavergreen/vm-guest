@@ -60,7 +60,7 @@ func cmdFirmware(ctx context.Context, e *Env, args []string) error {
 	fs := newFlags("firmware")
 	smbios := fs.String("smbios", firmware.DefaultSMBIOS, "the guest's SMBIOS model (SystemProductName); see lib/smbios.sh for what each has been measured to do")
 	ccache := fs.Bool("ccache", firmware.CcacheDefault, "compile through ccache, if it is installed (off by default: not yet shown to give the same bytes)")
-	compiler := fs.String("compiler", "", "treat the host compiler as 'NAME VERSION' for the range check (the manifest still records the real one)")
+	compiler := fs.String("compiler", "", "treat the host compiler as 'NAME VERSION' for the range check (the build log records the real one, and, from phase 5, the manifest)")
 	targetArgs, err := parseInterleaved(fs, e, firmwareHelp, args)
 	if err != nil {
 		return err
@@ -81,6 +81,12 @@ func cmdFirmware(ctx context.Context, e *Env, args []string) error {
 	p, err := paths(e)
 	if err != nil {
 		return err
+	}
+	// Before anything can fail, as fetch gives it: this command fetches
+	// too, so the user whose images are in the shell tree's home hears
+	// where they are whether the build works or not.
+	if hint := fetchLegacyHint(e); hint != "" {
+		logf(e, "firmware", "%s", hint)
 	}
 	reg := e.Registry
 	if reg == nil {

@@ -133,7 +133,7 @@ func (b *Builder) buildEnv(_ context.Context) ([]string, bool, error) {
 	}
 	env = append(env, "PATH="+shimPath, "CCACHE_DIR="+cache)
 	b.logf("ccache: %s, cache in %s, shims in %s", path, cache, shims)
-	b.logf("ccache: the compiler the manifest records is still the real one -- a shim answers --version as what it wraps")
+	b.logf("ccache: the build log records the real compiler (and, from phase 5, the manifest) -- a shim answers --version as what it wraps")
 	return env, true, nil
 }
 

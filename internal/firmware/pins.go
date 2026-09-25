@@ -27,7 +27,7 @@ const (
 
 	Arch         = "X64"     // a 64-bit guest; IA32 would double the build for nothing
 	EDKToolchain = "GCC"     // CLANGPDB needs clang, which the hosts do not have
-	Target       = "RELEASE" // DEBUG logs on every boot and is slower
+	EDKTarget    = "RELEASE" // DEBUG logs on every boot and is slower
 
 	// CStd is the C dialect every firmware file is compiled in. EDK II
 	// sets none, and GCC 15 defaults to gnu23, where OpenCorePkg 1.0.7's

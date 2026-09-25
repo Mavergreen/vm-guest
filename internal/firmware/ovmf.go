@@ -15,7 +15,7 @@ import (
 // set -u) puts `build` on PATH with WORKSPACE and CONF_PATH set, then
 // build runs. bash -c is its subshell.
 var ovmfBuild = fmt.Sprintf("set +u; . ./edksetup.sh >/dev/null || exit 1; exec build -a %s -b %s -t %s -p %s",
-	Arch, Target, EDKToolchain, OVMFDsc)
+	Arch, EDKTarget, EDKToolchain, OVMFDsc)
 
 // OVMF builds the guest's UEFI firmware from the EDK II tree OpenCore
 // assembled (one pinned tree, not a second copy that could drift), and
@@ -65,7 +65,7 @@ func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
 
 	logPath := filepath.Join(b.udk(), "ovmf-build.log")
 	b.logf("building %s from audk %s in %s", OVMFDsc, AudkCommit, b.udk())
-	b.logf("arch %s, toolchain %s, target %s -- its output goes to %s", Arch, EDKToolchain, Target, logPath)
+	b.logf("arch %s, toolchain %s, target %s -- its output goes to %s", Arch, EDKToolchain, EDKTarget, logPath)
 	b.logf("compiler: %s", b.Toolchain.CompilerLine(ctx))
 	start := time.Now()
 	if err := b.runLogged(ctx, proc.Cmd{Name: "bash", Args: []string{"-c", ovmfBuild}, Dir: b.udk(), Env: env}, logPath); err != nil {
@@ -76,7 +76,7 @@ func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
 		b.ccacheStats(ctx)
 	}
 
-	fv := filepath.Join(b.udk(), "Build", "OvmfX64", Target+"_"+EDKToolchain, "FV")
+	fv := filepath.Join(b.udk(), "Build", "OvmfX64", EDKTarget+"_"+EDKToolchain, "FV")
 	var missing []string
 	for _, n := range OVMFFiles {
 		if _, err := os.Stat(filepath.Join(fv, n)); err != nil {

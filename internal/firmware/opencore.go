@@ -66,11 +66,11 @@ func (b *Builder) OpenCore(ctx context.Context, in Inputs) ([]string, error) {
 	}
 
 	b.logf("building OpenCore %s in %s", OCVersion, b.src())
-	b.logf("arch %s, toolchain %s, target %s -- this takes a while; its output goes to %s", Arch, EDKToolchain, Target, b.buildLog())
+	b.logf("arch %s, toolchain %s, target %s -- this takes a while; its output goes to %s", Arch, EDKToolchain, EDKTarget, b.buildLog())
 	b.logf("compiler: %s", b.Toolchain.CompilerLine(ctx))
 	start := time.Now()
 	cmd := proc.Cmd{Name: "./build_oc.tool", Dir: b.src(), Env: append(env,
-		"ARCHS="+Arch, "TOOLCHAINS="+EDKToolchain, "TARGETS="+Target, "OFFLINE_MODE=1",
+		"ARCHS="+Arch, "TOOLCHAINS="+EDKToolchain, "TARGETS="+EDKTarget, "OFFLINE_MODE=1",
 		"EFIBUILD_SH="+files["ocbuild-efibuild"],
 		"BUILD_ARGUMENTS=-D OCPKG_BUILD_OPTIONS="+BuildOptions())}
 	if err := b.runLogged(ctx, cmd, b.buildLog()); err != nil {
@@ -82,7 +82,7 @@ func (b *Builder) OpenCore(ctx context.Context, in Inputs) ([]string, error) {
 		b.ccacheStats(ctx)
 	}
 
-	built := filepath.Join(b.udk(), "Build", "OpenCorePkg", Target+"_"+EDKToolchain, Arch)
+	built := filepath.Join(b.udk(), "Build", "OpenCorePkg", EDKTarget+"_"+EDKToolchain, Arch)
 	if fi, err := os.Stat(built); err != nil || !fi.IsDir() {
 		return nil, fmt.Errorf("build reported success but %s does not exist", built)
 	}

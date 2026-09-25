@@ -90,7 +90,8 @@ func RangeVerdict(family, version string) (verdict, detail string) {
 // where GCC_X64_PREFIX is ENV(GCC_BIN) -- usually empty, so plain gcc.
 // Override is --compiler: "NAME VERSION" to believe instead of asking the
 // compiler. It moves nothing else; CompilerLine still reports the real
-// compiler, so a manifest shows the two disagreeing.
+// compiler, so the build log (and, from phase 5, the manifest) shows
+// the two disagreeing.
 type Toolchain struct {
 	Runner   proc.Runner
 	GCCBin   string
@@ -198,8 +199,8 @@ func (tc Toolchain) Check(ctx context.Context, logf func(string, ...any)) error 
 			"-- but its code generation is still a different artifact than the checksums",
 			"in docs/decisions/0004 describe.",
 			fmt.Sprintf("To build anyway, say what to believe: --compiler '%s %s'.", CCFamily, CCVerified),
-			"The manifest still records the real compiler, so the two lines will disagree",
-			"where anyone can see them.",
+			"The build log still records the real compiler (and, from phase 5, the",
+			"manifest), so the two lines will disagree where anyone can see them.",
 		} {
 			logf("warning: %s", l)
 		}
