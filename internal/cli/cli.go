@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+
+	"github.com/Mavergreen/vm-guest/internal/proc"
 )
 
 // Env is everything a subcommand may touch outside its arguments, so that
@@ -18,6 +20,8 @@ type Env struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	Getenv func(string) string
+	// Runner runs external commands. A nil Runner means the real one.
+	Runner proc.Runner
 }
 
 type command struct {
@@ -127,6 +131,16 @@ func parse(fs *flag.FlagSet, e *Env, help string, args []string) error {
 		return usagef("%v", err)
 	}
 	return nil
+}
+
+// runner is e.Runner, or the real one.
+//
+//lint:ignore U1000 unused until a Task 5+ subcommand calls it
+func runner(e *Env) proc.Runner {
+	if e.Runner != nil {
+		return e.Runner
+	}
+	return proc.Exec{}
 }
 
 // logf writes one "vmavs <cmd>: ..." line to stderr.
