@@ -514,3 +514,41 @@ func TestHasXarMagic(t *testing.T) {
 		t.Fatal("zip taken for xar")
 	}
 }
+
+// TestAFailedGetLeavesNoDirectoryItCreated: cache/<sha>/ (and cache/
+// itself) are made only when something is about to be written into them,
+// and a failure removes whatever this Get made, if it is still empty --
+// a failed fetch must not leave a skeleton behind. A directory that was
+// already there is left alone.
+func TestAFailedGetLeavesNoDirectoryItCreated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("evil")) }))
+	defer srv.Close()
+	g := getter(t)
+	want := sum([]byte("good"))
+	if _, err := g.Get(context.Background(), Item{Name: "x", URL: srv.URL + "/x.zip", SHA256: want}); err == nil {
+		t.Fatal("a checksum mismatch must be an error")
+	}
+	if _, err := os.Stat(g.Paths.Cache()); !os.IsNotExist(err) {
+		t.Fatalf("a failed download left %s behind (%v)", g.Paths.Cache(), err)
+	}
+
+	// noFetch with nothing to adopt never creates anything at all.
+	if _, err := g.Get(context.Background(), Item{Name: "x", SHA256: want, Filename: "x.zip", noFetch: true, Adopt: []string{filepath.Join(t.TempDir(), "absent")}}); !errors.Is(err, errNotCached) {
+		t.Fatalf("err = %v, want errNotCached", err)
+	}
+	if _, err := os.Stat(g.Paths.Cache()); !os.IsNotExist(err) {
+		t.Fatalf("a cache-only Get left %s behind (%v)", g.Paths.Cache(), err)
+	}
+
+	// A directory that already existed stays, empty or not.
+	dir := filepath.Dir(g.Paths.CacheFile(want, "x.zip"))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Get(context.Background(), Item{Name: "x", URL: srv.URL + "/x.zip", SHA256: want}); err == nil {
+		t.Fatal("a checksum mismatch must be an error")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("a directory Get did not create was removed: %v", err)
+	}
+}

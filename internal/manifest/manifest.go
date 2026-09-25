@@ -133,6 +133,22 @@ func List(dir string) ([]Manifest, error) {
 	return out, nil
 }
 
+// Any reports whether dir holds at least one manifest with its image
+// beside it: whether List would find something, without reading any
+// manifest. A missing dir holds nothing.
+func Any(dir string) bool {
+	paths, err := filepath.Glob(filepath.Join(dir, "*.manifest"))
+	if err != nil {
+		return false
+	}
+	for _, p := range paths {
+		if _, err := os.Stat(Manifest{Path: p}.Image()); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Find is the manifest for the image named name.
 func Find(dir, name string) (Manifest, error) {
 	all, err := List(dir)

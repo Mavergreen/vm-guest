@@ -139,9 +139,24 @@ func TestRunKeepAndFlagsWin(t *testing.T) {
 	}
 }
 
+// legacyImages puts one built image in the shell tree's own home under
+// home (a HOME), the way the shell pipeline leaves it.
+func legacyImages(t *testing.T, home string) {
+	t.Helper()
+	images := filepath.Join(home, ".local", "share", "mavericks-qemu-guest", "images")
+	if err := os.MkdirAll(images, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"old.qcow2": "x", "old.manifest": "name\told\n"} {
+		if err := os.WriteFile(filepath.Join(images, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestRunWithNoImagesGivesTheLegacyHint(t *testing.T) {
 	home := shortTempDir(t)
-	os.MkdirAll(filepath.Join(home, ".local", "share", "mavericks-qemu-guest"), 0o755)
+	legacyImages(t, home)
 	code, stderr := runVmavs(t, &proc.Fake{}, map[string]string{"HOME": home}, "run")
 	if code != 1 || !strings.Contains(stderr, "export VMAVS_HOME=") {
 		t.Fatalf("code=%d stderr=%s", code, stderr)

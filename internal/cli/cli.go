@@ -14,7 +14,9 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/doctor"
+	"github.com/Mavergreen/vm-guest/internal/manifest"
 	"github.com/Mavergreen/vm-guest/internal/pins"
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
@@ -175,4 +177,10 @@ func runner(e *Env) proc.Runner {
 // logf writes one "vmavs <cmd>: ..." line to stderr.
 func logf(e *Env, cmd, format string, a ...any) {
 	fmt.Fprintf(e.Stderr, "vmavs %s: %s\n", cmd, fmt.Sprintf(format, a...))
+}
+
+// legacyHint is config.LegacyHint on the real filesystem: "" unless the
+// shell tree's home holds the only built images.
+func legacyHint(e *Env) string {
+	return config.LegacyHint(e.Getenv, manifest.Any, config.Exists)
 }

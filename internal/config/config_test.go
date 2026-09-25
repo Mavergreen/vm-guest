@@ -48,19 +48,46 @@ func TestHomeRejectsTheRootDirectory(t *testing.T) {
 	}
 }
 
-func TestLegacyHintOnlyWhenOnlyTheOldHomeExists(t *testing.T) {
+// TestLegacyHintIsAboutImagesNotDirectories: the hint turns on whether
+// the old home's images/ holds an image and the new one's holds none --
+// never on whether the new home merely exists, since any vmavs fetch
+// (even a failed one) could create it and silence the hint for good.
+func TestLegacyHintIsAboutImagesNotDirectories(t *testing.T) {
 	old := "/h/.local/share/mavericks-qemu-guest"
-	exists := func(p string) bool { return p == old }
-	hint := LegacyHint(env(map[string]string{"HOME": "/h"}), exists)
-	if !strings.Contains(hint, "export VMAVS_HOME="+old) || !strings.Contains(hint, "mv "+old) {
+	cur := "/h/.local/share/vmavs"
+	oldImages := func(dir string) bool { return dir == old+"/images" }
+	nowhere := func(string) bool { return false }
+
+	hint := LegacyHint(env(map[string]string{"HOME": "/h"}), oldImages, nowhere)
+	if !strings.Contains(hint, "export VMAVS_HOME="+old) || !strings.Contains(hint, "mv "+old+" "+cur) {
 		t.Fatalf("hint = %q", hint)
 	}
-	if LegacyHint(env(map[string]string{"HOME": "/h", "VMAVS_HOME": "/x"}), exists) != "" {
+	if LegacyHint(env(map[string]string{"HOME": "/h", "VMAVS_HOME": "/x"}), oldImages, nowhere) != "" {
 		t.Fatal("an explicit VMAVS_HOME needs no hint")
 	}
-	both := func(p string) bool { return true }
-	if LegacyHint(env(map[string]string{"HOME": "/h"}), both) != "" {
-		t.Fatal("no hint once the new home exists")
+	if LegacyHint(env(map[string]string{"HOME": "/h"}), nowhere, func(p string) bool { return p == old }) != "" {
+		t.Fatal("an old home with no images needs no hint")
+	}
+	both := func(string) bool { return true }
+	if LegacyHint(env(map[string]string{"HOME": "/h"}), both, both) != "" {
+		t.Fatal("no hint once the new home has an image of its own")
+	}
+}
+
+// TestLegacyHintWhenTheNewHomeExistsSaysOnlyExport: once the new home
+// exists (a vmavs fetch made it, say), it may hold hard links into the
+// old one, so moving the old home over it is not advice to give.
+func TestLegacyHintWhenTheNewHomeExistsSaysOnlyExport(t *testing.T) {
+	old := "/h/.local/share/mavericks-qemu-guest"
+	cur := "/h/.local/share/vmavs"
+	oldImages := func(dir string) bool { return dir == old+"/images" }
+	curExists := func(p string) bool { return p == cur }
+	hint := LegacyHint(env(map[string]string{"HOME": "/h"}), oldImages, curExists)
+	if !strings.Contains(hint, "export VMAVS_HOME="+old) {
+		t.Fatalf("hint = %q, want the export advice", hint)
+	}
+	if strings.Contains(hint, "mv ") {
+		t.Fatalf("hint = %q, must not suggest mv once %s exists", hint, cur)
 	}
 }
 

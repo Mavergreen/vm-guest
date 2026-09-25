@@ -70,6 +70,12 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Before anything can fail: the user whose images are in the shell
+	// tree's home should hear where they are whether this fetch works or
+	// not.
+	if hint := legacyHint(e); hint != "" {
+		logf(e, "fetch", "%s", hint)
+	}
 	reg := e.Registry
 	if reg == nil {
 		reg, err = pins.Embedded()

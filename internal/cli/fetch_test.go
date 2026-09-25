@@ -18,6 +18,7 @@ import (
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/fetch"
 	"github.com/Mavergreen/vm-guest/internal/pins"
+	"github.com/Mavergreen/vm-guest/internal/proc"
 )
 
 func sum(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
@@ -304,5 +305,56 @@ func TestFetchHelpBeginsUsage(t *testing.T) {
 	code := Run(context.Background(), []string{"fetch", "--help"}, e)
 	if code != 0 || !strings.HasPrefix(out.String(), "usage: vmavs fetch") {
 		t.Fatalf("code=%d stdout=%q", code, out.String())
+	}
+}
+
+// TestAFailedFetchDoesNotSilenceTheLegacyHint is the final review's
+// scenario: the shell tree's home holds a built image, a `vmavs fetch`
+// fails (here, a download whose checksum does not match), and afterwards
+// `vmavs run` must still point at the old home's images -- fetch creating
+// ~/.local/share/vmavs used to silence the hint for good. fetch itself
+// says so too, and leaves no directory behind.
+func TestAFailedFetchDoesNotSilenceTheLegacyHint(t *testing.T) {
+	home := shortTempDir(t)
+	legacyImages(t, home)
+	srv, _ := fakeAppleCDN(t, []byte("what the CDN serves"))
+	reg, err := pins.Parse(strings.NewReader(fmt.Sprintf("%s\t%s/content/InstallESD.dmg\t%s\n",
+		fetch.ESDSource, srv.URL, sum([]byte("what the pin expects")))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"HOME": home}
+	e, _, errb := fetchEnv(env)
+	e.Registry = reg
+	e.Endpoints = &Endpoints{Recovery: srv.URL}
+	if code := Run(context.Background(), []string{"fetch", "esd"}, e); code != 1 {
+		t.Fatalf("fetch: code=%d stderr=%s, want 1 (checksum mismatch)", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "vmavs fetch: ") || !strings.Contains(errb.String(), "export VMAVS_HOME=") {
+		t.Fatalf("fetch stderr=%s, want the legacy-home hint", errb.String())
+	}
+	cur := filepath.Join(home, ".local", "share", "vmavs")
+	if _, err := os.Stat(cur); !os.IsNotExist(err) {
+		t.Fatalf("a failed fetch left %s behind (%v)", cur, err)
+	}
+
+	code, stderr := runVmavs(t, &proc.Fake{}, env, "run")
+	if code != 1 || !strings.Contains(stderr, "export VMAVS_HOME=") {
+		t.Fatalf("run after a failed fetch: code=%d stderr=%s, want the legacy-home hint", code, stderr)
+	}
+}
+
+// TestAFetchWithVMAVS_HOMESetGivesNoLegacyHint: the hint is for a user
+// who has not chosen a home; one who has needs no advice about it.
+func TestAFetchWithVMAVS_HOMESetGivesNoLegacyHint(t *testing.T) {
+	home := shortTempDir(t)
+	legacyImages(t, home)
+	env := map[string]string{"HOME": home, "VMAVS_HOME": t.TempDir()}
+	e, _, errb := fetchEnv(env)
+	if code := Run(context.Background(), []string{"fetch", "updates", "--updates", "none"}, e); code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "VMAVS_HOME") {
+		t.Fatalf("stderr=%s, want no hint", errb.String())
 	}
 }

@@ -58,7 +58,7 @@ func cmdDoctor(_ context.Context, e *Env, args []string) error {
 			fmt.Fprintf(e.Stdout, "%-8s  %-12s  %s\n", "", "", "note: "+n)
 		}
 	}
-	if hint := config.LegacyHint(e.Getenv, config.Exists); hint != "" {
+	if hint := legacyHint(e); hint != "" {
 		fmt.Fprintf(e.Stdout, "\nnote: %s\n", hint)
 	}
 	ok, line := doctor.Verdict(rows, subs)

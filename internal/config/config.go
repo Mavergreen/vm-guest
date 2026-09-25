@@ -111,7 +111,7 @@ func Home(getenv func(string) string) (string, error) {
 	if u == "" {
 		return "", errors.New("neither VMAVS_HOME nor HOME is set")
 	}
-	return filepath.Join(u, ".local", "share", "vmavs"), nil
+	return defaultHome(u), nil
 }
 
 // LegacyHome is the shell tree's state directory, whose downloads vmavs
@@ -123,22 +123,40 @@ func LegacyHome(getenv func(string) string) string {
 	return ""
 }
 
-// LegacyHint explains, when the default home does not exist and the shell
-// tree's does, how to point vmavs at it. It is "" otherwise. vmavs never
-// moves anything itself.
-func LegacyHint(getenv func(string) string, exists func(string) bool) string {
+// LegacyHint explains how to point vmavs at the shell tree's built
+// images, when VMAVS_HOME is unset, the shell tree's images/ holds an
+// image and the default home's images/ holds none. It is "" otherwise.
+// hasImages reports whether an images directory holds a built image (the
+// manifest package knows what one looks like; this package only knows
+// where the directory is); exists reports whether a path exists.
+//
+// It turns on images, not on whether the default home exists: any vmavs
+// fetch creates the default home's cache/, and a hint that went quiet
+// then would leave `vmavs run` saying "no built images" with the user's
+// real ones one directory over. Once the default home does exist, only
+// the export is offered: moving the old home over it would clobber what
+// is there, which may be hard links into the old home (fetch's
+// adoption). vmavs never moves anything itself.
+func LegacyHint(getenv func(string) string, hasImages, exists func(string) bool) string {
 	if getenv("VMAVS_HOME") != "" || getenv("HOME") == "" {
 		return ""
 	}
-	old := LegacyHome(getenv)
-	cur := filepath.Join(getenv("HOME"), ".local", "share", "vmavs")
-	if !exists(old) || exists(cur) {
+	old := Paths{Home: LegacyHome(getenv)}
+	cur := Paths{Home: defaultHome(getenv("HOME"))}
+	if !hasImages(old.Images()) || hasImages(cur.Images()) {
 		return ""
 	}
-	return fmt.Sprintf("built state is in the shell tree's location, %s:\n"+
+	if exists(cur.Home) {
+		return fmt.Sprintf("built images are in the shell tree's location, %s:\n"+
+			"  export VMAVS_HOME=%s", old.Home, old.Home)
+	}
+	return fmt.Sprintf("built images are in the shell tree's location, %s:\n"+
 		"  while the shell tree is still in use:  export VMAVS_HOME=%s\n"+
-		"  once it is retired:                    mv %s %s", old, old, old, cur)
+		"  once it is retired:                    mv %s %s", old.Home, old.Home, old.Home, cur.Home)
 }
+
+// defaultHome is the home vmavs uses without VMAVS_HOME, for this $HOME.
+func defaultHome(home string) string { return filepath.Join(home, ".local", "share", "vmavs") }
 
 // QEMU is the QEMU binary: VMAVS_QEMU, else qemu-system-x86_64.
 func QEMU(getenv func(string) string) string {
@@ -150,5 +168,5 @@ func QEMU(getenv func(string) string) string {
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
-// Exists reports whether p exists. It is the default for LegacyHint.
+// Exists reports whether p exists: LegacyHint's exists, on the real filesystem.
 func Exists(p string) bool { return exists(p) }

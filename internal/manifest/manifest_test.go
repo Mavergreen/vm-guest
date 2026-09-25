@@ -67,3 +67,19 @@ func names(ms []Manifest) (out []string) {
 }
 
 func contains(s, substr string) bool { return strings.Contains(s, substr) }
+
+// TestAnyIsWhetherListWouldFindSomething: a manifest counts only with its
+// image beside it, as in List; a missing directory holds nothing.
+func TestAnyIsWhetherListWouldFindSomething(t *testing.T) {
+	if !Any(images) {
+		t.Fatalf("Any(%s) = false, want true", images)
+	}
+	empty := t.TempDir()
+	if Any(empty) || Any(filepath.Join(empty, "missing")) {
+		t.Fatal("an empty or missing directory holds no image")
+	}
+	os.WriteFile(filepath.Join(empty, "orphan.manifest"), []byte("name\torphan\n"), 0o644)
+	if Any(empty) {
+		t.Fatal("a manifest without its image is not an image")
+	}
+}

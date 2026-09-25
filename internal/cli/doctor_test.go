@@ -106,7 +106,7 @@ func TestDoctorExitsZeroOnGO(t *testing.T) {
 
 func TestDoctorShowsTheLegacyHomeHintWhenItApplies(t *testing.T) {
 	home := t.TempDir()
-	os.MkdirAll(filepath.Join(home, ".local", "share", "mavericks-qemu-guest"), 0o755)
+	legacyImages(t, home)
 	host := fakeHost(goodCPUInfo, "Y", true)
 	code, stdout, _ := runDoctor(t, host, map[string]string{"HOME": home})
 	if code != 1 {

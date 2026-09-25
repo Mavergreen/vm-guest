@@ -105,10 +105,15 @@ func Filename(url string) (string, error) {
 // Every write happens on a freshly created, uniquely named file, verified
 // in full, then renamed into place; nothing unverified is ever renamed to
 // its final name.
-func (g *Getter) Get(ctx context.Context, it Item) (string, error) {
+//
+// Get creates cache/<sha>/ (and any missing parent) only when it is about
+// to write into it -- an adoption's or a download's temp -- and removes
+// every directory it created, if still empty, when it fails: a failed
+// fetch leaves nothing behind, not even an empty home that would look
+// like one in use.
+func (g *Getter) Get(ctx context.Context, it Item) (path string, err error) {
 	name := it.Filename
 	if name == "" {
-		var err error
 		if name, err = Filename(it.URL); err != nil {
 			return "", err
 		}
@@ -135,13 +140,28 @@ func (g *Getter) Get(ctx context.Context, it Item) (string, error) {
 		return "", fmt.Errorf("stat %s: %w", dest, err)
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+	var created []string
+	ready := false
+	prepare := func() error {
+		if ready {
+			return nil
+		}
+		c, err := mkdirs(dir)
+		if err != nil {
+			return err
+		}
+		created, ready = c, true
+		return nil
 	}
+	defer func() {
+		if err != nil {
+			removeEmpty(created)
+		}
+	}()
 
 	g.cleanStaleTemps(it, dir, name)
 	for _, old := range it.Adopt {
-		if g.adoptCandidate(it, old, dest, dir, name) {
+		if g.adoptCandidate(it, old, dest, dir, name, prepare) {
 			return dest, nil
 		}
 	}
@@ -149,10 +169,44 @@ func (g *Getter) Get(ctx context.Context, it Item) (string, error) {
 	if it.noFetch {
 		return "", errNotCached
 	}
+	if err := prepare(); err != nil {
+		return "", err
+	}
 	if err := g.download(ctx, it, dir, name, dest); err != nil {
 		return "", err
 	}
 	return dest, nil
+}
+
+// mkdirs is os.MkdirAll(dir), returning the directories it had to create,
+// deepest first, so a caller that fails can take back exactly those.
+func mkdirs(dir string) ([]string, error) {
+	var missing []string
+	for d := dir; ; {
+		if _, err := os.Lstat(d); err == nil || !os.IsNotExist(err) {
+			break
+		}
+		missing = append(missing, d)
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		removeEmpty(missing)
+		return nil, err
+	}
+	return missing, nil
+}
+
+// removeEmpty removes each of dirs, in order, that is empty: os.Remove
+// refuses a directory with anything in it, so a directory a concurrent
+// vmavs has since put a file in stays, as does everything after it.
+func removeEmpty(dirs []string) {
+	for _, d := range dirs {
+		os.Remove(d)
+	}
 }
 
 // stallDuration is StallTimeout, defaulted: 0 or negative means 2
@@ -242,7 +296,7 @@ var testAdoptHook func()
 // whole Get: an adoption candidate is an optimization, and one candidate
 // being unusable says nothing about whether the next one, or a download,
 // will work.
-func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string) bool {
+func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string, prepare func() error) bool {
 	real, err := filepath.EvalSymlinks(old)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -265,6 +319,10 @@ func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string) bool {
 		testAdoptHook()
 	}
 
+	if err := prepare(); err != nil {
+		g.logf("%s: cannot prepare to adopt %s: %v", it.Name, old, err)
+		return false
+	}
 	tmpDir, err := os.MkdirTemp(dir, ".adopt-*")
 	if err != nil {
 		g.logf("%s: cannot prepare to adopt %s: %v", it.Name, old, err)
