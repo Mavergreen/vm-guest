@@ -20,8 +20,10 @@ written.
 
 **No shipped command boots the image `vmavs image` builds, yet.**
 `decisions/0007` says `vmavs run` should boot a throwaway clone of it;
-today `run` only boots this project's own named development profiles, and
-none of them points at that image. That is the open gap.
+today the shipped `run` only boots this project's own named development
+profiles, and none of them points at that image. That is the open gap.
+(The in-progress Go `vmavs`, below, does boot it; it is not the shipped
+path yet.)
 
 `p4-linuxmedia`, a development profile from the P4 phase, is shown below
 for developers only. It is not a next step after `vmavs image`: it boots a
