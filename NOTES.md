@@ -6615,7 +6615,7 @@ whether a fixed `host_port_min/max` reaches a guest whose NIC came from
 above calls the qemuargs override "documented behavior"; that too is
 REASONED from the plugin's docs and source, not measured here.)
 
-## 2026-09-24 — P8 — the Go vmavs boots a built image and answers SSH
+## 2026-09-25 — P8 — the Go vmavs boots a built image and answers SSH
 
 Task 9: point the Go `vmavs` at real, shell-built images on this KVM host
 and MEASURE what actually happens, instead of reasoning about it. Pre-flight

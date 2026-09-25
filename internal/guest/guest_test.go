@@ -156,7 +156,7 @@ func TestLegacyConfigOffersWhatOpenSSH62Needs(t *testing.T) {
 		t.Fatalf("host keys %v, kex %v", cfg.HostKeyAlgorithms, cfg.KeyExchanges)
 	}
 	modern := Target{Signer: mustEd(t)}.ClientConfig()
-	if modern.HostKeyAlgorithms != nil || modern.KeyExchanges != nil {
+	if modern.HostKeyAlgorithms != nil || modern.KeyExchanges != nil || modern.Ciphers != nil {
 		t.Fatal("a modern guest gets x/crypto's defaults, untouched")
 	}
 }

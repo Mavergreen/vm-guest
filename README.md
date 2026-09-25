@@ -72,7 +72,7 @@ out/vmavs run --image mavericks-20260922 &
 out/vmavs ssh -- sw_vers
 ```
 
-MEASURED on this project's own KVM host, 2026-09-24: both a modern image
+MEASURED on this project's own KVM host, 2026-09-25: both a modern image
 and one running Apple's legacy OpenSSH 6.2 boot and answer SSH this way --
 see NOTES.md, "P8 -- the Go vmavs boots a built image and answers SSH".
 

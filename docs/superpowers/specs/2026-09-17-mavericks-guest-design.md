@@ -635,7 +635,7 @@ shell `bin/vmavs run` still only boots this project's development
 profiles, none of which points at the image `vmavs image` builds — that
 half of the gap is unchanged. But the Go `vmavs run` + `vmavs ssh`
 (`docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md`, phase 1) close
-it from the other side: **MEASURED on 2026-09-24, against a shell-built
+it from the other side: **MEASURED on 2026-09-25, against a shell-built
 image on this KVM host** (`vmavs run --image mavericks-20260922`, then
 `vmavs ssh`), a clean checkout that already has a shell-built image reaches
 a shell in it — `sw_vers` answers `10.9.5` within a minute, and the legacy
