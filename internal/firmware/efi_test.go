@@ -222,6 +222,13 @@ func TestEFIImageLayout(t *testing.T) {
 	}
 }
 
+// goldenEFIImage is the sha256 of the image EFIImage makes from the
+// synthetic fixture: shipped's fake artifacts, the fixture's kext
+// bundles and the repository's config.plist at the default SMBIOS model
+// (spec §7's golden bytes). Generated 2026-09-25. Regenerate only on a
+// deliberate format change, and say why in the commit.
+const goldenEFIImage = "8f3bd3e56804747bb2877a7bfe3640a07578a4c1ee9cb11be8a0fcacf557843f"
+
 func TestEFIImageIsDeterministic(t *testing.T) {
 	f := newFixture(t)
 	shipped(f)
@@ -230,6 +237,9 @@ func TestEFIImageIsDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := sha(t, img)
+	if first != goldenEFIImage {
+		t.Errorf("the fixture's image has sha256 %s, pinned %s", first, goldenEFIImage)
+	}
 	for _, p := range []string{img, img + ".sha256"} {
 		if err := os.Remove(p); err != nil {
 			t.Fatal(err)
