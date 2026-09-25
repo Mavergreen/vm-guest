@@ -35,7 +35,15 @@ type Item struct {
 	Filename string // "" derives it from URL
 	Header   http.Header
 	Adopt    []string // existing files to verify and reuse before downloading
+
+	// noFetch, when set, makes Get check the cache and Adopt only, never
+	// the network: errNotCached if neither has it.
+	noFetch bool
 }
+
+// errNotCached is Get's result with Item.noFetch set, when nothing cached
+// or adoptable satisfies the item.
+var errNotCached = errors.New("not in the cache and no adoptable copy")
 
 // Filename is the URL's last path segment, query string and all, as
 // lib/vendor.sh fetch_source derives it.
@@ -84,6 +92,9 @@ func (g *Getter) Get(ctx context.Context, it Item) (string, error) {
 			}
 			g.logf("%s: not adopting %s: checksum %s, want %s", it.Name, old, got, it.SHA256)
 		}
+	}
+	if it.noFetch {
+		return "", errNotCached
 	}
 	if err := g.download(ctx, it, dest); err != nil {
 		return "", err

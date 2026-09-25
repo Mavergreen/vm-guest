@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -147,6 +148,24 @@ func TestHeadersAreSent(t *testing.T) {
 	h.Set("Cookie", "AssetToken=abc")
 	if _, err := g.Get(context.Background(), Item{Name: "t", URL: srv.URL + "/t", SHA256: sum(body), Header: h}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNoFetchNeverContactsTheNetwork(t *testing.T) {
+	contacted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contacted = true
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+	g := getter(t)
+	want := sum([]byte("good"))
+	_, err := g.Get(context.Background(), Item{Name: "x", URL: srv.URL + "/x.zip", SHA256: want, noFetch: true})
+	if !errors.Is(err, errNotCached) {
+		t.Fatalf("err = %v, want errNotCached", err)
+	}
+	if contacted {
+		t.Fatal("noFetch must never contact the network")
 	}
 }
 
