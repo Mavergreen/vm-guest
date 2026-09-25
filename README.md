@@ -69,7 +69,7 @@ not the ones that build an image. Point it at an image the shell pipeline
 already built:
 
 ```sh
-export VMAVS_HOME=~/.local/share/mavericks-qemu-guest
+export VMAVS_HOME="$HOME/.local/share/mavericks-qemu-guest"
 out/vmavs run --image mavericks-20260922 &
 out/vmavs ssh -- sw_vers
 ```
