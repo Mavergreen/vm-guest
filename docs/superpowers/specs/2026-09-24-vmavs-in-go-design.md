@@ -74,6 +74,14 @@ Changes from the shell `vmavs`:
 - **Help.** `-h`/`--help` comes from one mechanism, and each help text
   lives beside its command.
 - **Exit codes.** 0 for success, 1 for failure, 2 for a usage error.
+  `vmavs ssh -- CMD` exits with the remote command's own status.
+- **Signals.** SIGINT, SIGTERM and SIGHUP (unless SIGHUP was already
+  ignored when `vmavs` started) cancel the command in progress. For
+  `run` that is the way to stop the VM: QEMU gets SIGTERM, the run
+  directory is removed (unless `--keep`), and `vmavs` exits 0 -- it did
+  what was asked. `ssh` closes the session and exits 130 (128+SIGINT,
+  what a shell reports for a Ctrl-C) whichever of the three it was, with
+  no error line.
 - **Logging.** Log lines read `vmavs <cmd>: …` on stderr; stdout carries
   only a command's output (`version`, `--describe`, `emit` without
   `--out`).

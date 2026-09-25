@@ -49,7 +49,9 @@ clean checkout to a shell in a guest", for any host that has a built image.
   `bin/vmavs` and everything it dispatches to stay untouched and working
   in this phase. They are the reference until phase 6.
 - Exit codes: 0 for success, 1 for failure, 2 for a usage error. For
-  `vmavs ssh -- CMD`, the remote command's own status.
+  `vmavs ssh -- CMD`, the remote command's own status. A signal that
+  cancels the command (SIGINT, SIGTERM, SIGHUP): `run` stops the VM and
+  exits 0, `ssh` exits 130 (spec §2).
 - Log lines go to stderr as `vmavs <subcommand>: …`, and errors as
   `vmavs <subcommand>: error: …`. Stdout carries only a command's output.
 - Environment variables: `VMAVS_HOME` (default `~/.local/share/vmavs`),
