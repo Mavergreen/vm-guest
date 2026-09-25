@@ -19,9 +19,15 @@ func main() {
 	// SIGKILL) is swept up by the next `vmavs run` or `vmavs ssh`
 	// (vm.Reap), unless it was started with --keep.
 	//
-	// SIGHUP is only watched if it isn't already being ignored: `nohup
-	// vmavs run &` arranges exactly that (so the run survives its
-	// terminal closing), and catching it anyway here would defeat that.
+	// SIGHUP is only watched if it isn't already being ignored (as under
+	// `nohup`): signal.Notify would otherwise re-enable a signal the
+	// parent deliberately ignored. That is all this buys. It does NOT make
+	// `nohup vmavs run &` survive its terminal closing: QEMU installs its
+	// own SIGHUP handler, so the hangup still stops the VM (and vmavs,
+	// with it, exits). Only a run started in its own session (setsid) is
+	// out of the hangup's reach. REASONED from QEMU's os-posix.c, whose
+	// os_setup_signal_handling catches SIGHUP as it does SIGINT and
+	// SIGTERM; not measured here.
 	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
 	if !signal.Ignored(syscall.SIGHUP) {
 		sigs = append(sigs, syscall.SIGHUP)
