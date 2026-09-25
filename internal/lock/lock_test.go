@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -235,5 +236,154 @@ func TestReleaseOfAVanishedLockSaysItIsGone(t *testing.T) {
 	err = l.Release()
 	if err == nil || !strings.Contains(err.Error(), "is gone") || strings.Contains(err.Error(), "pid 0") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// plant makes a directory beside the lock, as a killed builder would have
+// left it, holding pid (none when pid is 0).
+func plant(t *testing.T, parent, name string, pid int) string {
+	t.Helper()
+	p := filepath.Join(parent, name)
+	if err := os.Mkdir(p, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if pid != 0 {
+		if err := os.WriteFile(filepath.Join(p, "pid"), []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return p
+}
+
+// A builder killed mid-acquisition or mid-release leaves this package's
+// own directories beside the lock. The next Acquire sweeps those whose
+// pid is dead or missing, and nothing else: a live pid's is still in use,
+// and a name this package does not make is someone else's.
+func TestAcquireSweepsItsOwnLeftovers(t *testing.T) {
+	dead := deadPID(t)
+	live := os.Getppid() // alive: it is running this test
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "out.img.lock")
+	var gone, kept []string
+	for _, prefix := range []string{".out.img.lock.tmp-", "out.img.lock.stale-", "out.img.lock.released-"} {
+		gone = append(gone, plant(t, parent, prefix+"dead", dead), plant(t, parent, prefix+"nopid", 0))
+		kept = append(kept, plant(t, parent, prefix+"live", live))
+	}
+	kept = append(kept,
+		plant(t, parent, "other.lock.stale-dead", dead),
+		plant(t, parent, "out.img.lock.old", dead),
+		plant(t, parent, ".out.img.lock.tmpdead", dead),
+		plant(t, parent, "xout.img.lock.stale-dead", dead))
+	notADir := filepath.Join(parent, "out.img.lock.stale-file")
+	if err := os.WriteFile(notADir, []byte("a file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	kept = append(kept, notADir)
+
+	l, err := Acquire(dir, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Release()
+	if !l.Serialized {
+		t.Skip("this filesystem refuses flock on a directory: nothing is swept without it")
+	}
+	for _, p := range gone {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s was not swept (%v)", filepath.Base(p), err)
+		}
+	}
+	for _, p := range kept {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("%s was swept: %v", filepath.Base(p), err)
+		}
+	}
+	if got := pidIn(t, filepath.Join(parent, ".out.img.lock.tmp-live")); got != strconv.Itoa(live)+"\n" {
+		t.Errorf("a live leftover was changed: %q", got)
+	}
+}
+
+// Where flock cannot be taken, Acquire says so (Serialized is false),
+// sweeps nothing -- a live acquirer's temporary directory has no pid for
+// a moment, and only the flock makes that moment unobservable -- and a
+// fresh lock still has exactly one holder: the rename-only protocol
+// never shows a lock without its pid.
+func TestWithoutFlockAFreshLockStillHasOneHolder(t *testing.T) {
+	orig := flock
+	flock = func(int, int) error { return syscall.ENOLCK }
+	t.Cleanup(func() { flock = orig })
+
+	dead := deadPID(t)
+	const racers, rounds = 8, 200
+	for round := 0; round < rounds; round++ {
+		parent := t.TempDir()
+		dir := filepath.Join(parent, "out.img.lock")
+		leftover := plant(t, parent, "out.img.lock.stale-dead", dead)
+		var (
+			mu      sync.Mutex
+			winners []*Lock
+			errs    []error
+			start   = make(chan struct{})
+			wg      sync.WaitGroup
+		)
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				l, err := Acquire(dir, os.Getpid())
+				mu.Lock()
+				defer mu.Unlock()
+				if err == nil {
+					winners = append(winners, l)
+				} else {
+					errs = append(errs, err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if len(winners) != 1 {
+			t.Fatalf("round %d: %d holders (refusals: %v)", round, len(winners), errs)
+		}
+		if winners[0].Serialized {
+			t.Fatalf("round %d: Serialized with flock failing", round)
+		}
+		for _, err := range errs {
+			if !strings.Contains(err.Error(), "is already building") {
+				t.Fatalf("round %d: a loser failed otherwise: %v", round, err)
+			}
+		}
+		if _, err := os.Lstat(leftover); err != nil {
+			t.Fatalf("round %d: swept without the flock: %v", round, err)
+		}
+		if err := winners[0].Release(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAcquireIsSerializedWhereFlockWorks(t *testing.T) {
+	l, err := Acquire(filepath.Join(t.TempDir(), "out.img.lock"), os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Release()
+	if !l.Serialized {
+		t.Skip("this filesystem refuses flock on a directory")
+	}
+}
+
+// A lock naming pid 0 names nobody, and every other builder would take
+// it over: a pid below 1 is this process's.
+func TestAnUnsetPIDIsThisProcess(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "out.img.lock")
+	l, err := Acquire(dir, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Release()
+	if want := strconv.Itoa(os.Getpid()); pidIn(t, dir) != want+"\n" || l.PID != os.Getpid() {
+		t.Fatalf("pid file %q, Lock.PID %d; want %s", pidIn(t, dir), l.PID, want)
 	}
 }
