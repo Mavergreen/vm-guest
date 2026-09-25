@@ -398,3 +398,25 @@ func TestMarkCleanRefusesWhatIsNotHFSPlus(t *testing.T) {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
 }
+
+// A block size and a block count are each 32 bits, and their product is
+// not: a corrupt header's length is reported as the header claims it,
+// not as it wraps in a signed 64-bit multiply.
+func TestMarkCleanRefusesAGeometryThatOverflows(t *testing.T) {
+	img := filepath.Join(t.TempDir(), "vol.img")
+	syntheticVolume(t, img, 1<<20, 0, 256, 0x800, 0x800)
+	b, _ := os.ReadFile(img)
+	binary.BigEndian.PutUint32(b[1024+40:], 0xFFFFFFFF)
+	binary.BigEndian.PutUint32(b[1024+44:], 0xFFFFFFFF)
+	if err := os.WriteFile(img, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := MarkClean(img, 0)
+	want := fmt.Sprintf("volume at 0 claims %d bytes, which does not fit in %s", uint64(0xFFFFFFFF)*0xFFFFFFFF, img)
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	if got := attrsAt(t, img, 1024); got != 0x800 {
+		t.Fatalf("attributes changed to 0x%08x on a refused volume", got)
+	}
+}

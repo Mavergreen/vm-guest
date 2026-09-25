@@ -1,0 +1,689 @@
+package media
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/Mavergreen/vm-guest/internal/config"
+	"github.com/Mavergreen/vm-guest/internal/privops"
+	"github.com/Mavergreen/vm-guest/internal/proc"
+)
+
+// payloadNames are the media build's microVM payloads, which the fake
+// recognises by their bytes.
+var payloadNames = []string{"extract-basesystem", "assemble", "fix-ownership", "verify-packages", "content-digest"}
+
+type vmCall struct {
+	name, target string
+	disks        []privops.Disk
+	tar          map[string]entry // pass 2's inject.tar, read during the pass
+}
+
+// fakeVM answers each payload as the real guest would, through the
+// console and the raw disks.
+type fakeVM struct {
+	t       *testing.T
+	missing []string
+	calls   []vmCall
+
+	baseSystem []byte // what extract writes to its raw disk
+	reportSHA  string // extract's reported sha, when not the true one
+	badESD     string // a package whose ESD sum assemble gets wrong
+	dropMedia  string // a package verify does not find
+
+	digest func(disks []privops.Disk) string // content-digest's console
+}
+
+func (v *fakeVM) Missing() []string { return v.missing }
+
+func (v *fakeVM) Run(_ context.Context, target string, payload []byte, disks []privops.Disk) ([]byte, error) {
+	t := v.t
+	name := ""
+	for _, n := range payloadNames {
+		if bytes.Equal(payload, embedded(t, "media/privops/"+n+".sh")) {
+			name = n
+		}
+	}
+	call := vmCall{name: name, target: target, disks: append([]privops.Disk(nil), disks...)}
+	var con strings.Builder
+	// A serial console's carriage returns and a kernel line, which the
+	// markers must be read through.
+	con.WriteString("[    0.123456] booting\r\n")
+	switch name {
+	case "extract-basesystem":
+		f, err := os.OpenFile(disks[1].Path, os.O_RDWR, 0)
+		if err != nil {
+			return nil, err
+		}
+		_, err = f.WriteAt(v.baseSystem, 0)
+		f.Close()
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(v.baseSystem)
+		sha := hex.EncodeToString(sum[:])
+		if v.reportSHA != "" {
+			sha = v.reportSHA
+		}
+		fmt.Fprintf(&con, "BaseSystem.dmg on the ESD: %d bytes\r\n", len(v.baseSystem))
+		fmt.Fprintf(&con, "MQG-BASESYSTEM-BYTES %d\r\nMQG-BASESYSTEM-SHA256 %s\r\n", len(v.baseSystem), sha)
+	case "assemble":
+		for _, d := range disks {
+			if d.Role == "raw" {
+				b, err := os.ReadFile(d.Path)
+				if err != nil {
+					return nil, err
+				}
+				call.tar = readTar(t, b)
+			}
+		}
+		v.sums(&con, "MQG-SUM-ESD", v.badESD, "")
+	case "verify-packages":
+		v.sums(&con, "MQG-SUM-MEDIA", "", v.dropMedia)
+	case "content-digest":
+		con.WriteString(v.digest(disks))
+	case "fix-ownership":
+	default:
+		t.Fatalf("an unknown payload was run on %s", target)
+	}
+	con.WriteString("MQG-PRIVOPS-OK rc=0\r\n")
+	v.calls = append(v.calls, call)
+	return []byte(con.String()), nil
+}
+
+// sums prints a marker line for every pinned package, as sha256sum
+// prints them, with bad's checksum wrong and drop left out.
+func (v *fakeVM) sums(w *strings.Builder, marker, bad, drop string) {
+	pinned := parseSums(embedded(v.t, "media/apple-packages.sha256"), true)
+	var names []string
+	for n := range pinned {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		sha := pinned[n]
+		switch n {
+		case drop:
+			continue
+		case bad:
+			sha = strings.Repeat("0", 64)
+		}
+		fmt.Fprintf(w, "%s %s  %s\r\n", marker, sha, n)
+	}
+}
+
+func (v *fakeVM) names() []string {
+	var n []string
+	for _, c := range v.calls {
+		n = append(n, c.name)
+	}
+	return n
+}
+
+// fakeTools is a Runner with dmg2img and mkfs.hfsplus on its PATH:
+// dmg2img writes a few bytes to its -o, and mkfs.hfsplus writes a volume
+// signature, after telling mkfs (if set) the size it was given.
+func fakeTools(mkfs func(size int64) error) *proc.Fake {
+	return &proc.Fake{
+		Paths: map[string]string{"dmg2img": "/usr/bin/dmg2img", "mkfs.hfsplus": "/usr/sbin/mkfs.hfsplus"},
+		Handle: func(c proc.Cmd) error {
+			switch c.Name {
+			case "dmg2img":
+				if len(c.Args) != 5 || c.Args[0] != "-s" || c.Args[1] != "-i" || c.Args[3] != "-o" {
+					return fmt.Errorf("unexpected %s", c)
+				}
+				return os.WriteFile(c.Args[4], []byte("raw of "+c.Args[2]), 0o644)
+			case "mkfs.hfsplus":
+				f, err := os.OpenFile(c.Args[len(c.Args)-1], os.O_RDWR, 0)
+				if err != nil {
+					return err
+				}
+				defer f.Close()
+				fi, err := f.Stat()
+				if err != nil {
+					return err
+				}
+				if mkfs != nil {
+					if err := mkfs(fi.Size()); err != nil {
+						return err
+					}
+				}
+				_, err = f.WriteAt([]byte("H+"), 1024)
+				return err
+			}
+			return fmt.Errorf("unexpected command %s", c)
+		},
+	}
+}
+
+type rig struct {
+	b    *Builder
+	r    *proc.Fake
+	vm   *fakeVM
+	esd  string
+	out  string
+	logs []string
+}
+
+func (g *rig) logged(s string) bool {
+	for _, l := range g.logs {
+		if l == s {
+			return true
+		}
+	}
+	return false
+}
+
+// newRig is a Builder on an empty home, with a small ESD, fake tools, a
+// fake microVM and a 4 MiB partition: the real 6759 MiB costs seconds of
+// reading holes per build, and only TestThePartitionIsSizedFromTheReference
+// needs it.
+func newRig(t *testing.T) *rig {
+	t.Helper()
+	g := &rig{r: fakeTools(nil)}
+	g.vm = &fakeVM{t: t, baseSystem: bytes.Repeat([]byte("BaseSystem fixture "), 1000)}
+	paths := config.Paths{Home: t.TempDir()}
+	g.esd = writeFile(t, filepath.Join(t.TempDir(), "InstallESD.dmg"), "a small fake ESD")
+	g.out = paths.InstallerMedia()
+	g.b = &Builder{Paths: paths, Runner: g.r, VM: g.vm, PID: os.Getpid(), baseMiB: 4,
+		Log: func(f string, a ...any) { g.logs = append(g.logs, fmt.Sprintf(f, a...)) }}
+	return g
+}
+
+func sha256Of(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:])
+}
+
+func absent(t *testing.T, paths ...string) {
+	t.Helper()
+	for _, p := range paths {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is still there (%v)", p, err)
+		}
+	}
+}
+
+func TestBuildMakesTheMedia(t *testing.T) {
+	g := newRig(t)
+	out, err := g.b.Build(context.Background(), g.esd, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(g.b.Paths.Home, "build", "installer-media.img"); out != want {
+		t.Fatalf("Build returned %s, want %s", out, want)
+	}
+	sidecar, err := os.ReadFile(out + ".sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := regexp.MustCompile(`^# sha256 of installer-media\.img as built at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ
+# Mounting the image invalidates this: HFS\+ records the mount
+# in its volume header, and a read-write mount rewrites it\.
+` + sha256Of(t, out) + `  installer-media\.img
+$`)
+	if !re.Match(sidecar) {
+		t.Fatalf("the sidecar is\n%s", sidecar)
+	}
+	entries, err := os.ReadDir(filepath.Dir(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, " ") != "installer-media.img installer-media.img.sha256" {
+		t.Fatalf("build/ holds %q", names)
+	}
+	absent(t, out+".building", out+".lock", g.b.Paths.MediaWork())
+	for _, l := range []string{"converting InstallESD.dmg to raw (about 5 GB)",
+		"bringing BaseSystem.dmg out of the ESD (microVM pass 1 of 4)",
+		"assembling the media inside the microVM (pass 2 of 4)",
+		"restoring root ownership (microVM pass 3 of 4)",
+		"reading the finished media back in a microVM of its own (pass 4 of 4)",
+		fmt.Sprintf("size %d bytes, sha256 %s", 6<<20, sha256Of(t, out))} {
+		if !g.logged(l) {
+			t.Errorf("not logged: %q", l)
+		}
+	}
+}
+
+func TestPassOrderAndDisks(t *testing.T) {
+	for _, withPkg := range []bool{false, true} {
+		t.Run(fmt.Sprintf("firstboot=%v", withPkg), func(t *testing.T) {
+			g := newRig(t)
+			var o Options
+			if withPkg {
+				// No Autoinstall: the package implies it.
+				o.FirstbootPkg = writeFile(t, filepath.Join(t.TempDir(), "fb.pkg"), "xar!the first-boot payload")
+			}
+			if _, err := g.b.Build(context.Background(), g.esd, o); err != nil {
+				t.Fatal(err)
+			}
+			w := g.b.Paths.MediaWork()
+			ro := func(n string) privops.Disk { return privops.Disk{Role: "ro", Path: filepath.Join(w, n)} }
+			raw := func(n string) privops.Disk { return privops.Disk{Role: "raw", Path: filepath.Join(w, n)} }
+			assemble := []privops.Disk{ro("basesystem.img"), ro("esd.img")}
+			if withPkg {
+				assemble = append(assemble, raw("inject.tar"))
+			}
+			want := []vmCall{
+				{name: "extract-basesystem", disks: []privops.Disk{ro("esd.img"), raw("basesystem.dmg")}},
+				{name: "assemble", disks: assemble},
+				{name: "fix-ownership"},
+				{name: "verify-packages"},
+			}
+			if len(g.vm.calls) != len(want) {
+				t.Fatalf("passes %q", g.vm.names())
+			}
+			for i, c := range g.vm.calls {
+				if c.name != want[i].name || c.target != g.out+".building" ||
+					fmt.Sprint(c.disks) != fmt.Sprint(want[i].disks) {
+					t.Errorf("pass %d: %s on %s with %v, want %s on %s.building with %v",
+						i+1, c.name, c.target, c.disks, want[i].name, g.out, want[i].disks)
+				}
+			}
+			tar := g.vm.calls[1].tar
+			if !withPkg {
+				if tar != nil {
+					t.Fatal("a tar was given without anything to inject")
+				}
+				return
+			}
+			if got := tar["System/Installation/Packages/mqg-firstboot.pkg"]; got.data != "xar!the first-boot payload" {
+				t.Fatalf("the first-boot package is not on the media: %+v", got)
+			}
+			if _, ok := tar["private/etc/rc.cdrom.local"]; !ok {
+				t.Fatal("the hooks are not on the media")
+			}
+		})
+	}
+}
+
+func TestDmg2imgRuns(t *testing.T) {
+	g := newRig(t)
+	if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	w := g.b.Paths.MediaWork()
+	var got []string
+	for _, c := range g.r.Calls {
+		if c.Name == "dmg2img" {
+			got = append(got, strings.Join(c.Args, " "))
+		}
+	}
+	want := []string{
+		"-s -i " + g.esd + " -o " + filepath.Join(w, "esd.img"),
+		"-s -i " + filepath.Join(w, "basesystem.dmg") + " -o " + filepath.Join(w, "basesystem.img"),
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("dmg2img ran\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestBaseSystemMustSurviveTheTrip(t *testing.T) {
+	g := newRig(t)
+	g.vm.reportSHA = strings.Repeat("a", 64)
+	_, err := g.b.Build(context.Background(), g.esd, Options{})
+	if err == nil || !strings.Contains(err.Error(), "BaseSystem.dmg did not survive the trip out of the microVM") {
+		t.Fatalf("err = %v", err)
+	}
+	absent(t, g.out, g.out+".building", g.out+".sha256", g.out+".lock")
+	if n := g.vm.names(); len(n) != 1 {
+		t.Fatalf("passes after a torn BaseSystem.dmg: %q", n)
+	}
+}
+
+func TestTheBaseSystemSizeMustBeReported(t *testing.T) {
+	g := newRig(t)
+	g.b.VM = &consoleEdit{g.vm, func(c []byte) []byte {
+		return regexp.MustCompile(`(?m)^MQG-BASESYSTEM-BYTES .*$`).ReplaceAll(c, []byte("MQG-BASESYSTEM-BYTES 12a\r"))
+	}}
+	_, err := g.b.Build(context.Background(), g.esd, Options{})
+	if err == nil || !strings.Contains(err.Error(), "the microVM did not report a BaseSystem.dmg size") {
+		t.Fatalf("err = %v", err)
+	}
+	absent(t, g.out+".building")
+}
+
+// consoleEdit is a MicroVM whose console is rewritten on the way out.
+type consoleEdit struct {
+	*fakeVM
+	edit func([]byte) []byte
+}
+
+func (c *consoleEdit) Run(ctx context.Context, target string, payload []byte, disks []privops.Disk) ([]byte, error) {
+	con, err := c.fakeVM.Run(ctx, target, payload, disks)
+	return c.edit(con), err
+}
+
+func TestAConversionThatIsNotApplesIsNamed(t *testing.T) {
+	g := newRig(t)
+	g.vm.badESD = "Essentials.pkg"
+	_, err := g.b.Build(context.Background(), g.esd, Options{})
+	if err == nil || !strings.HasPrefix(err.Error(), "the ESD does not contain what Apple shipped") {
+		t.Fatalf("err = %v", err)
+	}
+	found := false
+	for _, l := range g.logs {
+		found = found || strings.HasPrefix(l, "    Essentials.pkg: FAILED -- "+strings.Repeat("0", 64)+" is not what Apple shipped")
+	}
+	if !found {
+		t.Errorf("the wrong package was not logged:\n%s", strings.Join(g.logs, "\n"))
+	}
+	if n := g.vm.names(); strings.Join(n, " ") != "extract-basesystem assemble" {
+		t.Fatalf("passes %q", n)
+	}
+	absent(t, g.out, g.out+".building", g.out+".sha256")
+}
+
+func TestACopyThatIsNotApplesIsNamed(t *testing.T) {
+	g := newRig(t)
+	g.vm.dropMedia = "BSD.pkg"
+	_, err := g.b.Build(context.Background(), g.esd, Options{})
+	if err == nil || !strings.HasPrefix(err.Error(), "the media does not contain what Apple shipped") {
+		t.Fatalf("err = %v", err)
+	}
+	if !g.logged("    BSD.pkg: MISSING -- the media does not have it") {
+		t.Errorf("the missing package was not logged:\n%s", strings.Join(g.logs, "\n"))
+	}
+	absent(t, g.out, g.out+".building", g.out+".sha256", g.out+".lock")
+}
+
+func TestBuildRefusesWithoutTheBackend(t *testing.T) {
+	g := newRig(t)
+	g.vm.missing = []string{"qemu-system-x86_64 (not on PATH)", "busybox (not on PATH)"}
+	_, err := g.b.Build(context.Background(), g.esd, Options{})
+	if err == nil {
+		t.Fatal("built without the backend")
+	}
+	for _, m := range g.vm.missing {
+		if !strings.Contains(err.Error(), m) {
+			t.Errorf("the error does not name %q: %v", m, err)
+		}
+	}
+	if len(g.r.Calls) != 0 || len(g.vm.calls) != 0 {
+		t.Fatalf("ran %v and %q", g.r.Calls, g.vm.names())
+	}
+}
+
+func TestBuildRefuses(t *testing.T) {
+	dir := t.TempDir()
+	notXar := writeFile(t, filepath.Join(dir, "not-xar.pkg"), "PK\x03\x04 a zip")
+	good := writeFile(t, filepath.Join(dir, "good.pkg"), "xar!good")
+	nowhere := filepath.Join(dir, "nowhere.pkg")
+	for _, tc := range []struct {
+		name  string
+		esd   string // "" is the rig's
+		o     Options
+		tools map[string]string
+		want  string
+	}{
+		{"no ESD", filepath.Join(dir, "InstallESD.dmg"), Options{}, nil,
+			"no InstallESD.dmg at " + filepath.Join(dir, "InstallESD.dmg") + " -- run vmavs fetch esd"},
+		{"no first-boot package", "", Options{Injectables: Injectables{FirstbootPkg: nowhere}}, nil,
+			"no first-boot package at " + nowhere},
+		{"first-boot package not xar", "", Options{Injectables: Injectables{FirstbootPkg: notXar}}, nil,
+			notXar + " is not a flat package (no xar magic)"},
+		{"no extra package", "", Options{Injectables: Injectables{ExtraPkgs: []string{good, nowhere}}}, nil,
+			"no such --extra-pkg: " + nowhere},
+		{"extra package not xar", "", Options{Injectables: Injectables{ExtraPkgs: []string{notXar}}}, nil,
+			notXar + " is not a flat package (no xar magic)"},
+		{"two extras on one name", "", Options{Injectables: Injectables{ExtraPkgs: []string{good, good}}}, nil,
+			"would both be System/Installation/Packages/good.pkg"},
+		{"negative space", "", Options{ExtraSpaceMiB: -1}, nil,
+			"--extra-space-mib wants a whole number of MiB, not -1"},
+		{"no dmg2img", "", Options{}, map[string]string{"mkfs.hfsplus": "/usr/sbin/mkfs.hfsplus"},
+			"dmg2img (not on PATH)"},
+		{"no mkfs.hfsplus", "", Options{}, map[string]string{"dmg2img": "/usr/bin/dmg2img"},
+			"mkfs.hfsplus (not on PATH)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newRig(t)
+			if tc.tools != nil {
+				g.r.Paths = tc.tools
+			}
+			esd := g.esd
+			if tc.esd != "" {
+				esd = tc.esd
+			}
+			_, err := g.b.Build(context.Background(), esd, tc.o)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want one containing %q", err, tc.want)
+			}
+			if len(g.r.Calls) != 0 || len(g.vm.calls) != 0 {
+				t.Fatalf("ran %v and %q", g.r.Calls, g.vm.names())
+			}
+			absent(t, g.b.Paths.Build())
+		})
+	}
+
+	t.Run("existing media", func(t *testing.T) {
+		g := newRig(t)
+		writeFile(t, g.out, "the old media")
+		_, err := g.b.Build(context.Background(), g.esd, Options{})
+		if want := g.out + " exists; pass --force to replace it"; err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want %q", err, want)
+		}
+		if b, _ := os.ReadFile(g.out); string(b) != "the old media" {
+			t.Fatalf("the media was touched: %q", b)
+		}
+		if len(g.r.Calls) != 0 || len(g.vm.calls) != 0 {
+			t.Fatalf("ran %v and %q", g.r.Calls, g.vm.names())
+		}
+		absent(t, g.out+".lock")
+	})
+}
+
+func TestForceReplacesTheMedia(t *testing.T) {
+	g := newRig(t)
+	writeFile(t, g.out, "the old media")
+	writeFile(t, g.out+".sha256", "the old sidecar\n")
+	if _, err := g.b.Build(context.Background(), g.esd, Options{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(g.out); string(b) == "the old media" {
+		t.Fatal("the old media is still there")
+	}
+	side, _ := os.ReadFile(g.out + ".sha256")
+	if !strings.HasSuffix(string(side), sha256Of(t, g.out)+"  installer-media.img\n") {
+		t.Fatalf("the sidecar is\n%s", side)
+	}
+}
+
+// A .building file is only ever a build that was killed: never media.
+func TestAStaleBuildingFileIsNotInTheWay(t *testing.T) {
+	g := newRig(t)
+	writeFile(t, g.out+".building", "a build that was killed")
+	writeFile(t, filepath.Join(g.b.Paths.MediaWork(), "basesystem.img"), "a stale conversion")
+	if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	absent(t, g.out+".building")
+}
+
+func TestAnotherBuilderIsRefused(t *testing.T) {
+	g := newRig(t)
+	lockDir := g.out + ".lock"
+	holder := os.Getppid() // alive: it is running this test
+	writeFile(t, filepath.Join(lockDir, "pid"), strconv.Itoa(holder)+"\n")
+	_, err := g.b.Build(context.Background(), g.esd, Options{})
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("pid %d ", holder)) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(g.r.Calls) != 0 || len(g.vm.calls) != 0 {
+		t.Fatalf("ran %v and %q", g.r.Calls, g.vm.names())
+	}
+	if b, _ := os.ReadFile(filepath.Join(lockDir, "pid")); string(b) != strconv.Itoa(holder)+"\n" {
+		t.Fatalf("the other builder's lock was changed: %q", b)
+	}
+}
+
+func TestAStaleLockIsTakenOver(t *testing.T) {
+	g := newRig(t)
+	writeFile(t, filepath.Join(g.out+".lock", "pid"), "")
+	if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if !g.logged("taking over a stale lock left by an unknown pid") {
+		t.Fatalf("the takeover was not logged:\n%s", strings.Join(g.logs, "\n"))
+	}
+	absent(t, g.out+".lock")
+}
+
+func TestKeepWorkKeepsTheConversions(t *testing.T) {
+	g := newRig(t)
+	if _, err := g.b.Build(context.Background(), g.esd, Options{KeepWork: true, Injectables: Injectables{Autoinstall: true}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"esd.img", "basesystem.dmg", "basesystem.img", "inject.tar", "console.txt"} {
+		if _, err := os.Stat(filepath.Join(g.b.Paths.MediaWork(), n)); err != nil {
+			t.Error(err)
+		}
+	}
+}
+
+func TestNothingMounts(t *testing.T) {
+	g := newRig(t)
+	o := Options{Injectables: Injectables{Autoinstall: true,
+		FirstbootPkg: writeFile(t, filepath.Join(t.TempDir(), "fb.pkg"), "xar!fb")}}
+	if _, err := g.b.Build(context.Background(), g.esd, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range g.r.Calls {
+		switch c.Name {
+		case "mount", "umount", "losetup", "udisksctl", "sgdisk":
+			t.Errorf("ran %s", c)
+		case "dmg2img", "mkfs.hfsplus":
+		default:
+			t.Errorf("ran something else: %s", c)
+		}
+	}
+}
+
+func TestThePartitionIsSizedFromTheReference(t *testing.T) {
+	if got := BasePartMiB(); got != 6759 {
+		t.Fatalf("BasePartMiB() = %d, want 6759", got)
+	}
+	g := newRig(t)
+	g.b.baseMiB = 0
+	var sized int64
+	stop := errors.New("stopped once the size was seen")
+	g.r = fakeTools(func(size int64) error { sized = size; return stop })
+	g.r.Paths = map[string]string{"dmg2img": "x", "mkfs.hfsplus": "y"}
+	g.b.Runner = g.r
+	if _, err := g.b.Build(context.Background(), g.esd, Options{ExtraSpaceMiB: 300}); !errors.Is(err, stop) {
+		t.Fatalf("err = %v", err)
+	}
+	if want := int64(6759+300) << 20; sized != want {
+		t.Fatalf("mkfs.hfsplus was given %d bytes, want %d", sized, want)
+	}
+	absent(t, g.out, g.out+".building", g.out+".building.hfs-tmp")
+
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.pkg")
+	if err := os.WriteFile(big, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(big, 3<<19); err != nil {
+		t.Fatal(err)
+	}
+	small := writeFile(t, filepath.Join(dir, "small.pkg"), "0123456789")
+	if got, err := UpdatesExtraMiB([]string{big, small}); err != nil || got != 66 {
+		t.Fatalf("UpdatesExtraMiB = %d, %v, want 66", got, err)
+	}
+	if got, err := UpdatesExtraMiB(nil); err != nil || got != 0 {
+		t.Fatalf("UpdatesExtraMiB(none) = %d, %v, want 0", got, err)
+	}
+	if _, err := UpdatesExtraMiB([]string{filepath.Join(dir, "gone.pkg")}); err == nil {
+		t.Fatal("a package that is not there was sized")
+	}
+}
+
+func TestDescribeTouchesNothing(t *testing.T) {
+	home := t.TempDir()
+	b := &Builder{Paths: config.Paths{Home: home}}
+	var buf bytes.Buffer
+	o := Options{Injectables: Injectables{Autoinstall: true, FirstbootPkg: "/pkgs/fb-built.pkg",
+		ExtraPkgs: []string{"/pkgs/a/openssh.pkg", "/pkgs/b/other.pkg"}}}
+	b.Describe(&buf, "/somewhere/InstallESD.dmg", o)
+	text := buf.String()
+	want := []string{
+		"  output              " + filepath.Join(home, "build", "installer-media.img"),
+		"  source              /somewhere/InstallESD.dmg",
+		"  work area           " + filepath.Join(home, "work", "media"),
+		"  partition 1 type    AF00 (Apple HFS+)",
+		"  partition 1 size    6759 MiB = 7087325184 bytes",
+		"  disk size           6761 MiB = 7089422336 bytes",
+		"  volume name         OS X Base System",
+		"    System/Installation/Packages/mqg-firstboot.pkg",
+		"      from /pkgs/fb-built.pkg",
+		"    System/Installation/Packages/openssh.pkg",
+		"    System/Installation/Packages/other.pkg",
+	}
+	for _, f := range AutoinstallFiles {
+		want = append(want, fmt.Sprintf("    %-46s mode %o", f.Dest, f.Mode), "      from image/autoinstall/"+f.Source)
+	}
+	lines := map[string]bool{}
+	for _, l := range strings.Split(text, "\n") {
+		lines[l] = true
+	}
+	for _, w := range want {
+		if !lines[w] {
+			t.Errorf("no line %q in\n%s", w, text)
+		}
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Fatalf("Describe left %v in the home", entries)
+	}
+
+	buf.Reset()
+	b.Describe(&buf, "/somewhere/InstallESD.dmg", Options{ExtraSpaceMiB: 300})
+	if strings.Contains(buf.String(), "unattended-install") {
+		t.Fatalf("hooks described without --autoinstall:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "  partition 1 size    7059 MiB = 7401897984 bytes\n") ||
+		!strings.Contains(buf.String(), "plus 300 MiB of --extra-space-mib)") {
+		t.Fatalf("the extra space is not described:\n%s", buf.String())
+	}
+}
+
+// A lock naming pid 0 names nobody, and any other builder would take it
+// over: an unset PID is this process's.
+func TestTheLockNamesThisProcessWhenPIDIsUnset(t *testing.T) {
+	g := newRig(t)
+	g.b.PID = 0
+	var seen string
+	g.r.Handle = func(inner func(proc.Cmd) error) func(proc.Cmd) error {
+		return func(c proc.Cmd) error {
+			if seen == "" {
+				b, _ := os.ReadFile(filepath.Join(g.out+".lock", "pid"))
+				seen = string(b)
+			}
+			return inner(c)
+		}
+	}(g.r.Handle)
+	if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := strconv.Itoa(os.Getpid()) + "\n"; seen != want {
+		t.Fatalf("the lock named %q during the build, want %q", seen, want)
+	}
+}

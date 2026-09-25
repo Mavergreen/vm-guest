@@ -165,10 +165,14 @@ func MarkClean(img string, start int64) ([]string, error) {
 	if _, err := f.ReadAt(geo[:], start+1024+40); err != nil {
 		return nil, fmt.Errorf("cannot read the volume header at %d: %w", start+1024, err)
 	}
-	length := int64(binary.BigEndian.Uint32(geo[0:4])) * int64(binary.BigEndian.Uint32(geo[4:8]))
-	if length <= 0 || start+length > fi.Size() {
-		return nil, fmt.Errorf("volume at %d claims %d bytes, which does not fit in %s", start, length, img)
+	// Two 32-bit fields, whose product needs 64 unsigned bits: a corrupt
+	// header must be refused for what it claims, not for what that
+	// wraps to in an int64.
+	claimed := uint64(binary.BigEndian.Uint32(geo[0:4])) * uint64(binary.BigEndian.Uint32(geo[4:8]))
+	if claimed == 0 || start < 0 || start > fi.Size() || claimed > uint64(fi.Size()-start) {
+		return nil, fmt.Errorf("volume at %d claims %d bytes, which does not fit in %s", start, claimed, img)
 	}
+	length := int64(claimed)
 	var report []string
 	for _, where := range []int64{start + 1024, start + length - 1024} {
 		var head [8]byte

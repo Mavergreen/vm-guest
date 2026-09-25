@@ -47,6 +47,14 @@ type Injectables struct {
 
 var tarTime = time.Unix(0, 0)
 
+// Enabled is whether there is anything to inject: Autoinstall, or any
+// package, which implies it -- as the shell's --firstboot-pkg and
+// --extra-pkg imply --autoinstall. A package named and then dropped
+// would be media built without it, and nothing to say so.
+func (in Injectables) Enabled() bool {
+	return in.Autoinstall || in.FirstbootPkg != "" || len(in.ExtraPkgs) > 0
+}
+
 // packages is the packages to carry, by their name on the media, and
 // refuses two that would land on one name.
 func (in Injectables) packages() (map[string]string, error) {
@@ -68,11 +76,11 @@ func (in Injectables) packages() (map[string]string, error) {
 // where they go on the media: a directory entry would set the mode of a
 // directory Apple's media already has (it made five of them
 // group-writable once). The guest untars it onto the volume before the
-// ownership pass, which is what makes these root-owned. Without
-// Autoinstall it writes an empty tar. log, if not nil, hears of each file.
+// ownership pass, which is what makes these root-owned. When nothing is
+// Enabled it writes an empty tar. log, if not nil, hears of each file.
 func (in Injectables) WriteTar(w io.Writer, log func(string, ...any)) error {
 	tw := tar.NewWriter(w)
-	if !in.Autoinstall {
+	if !in.Enabled() {
 		return tw.Close()
 	}
 	pkgs, err := in.packages()

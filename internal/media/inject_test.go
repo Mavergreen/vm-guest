@@ -212,3 +212,42 @@ func TestTwoExtrasWithOneBasenameAreRefused(t *testing.T) {
 		t.Fatalf("err = %v, want one naming %s and %s", err, a, b)
 	}
 }
+
+// A package is asked for by being named: the shell's --firstboot-pkg and
+// --extra-pkg imply --autoinstall, and a tar that dropped the package
+// would build media without it and say nothing.
+func TestAPackageImpliesAutoinstall(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, filepath.Join(dir, "firstboot.pkg"), "xar!firstboot")
+	e := writeFile(t, filepath.Join(dir, "extra.pkg"), "xar!extra")
+	for _, tc := range []struct {
+		in      Injectables
+		enabled bool
+		pkg     string
+	}{
+		{Injectables{}, false, ""},
+		{Injectables{Autoinstall: true}, true, ""},
+		{Injectables{FirstbootPkg: p}, true, "System/Installation/Packages/mqg-firstboot.pkg"},
+		{Injectables{ExtraPkgs: []string{e}}, true, "System/Installation/Packages/extra.pkg"},
+	} {
+		if got := tc.in.Enabled(); got != tc.enabled {
+			t.Errorf("%+v: Enabled() = %v, want %v", tc.in, got, tc.enabled)
+		}
+		var buf bytes.Buffer
+		if err := tc.in.WriteTar(&buf, nil); err != nil {
+			t.Fatal(err)
+		}
+		got := readTar(t, buf.Bytes())
+		if tc.enabled != (len(got) > 0) {
+			t.Errorf("%+v: the tar holds %d files", tc.in, len(got))
+		}
+		if _, ok := got["private/etc/rc.cdrom.local"]; tc.enabled && !ok {
+			t.Errorf("%+v: the hooks are not in the tar", tc.in)
+		}
+		if tc.pkg != "" {
+			if _, ok := got[tc.pkg]; !ok {
+				t.Errorf("%+v: %s is not in the tar", tc.in, tc.pkg)
+			}
+		}
+	}
+}
