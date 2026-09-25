@@ -52,7 +52,7 @@ vmavs doctor                          can this host do it, per subcommand
 vmavs fetch    [esd|openssh|updates|firmware] [--updates …] [--probe]   fetch pinned inputs (default: all of them)
 vmavs firmware [opencore|ovmf|efi ...] [--smbios MODEL] [--ccache] [--compiler 'NAME VERSION']   OpenCore, OVMF and the EFI image, from pinned source
 vmavs media    [--autoinstall] [--firstboot-pkg PATH] [--extra-pkg PATH]... [--extra-space-mib N] [--force] [--keep-work] [--describe] [--privops-timeout DURATION]   installer media, built in the privops microVM
-vmavs media    digest [--list] IMAGE                        what is on an image, as one checksum
+vmavs media    digest [--list] [--privops-timeout DURATION] IMAGE   what is on an image, as one checksum
 vmavs install                         target disk + unattended install
 vmavs image    [--describe] [--freshness] [--stage a,b,…]   the whole chain
 vmavs run      [--image NAME] [--keep]                      boot a built image
@@ -305,9 +305,12 @@ location. So phase 1's `vmavs run` boots images the shell pipeline built,
 and `run` and `ssh` can be measured before the Go pipeline exists. The
 fallback is deleted with the shell tree.
 
-**Locks.** A build takes a lock on its work directory. The lock is a
-directory holding a pid, which is portable to 10.9, and a stale holder's
-lock can be taken over, as the media lock does today.
+**Locks.** A build locks its output: `<out>.lock`, beside it, as the
+media build locks `build/installer-media.img` with
+`build/installer-media.img.lock`. The lock is a directory holding a pid,
+which is portable to 10.9, and a stale holder's lock can be taken over,
+as the media lock does today. It is not shared with the shell tree's
+builders, whose lock paths never coincide with vmavs's.
 
 A run has its own kind of lock: `run/<name>-<random>/state` (a
 `key<TAB>value` file naming the image, the forwarded port, the pid, and

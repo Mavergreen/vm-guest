@@ -7051,8 +7051,8 @@ images were digested with both implementations, `vmavs media digest
 f5b76fe32d90cd7026f66ef33edf95dbabd762aa5c76905cf9e739348414ee3c  39415 files  6427837714 bytes  0 unreadable
 ```
 
-The four per-file listings (39,416 lines each) are byte-identical: one
-sha256 across all four. So Go's microVM driver, initramfs, injectables
+The four `--list` outputs (39,415 listing lines each, plus the summary
+line) are byte-identical: one sha256 across all four. So Go's microVM driver, initramfs, injectables
 tar and orchestration put the same 39,415 files, with the same bytes,
 onto the media as the shell tree's did.
 
@@ -7069,6 +7069,8 @@ The reference's size, mtime and inode were unchanged afterwards.
 **Two things seen in the logs, noted and not fixed here:**
 - The five `no <module> … assuming it is built into the kernel` lines
   repeat on every pass, 20 times per build. The shell does the same.
+  (Fixed later the same day, in phase 4's final fix wave: a Backend
+  stages its modules once, so each line is logged once per build.)
 - QEMU warns `host doesn't support requested feature: CPUID…svm` on each
   pass. That is harmless on this Intel host.
 
@@ -7082,7 +7084,8 @@ compare:
 - `CheckAppleSums` and `RequiredFiles` with `verify-installer-img.sh
   --check-sums` and `--required`.
 
-`TestTheMicroVMRunsAPayload` boots the real microVM, in about 4.5 s.
+`TestTheMicroVMRunsAPayload` boots the real microVM, in about 1.4–4.5 s
+on this host, 2026-09-25.
 
 **Not measured:**
 - an install from the Go-built media (phase 5);
