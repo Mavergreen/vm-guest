@@ -41,6 +41,7 @@ type fixture struct {
 	buildErr    error    // build_oc.tool's (and EDK II build's) result
 	fv          []string // OVMF's outputs; default: OVMFFiles
 	stdins      [][]byte // every patch git apply read from stdin
+	ocvalidate  error    // what an ocvalidate (built or on PATH) returns
 }
 
 func sha(t *testing.T, p string) string {
@@ -181,6 +182,8 @@ func (f *fixture) handle(c proc.Cmd) error {
 		}
 		os.MkdirAll(filepath.Join(c.Dir, "UDK", "BaseTools", "Source", "C", "bin"), 0o755)
 		os.WriteFile(filepath.Join(c.Dir, "UDK", "BaseTools", "Source", "C", "bin", "GenFv"), []byte("#!/bin/sh\n"), 0o755)
+	case filepath.Base(c.Name) == "ocvalidate":
+		return f.ocvalidate
 	case c.Name == "bash" && len(c.Args) == 2 && c.Args[0] == "-c" && strings.Contains(c.Args[1], "edksetup.sh"):
 		if c.Stdout != nil {
 			io.WriteString(c.Stdout, "building OVMF\n")
