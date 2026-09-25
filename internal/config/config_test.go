@@ -71,6 +71,13 @@ func TestCacheFileIsContentAddressed(t *testing.T) {
 	}
 }
 
+func TestOpenSSHSumsIsKeyedByTagNotByServer(t *testing.T) {
+	p := Paths{Home: "/h"}
+	if got := p.OpenSSHSums("10.5p1-mavericks.2"); got != filepath.Join("/h", "cache", "openssh", "10.5p1-mavericks.2", "SHA256SUMS") {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestLegacyHome(t *testing.T) {
 	if got := LegacyHome(env(map[string]string{"HOME": "/h"})); got != "/h/.local/share/mavericks-qemu-guest" {
 		t.Fatalf("got %q", got)

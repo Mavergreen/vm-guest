@@ -68,6 +68,12 @@ func (p Paths) CacheFile(sha256, filename string) string {
 	return filepath.Join(p.Cache(), sha256, filename)
 }
 
+// OpenSSHSums is where a release's own SHA256SUMS is cached, keyed by tag
+// (not by which server it came from): cache/openssh/<tag>/SHA256SUMS.
+func (p Paths) OpenSSHSums(tag string) string {
+	return filepath.Join(p.Cache(), "openssh", tag, "SHA256SUMS")
+}
+
 // OpenCoreImage is build/opencore.img. Until the shell tree is retired
 // (spec §5, phase 6), an image it built keeps OpenCore at
 // work/opencore-p3.img, and that path is used when the new one is absent.

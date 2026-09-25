@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -88,6 +89,41 @@ func TestAMissingReleaseNamesTheTag(t *testing.T) {
 	_, err := getter(t).OpenSSH(context.Background(), srv.URL, "9.9p9-mavericks.9", "")
 	if err == nil || !strings.Contains(err.Error(), "9.9p9-mavericks.9") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestOpenSSHRejectsACaptivePortalSUMSThenSucceedsAgainstARealServer
+// reproduces the review's finding: any 200 response was persisted and
+// reused forever, even an HTML captive-portal page. It must instead be an
+// error naming the SUMS path, must not be persisted, and a subsequent
+// call against a real server (same tag) must then succeed.
+func TestOpenSSHRejectsACaptivePortalSUMSThenSucceedsAgainstARealServer(t *testing.T) {
+	portal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "<html><body>Sign in to the network</body></html>")
+	}))
+	defer portal.Close()
+	g := getter(t)
+
+	_, err := g.OpenSSH(context.Background(), portal.URL, "t", "")
+	if err == nil {
+		t.Fatal("a captive-portal response must be refused")
+	}
+	sumsPath := g.Paths.OpenSSHSums("t")
+	if !strings.Contains(err.Error(), sumsPath) && !strings.Contains(err.Error(), portal.URL) {
+		t.Fatalf("err = %v, want it to name the SUMS path or URL", err)
+	}
+	if _, statErr := os.Stat(sumsPath); !os.IsNotExist(statErr) {
+		t.Fatal("a captive-portal response must not be persisted")
+	}
+
+	pkgs := map[string][]byte{"a.pkg": xar("b"), "a-System-Replace.pkg": xar("r")}
+	real := release(t, "t", pkgs, nil)
+	got, err := g.OpenSSH(context.Background(), real.URL, "t", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(got.Base, "a.pkg") {
+		t.Fatalf("%+v", got)
 	}
 }
 
