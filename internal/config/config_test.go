@@ -39,6 +39,16 @@ func TestHomeRejectsATildePrefix(t *testing.T) {
 	}
 }
 
+// TestHomeRejectsTheRootDirectory: VMAVS_HOME=/ would make run/ the
+// system's /run, and put vmavs's own directories at the top of the tree.
+func TestHomeRejectsTheRootDirectory(t *testing.T) {
+	for _, h := range []string{"/", "//", "/.", "/tmp/.."} {
+		if got, err := Home(env(map[string]string{"VMAVS_HOME": h})); err == nil {
+			t.Errorf("VMAVS_HOME=%s: got %q, want an error", h, got)
+		}
+	}
+}
+
 func TestLegacyHintOnlyWhenOnlyTheOldHomeExists(t *testing.T) {
 	old := "/h/.local/share/mavericks-qemu-guest"
 	exists := func(p string) bool { return p == old }

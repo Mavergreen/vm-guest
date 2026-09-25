@@ -187,8 +187,9 @@ These are the findings `packer validate` confirmed on 2026-09-24.
    recently.
 2. Create `run/<name>-<random>/` (`os.MkdirTemp`, mode 0700 -- not
    `<name>-<pid>`: a recycled pid would otherwise reuse, and silently
-   truncate, another run's directory), holding a qcow2 overlay backed by
-   the image and this VM's own copy of the NVRAM template.
+   truncate, another run's directory), holding, first, its locked state
+   file (below), then a qcow2 overlay backed by the image and this VM's
+   own copy of the NVRAM template.
 3. Boot `machine.ForRun`. QEMU runs in the foreground, so Ctrl-C stops the
    VM.
 4. Remove the run directory on exit, unless `--keep`.
@@ -246,17 +247,23 @@ by whether its recorded pid is running: a pid can be recycled, and
 checking for one (`kill(pid, 0)`) cannot tell "no such process" apart
 from "a different process now has it". The state file is created, locked,
 and only then written to (in that order), so a concurrent reader never
-sees a state file that exists but is not yet lockable. Once QEMU is
+sees a state file that exists but is not yet lockable, and all of that
+happens before anything else goes into the run directory, so every run
+directory `vmavs` made has a state file from its first slow step on. Once QEMU is
 running, the run passes it the locked file as an inherited descriptor, so
 the lock survives `vmavs run` itself being killed outright (a `SIGKILL`
 it has no chance to release the lock for) for as long as QEMU keeps
 running.
 
 There is no separate reaper process. `vmavs run` and `vmavs ssh` each
-remove every dead run directory that is not `--keep` (and any run
-directory old enough to have no state file at all, meaning it crashed
-before ever writing one) before doing anything else, and log what they
-removed.
+remove every dead run directory that is not `--keep` before doing
+anything else, and log what they removed. A directory counts as a dead
+run only when its state file could be locked (no one holds it), parses,
+and says it was not `--keep`. Anything else under `run/` is left alone:
+a directory with no state file (`vmavs` did not make it), a state file
+that does not parse, or one whose lock could not even be probed (that
+error says nothing about whether the run is alive). `VMAVS_HOME=/` is
+refused outright, since its `run/` would be the system's `/run`.
 
 ## 6. How the pipeline runs
 

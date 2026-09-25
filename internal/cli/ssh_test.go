@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -199,6 +200,28 @@ func TestSSHReapsStaleRunDirectoriesFirst(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatal("stale run directory not reaped")
+	}
+}
+
+// TestSSHLeavesADirectoryVmavsDidNotCreate: ssh reaps too, and must not
+// delete what is under run/ unless it is provably a dead vmavs run.
+func TestSSHLeavesADirectoryVmavsDidNotCreate(t *testing.T) {
+	home := guestHome(t)
+	foreign := filepath.Join(home, "run", "someone-elses")
+	os.MkdirAll(foreign, 0o755)
+	os.WriteFile(filepath.Join(foreign, "precious"), []byte("data"), 0o644)
+	old := time.Now().Add(-24 * time.Hour)
+	os.Chtimes(foreign, old, old)
+
+	code, _, errs := sshVmavs(t, home, "--", "sw_vers")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+	if strings.Contains(errs, "someone-elses") {
+		t.Fatalf("err=%q: it must not touch a directory vmavs did not create", errs)
+	}
+	if _, err := os.Stat(filepath.Join(foreign, "precious")); err != nil {
+		t.Fatal("vmavs ssh deleted a directory it did not create")
 	}
 }
 

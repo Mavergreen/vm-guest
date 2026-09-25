@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/machine"
@@ -34,11 +33,11 @@ type Run struct {
 
 	// state is open for as long as this run is alive: it holds an
 	// exclusive, non-blocking flock (LOCK_EX|LOCK_NB) that Live and Reap
-	// test for. A pid is not enough (they can be recycled, and a signal-0
-	// check against one has no way to tell "no such process" apart from
-	// "a different process now has it"); a lock held by an open file
-	// descriptor is released the moment this process's copy of it closes,
-	// however that happens.
+	// test for. A pid is not
+	// enough (they can be recycled, and a signal-0 check against one has
+	// no way to tell "no such process" apart from "a different process now
+	// has it"); a lock held by an open file descriptor is released the
+	// moment this process's copy of it closes, however that happens.
 	state *os.File
 }
 
@@ -80,48 +79,48 @@ func Prepare(ctx context.Context, r proc.Runner, p config.Paths, m manifest.Mani
 	if err != nil {
 		return nil, err
 	}
-	monitor := filepath.Join(dir, "monitor.sock")
-	if len(monitor) >= maxUnixSocketPath {
-		os.RemoveAll(dir)
-		return nil, fmt.Errorf("monitor socket path %s is %d bytes, too long for a unix socket "+
-			"(limit %d); use a shorter VMAVS_HOME", monitor, len(monitor), maxUnixSocketPath)
-	}
-	overlay := filepath.Join(dir, "disk.qcow2")
-	if err := r.Run(ctx, proc.Cmd{Name: "qemu-img", Args: []string{
-		"create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", m.Image(), overlay,
-	}}); err != nil {
-		os.RemoveAll(dir)
-		return nil, err
-	}
-	nvram := filepath.Join(dir, "OVMF_VARS.fd")
-	if err := copyFile(p.OVMFVarsTemplate(), nvram); err != nil {
-		os.RemoveAll(dir)
-		return nil, err
-	}
-	spec := machine.ForRun(hw, fw, nvram, overlay, monitor)
-	spec.QEMU = qemu
-	// Create, lock, then write: a state file that exists but is not yet
-	// lockable (this window used to exist between WriteFile and Flock)
-	// would let a concurrent Reap or Live either delete a brand new run
-	// or misjudge it. O_EXCL also makes MkdirTemp's uniqueness redundant
-	// insurance -- two Prepares can never share a state file.
+	// The state file comes first, before any slow step (qemu-img, the
+	// NVRAM copy): created, locked, then written, so that a run directory
+	// vmavs made has a locked state file from birth and Reap never has to
+	// guess about one without it. Create-then-lock leaves no window in
+	// which the file exists but is unlockable; O_EXCL also makes
+	// MkdirTemp's uniqueness redundant insurance -- two Prepares can never
+	// share a state file.
 	statePath := filepath.Join(dir, "state")
 	sf, err := os.OpenFile(statePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 	if err != nil {
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	if err := syscall.Flock(int(sf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		sf.Close()
-		os.RemoveAll(dir)
-		return nil, fmt.Errorf("%s: locking the state file: %w", statePath, err)
-	}
-	state := fmt.Sprintf("image\t%s\nport\t%d\npid\t%d\nkeep\t%t\n", m.Name, hw.SSHPort, pid, keep)
-	if _, err := sf.WriteString(state); err != nil {
+	fail := func(err error) (*Run, error) {
 		sf.Close()
 		os.RemoveAll(dir)
 		return nil, err
 	}
+	if err := syscall.Flock(int(sf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fail(fmt.Errorf("%s: locking the state file: %w", statePath, err))
+	}
+	state := fmt.Sprintf("image\t%s\nport\t%d\npid\t%d\nkeep\t%t\n", m.Name, hw.SSHPort, pid, keep)
+	if _, err := sf.WriteString(state); err != nil {
+		return fail(err)
+	}
+	monitor := filepath.Join(dir, "monitor.sock")
+	if len(monitor) >= maxUnixSocketPath {
+		return fail(fmt.Errorf("monitor socket path %s is %d bytes, too long for a unix socket "+
+			"(limit %d); use a shorter VMAVS_HOME", monitor, len(monitor), maxUnixSocketPath))
+	}
+	overlay := filepath.Join(dir, "disk.qcow2")
+	if err := r.Run(ctx, proc.Cmd{Name: "qemu-img", Args: []string{
+		"create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", m.Image(), overlay,
+	}}); err != nil {
+		return fail(err)
+	}
+	nvram := filepath.Join(dir, "OVMF_VARS.fd")
+	if err := copyFile(p.OVMFVarsTemplate(), nvram); err != nil {
+		return fail(err)
+	}
+	spec := machine.ForRun(hw, fw, nvram, overlay, monitor)
+	spec.QEMU = qemu
 	return &Run{Dir: dir, Image: m, Spec: spec, state: sf}, nil
 }
 
@@ -183,20 +182,19 @@ func Live(p config.Paths) ([]State, error) {
 	return out, nil
 }
 
-// reapStaleAge is how long a run directory with no state file yet (one
-// that crashed between MkdirTemp and the state write, or is still being
-// created) is left alone before Reap treats it as abandoned.
-const reapStaleAge = time.Minute
-
-// Reap deletes every dead run directory that is not meant to be kept:
-// its state says keep=false, or it has no state file yet (or one that
-// cannot be parsed) and is older than reapStaleAge. The lock is always
-// checked first, before anything about the state file's content is
-// judged: Prepare takes the lock before writing the state (see the
-// comment there), so a directory whose state file exists but is still
-// empty is exactly as live as one whose state is fully written -- Reap
-// must not delete a run out from under a Prepare that has not finished
-// yet. It returns the directories it removed.
+// Reap deletes every dead run directory that is not meant to be kept. It
+// deletes only what it can prove is a dead vmavs run: a directory whose
+// state file it could lock (no process holds it: dead), could parse, and
+// that says keep=false. Anything else under run/ is left alone -- a
+// directory with no state file (vmavs never made it: Prepare writes the
+// state before anything else, see there), one whose state file does not
+// parse, and one whose lock it could not even probe (an error there says
+// nothing about whether the run is alive). The cost is that a Prepare
+// that dies between MkdirTemp and creating the state file leaves an empty
+// directory behind for good; that is the price of never guessing. The
+// lock is checked before the content is read, so a run mid-Prepare is
+// never judged by a half-written state. It returns the directories it
+// removed.
 func Reap(p config.Paths) ([]string, error) {
 	entries, err := os.ReadDir(p.Run())
 	if err != nil {
@@ -212,20 +210,11 @@ func Reap(p config.Paths) ([]string, error) {
 		}
 		dir := filepath.Join(p.Run(), entry.Name())
 		statePath := filepath.Join(dir, "state")
-		if held, err := locked(statePath); err == nil && held {
+		if held, err := locked(statePath); err != nil || held {
 			continue
 		}
 		s, err := readState(statePath)
-		if err != nil {
-			info, statErr := os.Stat(dir)
-			if statErr == nil && time.Since(info.ModTime()) > reapStaleAge {
-				if err := os.RemoveAll(dir); err == nil {
-					removed = append(removed, dir)
-				}
-			}
-			continue
-		}
-		if s.Keep {
+		if err != nil || s.Keep {
 			continue
 		}
 		if err := os.RemoveAll(dir); err == nil {

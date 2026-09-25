@@ -68,7 +68,8 @@ func (p Paths) OpenCoreImage() string {
 
 // Home is VMAVS_HOME, made absolute (a qcow2 overlay's backing file is a
 // path baked into the overlay, and a relative one would break as soon as
-// the working directory changed), else ~/.local/share/vmavs.
+// the working directory changed), else ~/.local/share/vmavs. The root
+// directory is refused: vmavs creates, and reaps, directories under it.
 func Home(getenv func(string) string) (string, error) {
 	if h := getenv("VMAVS_HOME"); h != "" {
 		if strings.HasPrefix(h, "~") {
@@ -77,6 +78,10 @@ func Home(getenv func(string) string) (string, error) {
 		abs, err := filepath.Abs(h)
 		if err != nil {
 			return "", fmt.Errorf("VMAVS_HOME=%s: %w", h, err)
+		}
+		if abs == string(filepath.Separator) {
+			// run/ would be the system's /run, which vmavs reaps.
+			return "", fmt.Errorf("VMAVS_HOME=%s is the root directory; give vmavs a directory of its own", h)
 		}
 		return abs, nil
 	}
