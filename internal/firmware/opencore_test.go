@@ -113,6 +113,48 @@ func TestOpenCoreBuildEnvironment(t *testing.T) {
 	}
 }
 
+// envValues is every value env gives key, in order.
+func envValues(env []string, key string) []string {
+	var vs []string
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			vs = append(vs, v)
+		}
+	}
+	return vs
+}
+
+// Both builds run edksetup.sh, which makes bash's $PWD the WORKSPACE:
+// the child's PWD must be the logical path it starts in, as a shell's cd
+// gives it, and nothing of an EDK II workspace set up elsewhere may
+// reach it -- edksetup.sh returns at once when WORKSPACE is set, and
+// sources $EDK_TOOLS_PATH/BuildEnv when that is.
+func TestTheBuildsRunInTheirOwnWorkspace(t *testing.T) {
+	stale := []string{"PWD=/somewhere/else", "WORKSPACE=/ws", "PACKAGES_PATH=/pp", "EDK_TOOLS_PATH=/etp", "CONF_PATH=/cp"}
+	f := newFixture(t)
+	f.b.Env = append(f.b.Env, stale...)
+	f.mustOpenCore()
+	if _, err := f.ovmf(); err != nil {
+		t.Fatalf("OVMF: %v\n%s", err, f.log.String())
+	}
+	for _, c := range []proc.Cmd{f.calls("./build_oc.tool")[0], f.calls("bash")[0]} {
+		if got := envValues(c.Env, "PWD"); !reflect.DeepEqual(got, []string{c.Dir}) {
+			t.Errorf("%s: PWD = %q, want just %s", c.Name, got, c.Dir)
+		}
+		for _, k := range []string{"WORKSPACE", "PACKAGES_PATH", "EDK_TOOLS_PATH", "CONF_PATH"} {
+			if got := envValues(c.Env, k); len(got) != 0 {
+				t.Errorf("%s: %s reaches the build: %q", c.Name, k, got)
+			}
+		}
+		if !hasEnv(c.Env, "PATH=/usr/bin:/bin") {
+			t.Errorf("%s: the rest of the environment is lost: %q", c.Name, c.Env)
+		}
+	}
+	if !hasEnv(f.b.Env, "WORKSPACE=/ws") {
+		t.Errorf("the Builder's own Env was changed: %q", f.b.Env)
+	}
+}
+
 func TestOpenCorePatchesBuildOCToolAndChecksIt(t *testing.T) {
 	f := newFixture(t)
 	f.mustOpenCore()

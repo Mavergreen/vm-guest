@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	vmguest "github.com/Mavergreen/vm-guest"
@@ -135,6 +136,33 @@ func (b *Builder) buildEnv(_ context.Context) ([]string, bool, error) {
 	b.logf("ccache: %s, cache in %s, shims in %s", path, cache, shims)
 	b.logf("ccache: the build log records the real compiler (and, from phase 5, the manifest) -- a shim answers --version as what it wraps")
 	return env, true, nil
+}
+
+// edkWorkspaceVars are the variables through which an EDK II workspace
+// set up elsewhere would take over a build: edksetup.sh returns at once
+// when WORKSPACE is set, finds BaseTools through PACKAGES_PATH or
+// EDK_TOOLS_PATH, and reads its Conf from CONF_PATH.
+var edkWorkspaceVars = []string{"WORKSPACE", "PACKAGES_PATH", "EDK_TOOLS_PATH", "CONF_PATH"}
+
+// edkEnv is env for a build that runs edksetup.sh from dir: without
+// edkWorkspaceVars (removed, not overridden -- a later assignment can
+// only set a variable, and edksetup.sh tests whether one is set at all),
+// and with PWD=dir. bash takes $PWD from the environment when it names
+// the directory bash starts in, and edksetup.sh makes $PWD the
+// WORKSPACE, so the build runs in the logical path a shell's cd gives,
+// as the shell tree's builds do. Without it bash falls back to the
+// physical path, and under a symlinked home that is a different
+// WORKSPACE: a different build, since the path is part of the bytes.
+func edkEnv(env []string, dir string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "PWD" || slices.Contains(edkWorkspaceVars, k) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, "PWD="+dir)
 }
 
 // lookupEnv is key's value in env, the last one if it is there twice.

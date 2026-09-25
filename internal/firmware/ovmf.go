@@ -72,7 +72,7 @@ func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
 	b.logf("arch %s, toolchain %s, target %s -- its output goes to %s", Arch, EDKToolchain, EDKTarget, logPath)
 	b.logf("compiler: %s", b.Toolchain.CompilerLine(ctx))
 	start := time.Now()
-	if err := b.runLogged(ctx, proc.Cmd{Name: "bash", Args: []string{"-c", ovmfBuild}, Dir: b.udk(), Env: env}, logPath); err != nil {
+	if err := b.runLogged(ctx, proc.Cmd{Name: "bash", Args: []string{"-c", ovmfBuild}, Dir: b.udk(), Env: edkEnv(env, b.udk())}, logPath); err != nil {
 		return nil, fmt.Errorf("the OVMF build failed -- see %s, and report the error rather than working around it: %w", logPath, err)
 	}
 	b.logf("build finished in %s", time.Since(start).Round(time.Second))

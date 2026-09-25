@@ -73,7 +73,7 @@ func (b *Builder) OpenCore(ctx context.Context, in Inputs) ([]string, error) {
 	b.logf("arch %s, toolchain %s, target %s -- this takes a while; its output goes to %s", Arch, EDKToolchain, EDKTarget, b.buildLog())
 	b.logf("compiler: %s", b.Toolchain.CompilerLine(ctx))
 	start := time.Now()
-	cmd := proc.Cmd{Name: "./build_oc.tool", Dir: b.src(), Env: append(env,
+	cmd := proc.Cmd{Name: "./build_oc.tool", Dir: b.src(), Env: append(edkEnv(env, b.src()),
 		"ARCHS="+Arch, "TOOLCHAINS="+EDKToolchain, "TARGETS="+EDKTarget, "OFFLINE_MODE=1",
 		"EFIBUILD_SH="+files["ocbuild-efibuild"],
 		"BUILD_ARGUMENTS=-D OCPKG_BUILD_OPTIONS="+BuildOptions())}
