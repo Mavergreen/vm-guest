@@ -6737,3 +6737,108 @@ legacy-SSH root cause (guest syslog line, sshd version) and the fix (green
 test, live re-measurement). Not measured: the interactive shell
 (`vmavs ssh` with a real TTY, `Ctrl-C`, `sw_vers; exit`); any guest besides
 these two manifests; any host besides this one.
+
+## 2026-09-25 — P8 — vmavs fetch and the Go payload
+
+Phase 2 of the Go port (`docs/superpowers/plans/2026-09-25-vmavs-go-phase-2.md`)
+delivered `internal/pins`, `internal/fetch` with `vmavs fetch`, and
+`internal/payload` with its xar and cpio writers. This entry measures `vmavs fetch`
+against the real network and this host's shell-tree downloads. Binary:
+`go build -o out/vmavs ./cmd/vmavs`, 2026-09-25T10:16:56Z.
+
+**The guest's OpenSSH, from GitHub, into a fresh home.** MEASURED
+2026-09-25T10:17:17Z. The first try adopted from the shell tree's home, as
+designed: `vmavs fetch` also looks in `~/.local/share/mavericks-qemu-guest`.
+So `HOME` points at an empty directory here, to force a real download:
+
+```
+$ VMAVS_HOME=$(mktemp -d …) HOME=<empty dir> time ./out/vmavs fetch openssh
+vmavs fetch: OpenSSH 10.5p1-mavericks.2 verified: OpenSSH-10.5p1-mavericks.2.pkg, OpenSSH-System-Replace-10.5p1-mavericks.2.pkg
+…/cache/fa79136f…400e0e/OpenSSH-10.5p1-mavericks.2.pkg                 12424218 bytes
+…/cache/79cc21b0…a0a5eb/OpenSSH-System-Replace-10.5p1-mavericks.2.pkg  4127 bytes
+real 0m0.893s
+```
+
+An independent check: `sha256sum` of both cached files gives the two sums
+that the cached `SHA256SUMS` (465 bytes) lists for those names, and each
+directory name equals its file's sha256.
+
+**Apple's handshake, without the 5 GB.** MEASURED 2026-09-25T10:17:24Z:
+
+```
+$ ./out/vmavs fetch esd --probe
+http://oscdn.apple.com/content/downloads/33/62/031-10295/gho4r94w66f5v4ujm0sz7k1m0hua68i6oo/OSInstaller/InstallESD.dmg	5318660434
+real 0m0.485s
+```
+
+The URL equals `apple-installesd-10.9.5`'s in `assets/pins/sources.tsv`.
+The size equals the shell tree's `media/InstallESD.dmg`. Nothing was written.
+
+The session GET, compared with what `media/fetch-installesd.sh` does. MEASURED
+2026-09-25T10:18:36Z: `curl -sS -D - http://osrecovery.apple.com/` answers
+`HTTP/1.1 200` with one `Set-Cookie` and no redirect. So Go's
+follow-redirects default and curl's don't-follow (`-fsS` without `-L`) get the same
+response today, and the Go side's 200 check passes.
+
+**Adoption of the shell tree's downloads, with no network.** MEASURED
+2026-09-25T10:17:41Z. All HTTP was sent to a dead proxy (`HTTP_PROXY` and
+`HTTPS_PROXY` = `http://127.0.0.1:9`, `NO_PROXY` unset), so any request
+would have failed:
+
+```
+$ VMAVS_HOME=~/.local/share/mavericks-qemu-guest time ./out/vmavs fetch --updates security
+vmavs fetch: apple-installesd-10.9.5: adopted …/media/InstallESD.dmg (verified)
+vmavs fetch: OpenSSH-10.5p1-mavericks.2.pkg: adopted …/openssh/10.5p1-mavericks.2/OpenSSH-10.5p1-mavericks.2.pkg (verified)
+vmavs fetch: OpenSSH-System-Replace-10.5p1-mavericks.2.pkg: adopted …/openssh/10.5p1-mavericks.2/OpenSSH-System-Replace-10.5p1-mavericks.2.pkg (verified)
+vmavs fetch: OpenSSH 10.5p1-mavericks.2 verified: …
+vmavs fetch: apple-secupd-2016-004: adopted …/updates/SecUpd2016-004Mavericks.pkg (verified)
+real 0m26.778s   user 0m25.272s
+```
+
+Exit 0. Every input was adopted and nothing was downloaded; the time is
+hashing (5.7 GB). The control run, which used the same dead proxy with a fresh
+home and an empty `HOME`, made `vmavs fetch openssh` retry three times and
+exit 1 with `proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection
+refused`. So the proxy really does block Go's client.
+
+The originals kept their size, mtime and inode (`stat -c '%n %s %Y %i'`
+before and after, `diff` empty) for `media/InstallESD.dmg`, all seven
+`updates/*.pkg` and all three files in `openssh/10.5p1-mavericks.2/`.
+`ls -li` shows each cache entry is a hard link to its original: the same inode
+(2651803, 2717627, 2717628, 3343622), with link count 2. The one new
+independent file is `cache/openssh/10.5p1-mavericks.2/SHA256SUMS` (465
+bytes, a copy).
+
+This run created `~/.local/share/mavericks-qemu-guest/cache/`. It holds new
+files only and takes no extra space apart from that one 465-byte copy. vmavs
+created it and leaves it in place; it is removed only if the user asks.
+
+**The payload's parity (Tasks 9 and 10).** MEASURED 2026-09-25, from the
+tests' own runs (python3 3.12.3, bash 5.2.21):
+- **Against `mkflatpkg.py`:** identical `PackageInfo`, identical decompressed
+  `Scripts` cpio, and an identical TOC apart from the Scripts member's
+  compressed length and checksums. The compressed members differ (Python 938
+  bytes, Go 946), because the two deflate encoders differ.
+- **Against `build-firstboot-pkg.sh`:** the postinstall is byte-for-byte
+  identical in three configurations: with OpenSSH packages, without them, and
+  with a password.
+- **Quoting:** `bashQuote` equals bash 5.2.21's `printf %q` on every test
+  input. The task review also checked 1,164 more inputs, with 0 mismatches.
+  Passwords full of special characters round-trip through `sh`, `dash` and
+  `bash`.
+- **Other readers:** a Go-built package passes `7z t`, `mkflatpkg.py
+  --list-scripts`, `gzip -t` and GNU `cpio -itv`.
+- **Determinism:** built twice, into different directories, the package is
+  12900 bytes with the same sha256 both times.
+
+**One deliberate divergence from the shell tree.** The SSH-key check refuses
+an Ed25519 key when no OpenSSH packages are included. Like the shell tree, it
+looks at every line of the key file, not just the first. Unlike the shell
+tree, it skips lines that start with `#`. A commented-out `#ssh-ed25519 …` line
+therefore no longer causes a refusal. sshd skips those lines too
+(`auth2-pubkeyfile.c`), so the shell tree's refusal there was a false
+positive.
+
+**Not measured:** an install that uses the Go-built payload. That waits for
+phase 5, when the Go pipeline can build an image. Also not measured: a full
+5 GB `InstallESD.dmg` download through Go, and any host besides this one.
