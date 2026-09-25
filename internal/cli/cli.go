@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Mavergreen/vm-guest/internal/doctor"
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
 
@@ -24,6 +25,11 @@ type Env struct {
 	Runner proc.Runner
 	// PID names this process's run directory. Zero means os.Getpid().
 	PID int
+	// Host is what cmdDoctor probes for host facts. nil means the real
+	// host (runtime.GOOS, os.ReadFile, syscall.Access, ...); a test gives
+	// it a fake doctor.Host so it can describe a machine instead of
+	// depending on the one the test runs on.
+	Host *doctor.Host
 }
 
 type command struct {

@@ -94,6 +94,13 @@ func TestQuotedTemplateEscapesLiteralText(t *testing.T) {
 	}
 }
 
+func TestQuotedTemplateTreatsAnUnterminatedInterpolationAsLiteralText(t *testing.T) {
+	got := string(templateTokens(`a ${var.x`).Bytes())
+	if got != `"a $${var.x"` {
+		t.Fatalf("got %s", got)
+	}
+}
+
 // TestNetDeviceMatchesTheNICInQemuargs guards packer-plugin-qemu issue
 // #6804 (step_run.go, applyUserOverrides): the plugin only skips its own
 // automatic netdev=user.0 -device append when net_device is a substring of

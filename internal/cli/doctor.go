@@ -37,6 +37,9 @@ func cmdDoctor(_ context.Context, e *Env, args []string) error {
 		Writable: func(path string) bool { return syscall.Access(path, 2) == nil }, // 2 is W_OK
 		LookPath: r.LookPath,
 	}
+	if e.Host != nil {
+		h = *e.Host
+	}
 	rows := doctor.HostRows(h)
 	fmt.Fprintf(e.Stdout, "%-8s  %-12s  %s\n", "STATUS", "CHECK", "DETAIL")
 	for _, row := range rows {

@@ -23,6 +23,13 @@ func templateTokens(s string) hclwrite.Tokens {
 			toks = append(toks, literal(s[:i]))
 		}
 		end := strings.Index(s[i:], "}")
+		if end < 0 {
+			// Unterminated "${var." with no closing "}": there is no
+			// interpolation here after all, so the rest of s is literal
+			// text, escaped like any other.
+			toks = append(toks, literal(s[i:]))
+			break
+		}
 		name := s[i+len("${var.") : i+end]
 		toks = append(toks,
 			&hclwrite.Token{Type: hclsyntax.TokenTemplateInterp, Bytes: []byte("${")},
