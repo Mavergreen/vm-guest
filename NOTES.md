@@ -6999,3 +6999,94 @@ host and skips cleanly where its tool is absent. They compare:
 - another compiler;
 - ccache (not installed here);
 - `--smbios` other than the default in a real build (only in tests).
+
+## 2026-09-25 — P8 — vmavs media builds the installer media, and it matches the shell tree's
+
+Phase 4 of the Go port (`docs/superpowers/plans/2026-09-25-vmavs-go-phase-4.md`)
+added three packages and a command:
+- `internal/privops`: the busybox microVM. The initramfs is written in Go
+  (newc cpio, gzip) and busybox's linkage is read from its ELF headers,
+  so the host no longer needs `cpio` or `ldd`.
+- `internal/media`: the HFS+ GPT image, mark-clean, Apple's pinned
+  checksums, the injectables tar, the four-pass build and the content
+  digest.
+- `internal/lock`: a directory-and-pid build lock, race-free under a
+  short flock.
+- `vmavs media`, with its `digest` action.
+
+This entry builds real installer media twice, once with the shell tree
+and once with Go, and compares the two. The binary is `go build -o
+out/vmavs ./cmd/vmavs`, at d22c539. All HTTP went to a dead proxy
+(`http://127.0.0.1:9`). The shell tree's home was only read.
+
+**Inputs.** MEASURED 2026-09-25T21:07:05Z.
+`VMAVS_HOME=/tmp/vp4g.* vmavs fetch esd openssh` adopted `InstallESD.dmg`
+and both OpenSSH packages from `~/.local/share/mavericks-qemu-guest` in
+30 s. `/tmp` is another btrfs subvolume, so they were copied, not
+hard-linked. The first-boot package was the shell tree's own
+`payload/mqg-firstboot.pkg`, used read-only by both builds.
+
+**The shell tree's media.** MEASURED 21:07:47Z to 21:09:48Z.
+`MQG_IMAGE_DIR=/tmp/vp4s.* media/build-installer-img.sh --autoinstall
+--firstboot-pkg … --extra-pkg <OpenSSH> --extra-pkg <System-Replace>`
+exited 0 in **121 s**. The image is 7,089,422,336 bytes, with sha256
+`ee645612…84932`.
+
+**Go's media.** MEASURED 21:10:03Z to 21:12:13Z.
+`VMAVS_HOME=/tmp/vp4g.* vmavs media --firstboot-pkg … --extra-pkg …
+--extra-pkg …` exited 0 in **130 s**.
+- It ran the same four microVM passes. The package checks against
+  Apple's pinned checksums passed after pass 2 (the ESD as converted)
+  and after pass 4 (the finished media, read back by a fresh guest).
+- The image is `build/installer-media.img`, 7,089,422,336 bytes, the
+  same as the shell's. Its sidecar holds sha256 `7a31e861…e43ff`.
+- The two images' sha256s differ, as expected: HFS+ records creation
+  and mount times in its volume headers.
+
+**The contents are identical.** MEASURED 21:12:24Z to 21:14:58Z. Both
+images were digested with both implementations, `vmavs media digest
+--list` and `media/content-digest.sh --list`. All four runs report:
+
+```
+f5b76fe32d90cd7026f66ef33edf95dbabd762aa5c76905cf9e739348414ee3c  39415 files  6427837714 bytes  0 unreadable
+```
+
+The four per-file listings (39,416 lines each) are byte-identical: one
+sha256 across all four. So Go's microVM driver, initramfs, injectables
+tar and orchestration put the same 39,415 files, with the same bytes,
+onto the media as the shell tree's did.
+
+**Against the Mac-made reference.** MEASURED 21:15:08Z.
+`media/verify-installer-img.sh --built <each> --reference
+~/.local/share/mavericks-qemu-guest/media/InstallMavericks.iso` exited 0
+for both images, with the same report:
+- nothing in the reference is missing from the build;
+- all 19 required files are present at their sizes;
+- no file is smaller or larger than in the reference.
+
+The reference's size, mtime and inode were unchanged afterwards.
+
+**Two things seen in the logs, noted and not fixed here:**
+- The five `no <module> … assuming it is built into the kernel` lines
+  repeat on every pass, 20 times per build. The shell does the same.
+- QEMU warns `host doesn't support requested feature: CPUID…svm` on each
+  pass. That is harmless on this Intel host.
+
+**Parity tests** (Tasks 2–5) run in `go test` on this host. They
+compare:
+- kernel discovery with `privops_qemu_linux_kernel_candidates`;
+- the `/init` script, byte for byte, with the heredoc in
+  `lib/privops-qemu-linux.sh`;
+- `CreateHFSGPT` with `hfs_create_gpt`, by sgdisk's view;
+- `MarkClean` with `hfs_mark_clean`, byte for byte;
+- `CheckAppleSums` and `RequiredFiles` with `verify-installer-img.sh
+  --check-sums` and `--required`.
+
+`TestTheMicroVMRunsAPayload` boots the real microVM, in about 4.5 s.
+
+**Not measured:**
+- an install from the Go-built media (phase 5);
+- another host;
+- `--updates` extras (the shell's `--extra-space-mib`).
+
+The temporary homes, 18 GB, were removed afterwards.
