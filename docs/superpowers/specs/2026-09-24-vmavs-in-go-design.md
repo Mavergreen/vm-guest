@@ -107,8 +107,9 @@ internal/
   config/     every default; VMAVS_HOME and the path layout (§5); machine options
   proc/       the one interface to external commands (Runner), with a
               recording fake for tests; timeouts via context
-  pins/       sources.tsv parsing, fetch + sha256 verification, the download cache
-  fetch/      esd, openssh, updates, kexts, edk2, opencorepkg
+  pins/       sources.tsv parsing and lookup: the registry fetch verifies against
+  fetch/      the one verified download primitive and the download cache;
+              esd, openssh, updates, kexts, edk2, opencorepkg
   firmware/   OpenCore and OVMF builds (orchestrate make/gcc/nasm/iasl),
               compiler and ccache checks, EFI image assembly
   diskimg/    GPT and FAT32 writers (replace sgdisk and mtools)
@@ -234,7 +235,9 @@ the legacy algorithms that version needs. Today's `ssh_opts()` in
 ```
 images/   <name>.qcow2 and <name>.manifest — read-only once built
 build/    firmware outputs, the OpenCore/EDK II trees, kexts, ccache
-cache/    downloaded inputs, keyed by sha256
+cache/    downloaded inputs, keyed by sha256: cache/<sha256>/<name>; an
+          OpenSSH release's own SHA256SUMS sits next to them, at
+          cache/openssh/<tag>/SHA256SUMS
 work/     per-build scratch: stage input-hash records, logs, monitor sockets
 run/      per-run overlays and NVRAM — removed on exit
 keys/     the generated SSH key pair
@@ -245,8 +248,13 @@ code places one there. The package that owns a directory names the files
 inside it (`vm` a run directory's state, overlay, NVRAM and monitor
 socket).
 
-If `~/.local/share/mavericks-qemu-guest` exists and `VMAVS_HOME` does not,
-`vmavs` says so and prints the `mv` that moves it. It moves nothing itself.
+If `VMAVS_HOME` is unset, the shell tree's
+`~/.local/share/mavericks-qemu-guest/images/` holds a built image and the
+default home's `images/` holds none, `vmavs` says so (`run`, `doctor` and
+`fetch`) and prints the `export VMAVS_HOME=...` that uses it. While the
+default home does not exist yet, it also prints the `mv` that moves the old
+one there; once it does (any `fetch` creates it), it may hold hard links
+into the old home, so no `mv` is offered. It moves nothing itself.
 
 **Images built by the shell pipeline, phases 1–5.** The shell tree already
 uses this layout for `images/`, `build/firmware/` and `keys/`. It differs

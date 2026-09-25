@@ -6796,8 +6796,12 @@ real 0m26.778s   user 0m25.272s
 ```
 
 Exit 0. Every input was adopted and nothing was downloaded; the time is
-hashing (5.7 GB). The control run, which used the same dead proxy with a fresh
-home and an empty `HOME`, made `vmavs fetch openssh` retry three times and
+hashing: 5.7 GB of inputs, each hashed twice (the original, then the link
+placed in the cache, before its rename -- `adoptCandidate` in
+`internal/fetch/get.go`), so about 11.4 GB read (REASONED from the code;
+corrected in place 2026-09-25, same day, from "hashing (5.7 GB)"). The
+control run, which used the same dead proxy with a fresh home and an empty
+`HOME`, made `vmavs fetch openssh` retry three times and
 exit 1 with `proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection
 refused`. So the proxy really does block Go's client.
 
