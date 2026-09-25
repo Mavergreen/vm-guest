@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	vmguest "github.com/Mavergreen/vm-guest"
+	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/fetch"
 	"github.com/Mavergreen/vm-guest/internal/privops"
 )
@@ -43,7 +44,7 @@ func (d Digest) String() string {
 // refused, not digested: a digest of what happened to be readable would
 // be a digest of nothing in particular.
 func (b *Builder) ContentDigest(ctx context.Context, img string, listing io.Writer) (Digest, error) {
-	if !regularFile(img) {
+	if !config.RegularFile(img) {
 		return Digest{}, fmt.Errorf("no such image: %s", img)
 	}
 	if _, err := b.Runner.LookPath("mkfs.hfsplus"); err != nil {
@@ -86,13 +87,10 @@ func (b *Builder) ContentDigest(ctx context.Context, img string, listing io.Writ
 		return Digest{}, err
 	}
 
-	first := func(name string) string {
-		if v := privops.Markers(console, name); len(v) > 0 {
-			return v[0]
-		}
-		return ""
-	}
-	raw := [4]string{first("MQG-DIGEST-FILES"), first("MQG-DIGEST-HASHED"), first("MQG-DIGEST-BYTES"), first("MQG-DIGEST-SIZE")}
+	// Each marker is read by privops.Marker's rule, as the build reads
+	// its own: printed once, or not an answer.
+	raw := [4]string{marker(console, "MQG-DIGEST-FILES"), marker(console, "MQG-DIGEST-HASHED"),
+		marker(console, "MQG-DIGEST-BYTES"), marker(console, "MQG-DIGEST-SIZE")}
 	var n [4]int64
 	for i, s := range raw {
 		var ok bool
@@ -111,7 +109,7 @@ func (b *Builder) ContentDigest(ctx context.Context, img string, listing io.Writ
 	// The host's own read, against what the guest read back off the
 	// device: a short or torn write through the raw disk would otherwise
 	// be a digest that is simply wrong, with nothing to say so.
-	want := first("MQG-DIGEST-SHA256")
+	want := marker(console, "MQG-DIGEST-SHA256")
 	got, err := fetch.SHA256File(list)
 	if err != nil {
 		return Digest{}, err

@@ -119,6 +119,10 @@ func TestDigestRefusesWhatIsNotWholeAndRight(t *testing.T) {
 			"the microVM did not report a usable count"},
 		{"a listing that changed on the way", "MQG-DIGEST-SHA256 ", "MQG-DIGEST-SHA256 0",
 			"the listing did not survive the trip out of the microVM"},
+		// Build's rule too (privops.Marker): a count printed twice is two
+		// answers, and neither is taken -- not even when they agree.
+		{"a count printed twice", "MQG-DIGEST-FILES 3\r\n", "MQG-DIGEST-FILES 3\r\nMQG-DIGEST-FILES 3\r\n",
+			"the microVM did not report a usable count"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newDigestRig(t)

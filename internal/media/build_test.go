@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
+	"github.com/Mavergreen/vm-guest/internal/lock"
 	"github.com/Mavergreen/vm-guest/internal/privops"
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
@@ -938,4 +939,109 @@ func TestAfterTheMediaIsInPlace(t *testing.T) {
 		}
 		absent(t, g.out+".lock")
 	})
+}
+
+// Validate is Build's cheap refusals, which need no ESD and no microVM:
+// vmavs media asks it before it fetches 5.2 GB. Each refusal is Build's
+// own error, word for word, and touches nothing.
+func TestValidateRefusesWhatBuildWould(t *testing.T) {
+	dir := t.TempDir()
+	notXar := writeFile(t, filepath.Join(dir, "not-xar.pkg"), "PK\x03\x04 a zip")
+	good := writeFile(t, filepath.Join(dir, "good.pkg"), "xar!good")
+	nowhere := filepath.Join(dir, "nowhere.pkg")
+	for _, o := range []Options{
+		{Injectables: Injectables{FirstbootPkg: nowhere}},
+		{Injectables: Injectables{FirstbootPkg: notXar}},
+		{Injectables: Injectables{ExtraPkgs: []string{good, nowhere}}},
+		{Injectables: Injectables{ExtraPkgs: []string{notXar}}},
+		{Injectables: Injectables{ExtraPkgs: []string{good, good}}},
+		{Injectables: Injectables{ExtraPkgs: []string{good, writeFile(t, filepath.Join(dir, "sub", "good.pkg"), "xar!also")}}},
+		{ExtraSpaceMiB: -1},
+	} {
+		g := newRig(t)
+		verr := g.b.Validate(o)
+		if verr == nil {
+			t.Errorf("%+v: Validate passed", o)
+			continue
+		}
+		_, berr := g.b.Build(context.Background(), g.esd, o)
+		if berr == nil || berr.Error() != verr.Error() {
+			t.Errorf("%+v: Build refused with %v, Validate with %v", o, berr, verr)
+		}
+		if len(g.r.Calls) != 0 || len(g.vm.calls) != 0 {
+			t.Errorf("%+v: ran %v and %q", o, g.r.Calls, g.vm.names())
+		}
+		absent(t, g.b.Paths.Build())
+	}
+
+	g := newRig(t)
+	if err := g.b.Validate(Options{Injectables: Injectables{FirstbootPkg: good}}); err != nil {
+		t.Fatalf("Validate refused a good package: %v", err)
+	}
+	writeFile(t, g.out, "the old media")
+	if err := g.b.Validate(Options{}); err == nil || err.Error() != g.out+" exists; pass --force to replace it" {
+		t.Fatalf("existing media: Validate = %v", err)
+	}
+	if err := g.b.Validate(Options{Force: true}); err != nil {
+		t.Fatalf("existing media with --force: Validate = %v", err)
+	}
+	absent(t, g.out+".lock")
+	if b, _ := os.ReadFile(g.out); string(b) != "the old media" {
+		t.Fatalf("Validate touched the media: %q", b)
+	}
+}
+
+// Where the lock's acquisition could not be serialised, the build goes
+// on -- the lock itself still holds -- and says so.
+func TestAnUnserializedLockIsWarnedOf(t *testing.T) {
+	g := newRig(t)
+	orig := acquire
+	acquire = func(dir string, pid int) (*lock.Lock, error) {
+		l, err := orig(dir, pid)
+		if l != nil {
+			l.Serialized = false
+		}
+		return l, err
+	}
+	t.Cleanup(func() { acquire = orig })
+	if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	want := "warning: the filesystem refused flock on " + filepath.Dir(g.out) +
+		": the build lock is still exclusive, but a stale one may have been taken over by two builders at once"
+	if !g.logged(want) {
+		t.Fatalf("no warning %q:\n%s", want, strings.Join(g.logs, "\n"))
+	}
+
+	g = newRig(t)
+	acquire = orig
+	if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range g.logs {
+		if strings.Contains(l, "flock") {
+			t.Fatalf("warned with the flock taken: %q", l)
+		}
+	}
+}
+
+// The privops backend's own requirements are Preflight's: a KVM device
+// this user cannot open is named before anything is fetched or run.
+func TestPreflightNamesTheKVMDevice(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "boot", "vmlinuz-6.1.0-test"), "kernel")
+	g := newRig(t)
+	g.r.Paths["qemu-system-x86_64"] = "/usr/bin/qemu-system-x86_64"
+	g.r.Paths["busybox"] = filepath.Join(root, "busybox") // unreadable, so not judged dynamic
+	be := privops.Backend{Runner: g.r, QEMU: "qemu-system-x86_64", BootDir: filepath.Join(root, "boot"),
+		ModulesDir: filepath.Join(root, "modules"), KVer: "6.1.0-test", GOOS: "linux",
+		KVMDevice: filepath.Join(root, "kvm")}
+	g.b.VM = be
+	err := g.b.Preflight()
+	if want := filepath.Join(root, "kvm") + " does not exist"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Preflight = %v, want it to name %q", err, want)
+	}
+	if len(g.r.Calls) != 0 {
+		t.Fatalf("ran %v", g.r.Calls)
+	}
 }

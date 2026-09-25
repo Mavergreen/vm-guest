@@ -90,7 +90,7 @@ type Builder struct {
 	Paths  config.Paths
 	Runner proc.Runner
 	VM     MicroVM
-	PID    int // the lock's holder; 0 is os.Getpid()
+	PID    int // the lock's holder; 0 is this process (lock.Acquire's default)
 	Log    func(string, ...any)
 
 	baseMiB int // tests only: the partition before ExtraSpaceMiB, when not BasePartMiB
@@ -204,6 +204,51 @@ func checkSpace(o Options) error {
 	return nil
 }
 
+// Validate is Build's cheap refusals, which need neither the ESD nor the
+// microVM: the extra space, each package (there, and a flat package), two
+// packages on one name, and media already in place without Force. Build
+// asks it first, and vmavs media asks it before fetching the ESD: a
+// missing package should cost a second, not a 5.2 GB download and twenty
+// minutes. It reads and writes nothing else. The media's existence is
+// asked again under the lock, where the answer cannot change.
+func (b *Builder) Validate(o Options) error {
+	if err := checkSpace(o); err != nil {
+		return err
+	}
+	if o.FirstbootPkg != "" {
+		if !config.RegularFile(o.FirstbootPkg) {
+			return fmt.Errorf("no first-boot package at %s -- build one with image/payload/build-firstboot-pkg.sh", o.FirstbootPkg)
+		}
+		if err := xarMagic(o.FirstbootPkg); err != nil {
+			return err
+		}
+	}
+	for _, e := range o.ExtraPkgs {
+		if !config.RegularFile(e) {
+			return fmt.Errorf("no such --extra-pkg: %s", e)
+		}
+		if err := xarMagic(e); err != nil {
+			return err
+		}
+	}
+	if _, err := o.packages(); err != nil {
+		return err
+	}
+	return b.checkExisting(o)
+}
+
+// checkExisting refuses media already in place, unless o.Force.
+func (b *Builder) checkExisting(o Options) error {
+	out := b.Paths.InstallerMedia()
+	if _, err := os.Lstat(out); err == nil && !o.Force {
+		return fmt.Errorf("%s exists; pass --force to replace it", out)
+	}
+	return nil
+}
+
+// acquire is lock.Acquire; a test replaces it.
+var acquire = lock.Acquire
+
 // sidecarTempPrefix is the name, within build/, of a sidecar this
 // package stages before renaming it into place: any file with it is one
 // a killed build left.
@@ -279,35 +324,16 @@ func (b *Builder) Preflight() error {
 func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, err error) {
 	started := time.Now()
 	out := b.Paths.InstallerMedia()
-	if err := checkSpace(o); err != nil {
+	// Packages are checked now, not when they are copied: a missing one
+	// should cost a second, not twenty minutes.
+	if err := b.Validate(o); err != nil {
 		return "", err
 	}
 	if err := b.Preflight(); err != nil {
 		return "", err
 	}
-	if !regularFile(esd) {
+	if !config.RegularFile(esd) {
 		return "", fmt.Errorf("no InstallESD.dmg at %s -- run vmavs fetch esd", esd)
-	}
-	// Packages are checked now, not when they are copied: a missing one
-	// should cost a second, not twenty minutes.
-	if o.FirstbootPkg != "" {
-		if !regularFile(o.FirstbootPkg) {
-			return "", fmt.Errorf("no first-boot package at %s -- build one with image/payload/build-firstboot-pkg.sh", o.FirstbootPkg)
-		}
-		if err := xarMagic(o.FirstbootPkg); err != nil {
-			return "", err
-		}
-	}
-	for _, e := range o.ExtraPkgs {
-		if !regularFile(e) {
-			return "", fmt.Errorf("no such --extra-pkg: %s", e)
-		}
-		if err := xarMagic(e); err != nil {
-			return "", err
-		}
-	}
-	if _, err := o.packages(); err != nil {
-		return "", err
 	}
 
 	// ONE BUILDER PER IMAGE FILE. Two builders writing one image each
@@ -317,13 +343,12 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
-	pid := b.PID
-	if pid == 0 {
-		pid = os.Getpid() // a lock naming pid 0 names nobody, and is stale to everyone
-	}
-	l, err := lock.Acquire(out+".lock", pid)
+	l, err := acquire(out+".lock", b.PID)
 	if err != nil {
 		return "", err
+	}
+	if !l.Serialized {
+		b.logf("warning: the filesystem refused flock on %s: the build lock is still exclusive, but a stale one may have been taken over by two builders at once", filepath.Dir(out))
 	}
 	switch {
 	case l.TookOver > 0:
@@ -331,16 +356,19 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	case l.TookOver < 0:
 		b.logf("taking over a stale lock left by an unknown pid")
 	}
+	// A lock that cannot be released after a build that succeeded fails
+	// the build, whose path is still returned: the media is in place.
 	defer func() {
 		if rerr := l.Release(); err == nil && rerr != nil {
 			err = rerr
 		}
 	}()
 
+	// Validate asked this before the lock; under it the answer holds.
+	if err := b.checkExisting(o); err != nil {
+		return "", err
+	}
 	if _, serr := os.Lstat(out); serr == nil {
-		if !o.Force {
-			return "", fmt.Errorf("%s exists; pass --force to replace it", out)
-		}
 		// Kept until the new media is verified, and then replaced by one
 		// rename: a forced build that fails leaves what was there.
 		b.logf("--force: %s will be replaced once the new media is verified", out)
@@ -358,7 +386,7 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	if err != nil {
 		return "", err
 	}
-	for _, p := range append(append(wp(work, workFiles...), building, building+".hfs-tmp"), stale...) {
+	for _, p := range append(append(inDir(work, workFiles...), building, building+".hfs-tmp"), stale...) {
 		if rerr := os.Remove(p); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 			return "", rerr
 		}
@@ -425,7 +453,7 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	// build, only warn.
 	if !o.KeepWork {
 		b.logf("removing the raw conversions (--keep-work keeps them)")
-		for _, p := range wp(work, workFiles...) {
+		for _, p := range inDir(work, workFiles...) {
 			if rerr := os.Remove(p); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 				b.logf("warning: cannot remove %s: %v", p, rerr)
 			}
@@ -477,7 +505,7 @@ func (b *Builder) build(ctx context.Context, esd string, o Options, work, buildi
 	if err != nil {
 		return "", err
 	}
-	n, ok := count(one(console, "MQG-BASESYSTEM-BYTES"))
+	n, ok := count(marker(console, "MQG-BASESYSTEM-BYTES"))
 	if !ok {
 		return "", errors.New("the microVM did not report a BaseSystem.dmg size")
 	}
@@ -487,7 +515,7 @@ func (b *Builder) build(ctx context.Context, esd string, o Options, work, buildi
 	// The host's own read, against the digest the guest sent: a short or
 	// torn write through the raw disk would otherwise surface as a
 	// dmg2img failure that says nothing about where the bytes went.
-	want := one(console, "MQG-BASESYSTEM-SHA256")
+	want := marker(console, "MQG-BASESYSTEM-SHA256")
 	got, err := fetch.SHA256File(bsDmg)
 	if err != nil {
 		return "", err
@@ -617,14 +645,12 @@ func (b *Builder) stageInjectables(in Injectables, path string) error {
 	return nil
 }
 
-// one is a marker's value when the console printed it exactly once, as
-// the shell's $(console_marker ...) reads it: two values are not a number
-// or a checksum.
-func one(console []byte, name string) string {
-	if v := privops.Markers(console, name); len(v) == 1 {
-		return v[0]
-	}
-	return ""
+// marker is a marker's value by privops.Marker's rule -- printed on
+// exactly one line -- and "" otherwise, which no caller accepts: not a
+// count, and not a checksum. The build and the digest read markers alike.
+func marker(console []byte, name string) string {
+	v, _ := privops.Marker(console, name)
+	return v
 }
 
 // count is a non-negative decimal, as the shell's case pattern accepts
@@ -650,12 +676,6 @@ func xarMagic(path string) error {
 		return fmt.Errorf("%s is not a flat package (no xar magic)", path)
 	}
 	return nil
-}
-
-// regularFile is the shell's [ -f "$path" ].
-func regularFile(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.Mode().IsRegular()
 }
 
 func fileSize(p string) (int64, error) {
@@ -693,8 +713,8 @@ func syncFile(p string) error {
 	return err
 }
 
-// wp is names, in dir.
-func wp(dir string, names ...string) []string {
+// inDir is each of names, joined to dir.
+func inDir(dir string, names ...string) []string {
 	var p []string
 	for _, n := range names {
 		p = append(p, filepath.Join(dir, n))
