@@ -191,7 +191,9 @@ func TestConfWithOpenSSHAndUpdatesMatchesTheShell(t *testing.T) {
 	c := DefaultConfig()
 	c.OpenSSHPkgs = []string{base, replace}
 	c.OpenSSHTag = "10.5p1-mavericks.2"
-	c.UpdatePkgs = []string{upd}
+	// The shell tree hands build-firstboot-pkg.sh the staged path, so its
+	// base IS the media's name.
+	c.UpdatePkgs = []MediaFile{{Path: upd, Name: filepath.Base(upd)}}
 	c.Updates = "security"
 
 	conf, err := Conf(c)
@@ -443,7 +445,7 @@ func TestPackageRules(t *testing.T) {
 
 	t.Run("a whitespace basename is refused", func(t *testing.T) {
 		c := base()
-		c.UpdatePkgs = []string{fakePkg(t, dir, "has space.pkg")}
+		c.UpdatePkgs = []MediaFile{{Path: fakePkg(t, dir, "has space.pkg"), Name: "fine.pkg"}}
 		c.Updates = "security"
 		_, err := validateConfig(c, t.Logf)
 		if err == nil || !strings.Contains(err.Error(), "whitespace") {
@@ -457,13 +459,25 @@ func TestPackageRules(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := base()
-		c.UpdatePkgs = []string{p}
+		c.UpdatePkgs = []MediaFile{{Path: p, Name: "notpkg.pkg"}}
 		c.Updates = "security"
 		_, err := validateConfig(c, t.Logf)
 		if err == nil || !strings.Contains(err.Error(), "xar") {
 			t.Fatalf("want an error mentioning xar magic, got %v", err)
 		}
 	})
+
+	for _, name := range []string{"", ".", "..", "staged/u1.pkg", "has space.pkg"} {
+		t.Run(fmt.Sprintf("a media name of %q is refused", name), func(t *testing.T) {
+			c := base()
+			c.UpdatePkgs = []MediaFile{{Path: fakePkg(t, dir, "u1.pkg"), Name: name}}
+			c.Updates = "security"
+			_, err := validateConfig(c, t.Logf)
+			if err == nil || !strings.Contains(err.Error(), "UpdatePkgs") {
+				t.Fatalf("want an UpdatePkgs error, got %v", err)
+			}
+		})
+	}
 
 	t.Run("OpenSSH packages without a tag are refused", func(t *testing.T) {
 		c := base()
@@ -476,7 +490,7 @@ func TestPackageRules(t *testing.T) {
 
 	t.Run("updates none with packages is refused", func(t *testing.T) {
 		c := base()
-		c.UpdatePkgs = []string{fakePkg(t, dir, "u1.pkg")}
+		c.UpdatePkgs = []MediaFile{{Path: fakePkg(t, dir, "u1.pkg"), Name: "u1.pkg"}}
 		c.Updates = "none"
 		if _, err := validateConfig(c, t.Logf); err == nil {
 			t.Fatal("want an error")
@@ -734,5 +748,30 @@ func TestBuildIncludesShStderrInTheError(t *testing.T) {
 	_, err := Build(context.Background(), fake, c, out, t.Logf)
 	if err == nil || !strings.Contains(err.Error(), "syntax error near unexpected token") {
 		t.Fatalf("want sh -n's stderr in the error, got %v", err)
+	}
+}
+
+// TestTheConfNamesUpdatesAsTheMediaPresentsThem: fetch caches an update
+// under Apple's own name (cache/<sha>/SecUpd2016-004Mavericks.pkg), but
+// the media presents it as mqg-update-01-..., and the guest's carry_pkgs
+// copies exactly the names firstboot.conf gives it off the media. A conf
+// naming the cache file's base would leave the guest without its
+// security update, silently ("NOT FOUND on the media" in a log nobody
+// reads).
+func TestTheConfNamesUpdatesAsTheMediaPresentsThem(t *testing.T) {
+	dir := t.TempDir()
+	cached := fakePkg(t, dir, "SecUpd2016-004Mavericks.pkg")
+	c := DefaultConfig()
+	c.UpdatePkgs = []MediaFile{{Path: cached, Name: "mqg-update-01-SecUpd2016-004Mavericks.pkg"}}
+	c.Updates = "security"
+	conf, err := Conf(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "MQG_FB_UPDATE_PKGS=mqg-update-01-SecUpd2016-004Mavericks.pkg\\ \n"; !strings.Contains(string(conf), want) {
+		t.Fatalf("conf = %s, want the line %q", conf, want)
+	}
+	if strings.Contains(string(conf), "=SecUpd2016") {
+		t.Fatalf("conf = %s names the cache file, not the media's name", conf)
 	}
 }

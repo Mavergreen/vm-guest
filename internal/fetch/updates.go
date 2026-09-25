@@ -33,6 +33,11 @@ func UpdateNames(selection string) ([]string, error) {
 	return append([]string(nil), names...), nil
 }
 
+// Update is one fetched update. Name is its registry name; Path is the
+// cache file, named as Apple names it; Staged is the name the installer
+// media presents it under (StagedName) -- and so the name firstboot.conf
+// must carry: payload.MediaFile{Path: u.Path, Name: u.Staged}, never the
+// base of Path.
 type Update struct{ Name, Path, Staged string }
 
 // StagedName is how the installer media presents the n-th update

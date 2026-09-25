@@ -48,15 +48,33 @@ type Config struct {
 	// OpenSSHPkgs are paths to the guest's own OpenSSH product archives
 	// (see image/fetch-openssh.sh); their basenames are what firstboot.conf
 	// carries and firstboot.sh installs.
+	//
+	// Plain paths, unlike UpdatePkgs, because here a path's base IS the
+	// media's name: fetch caches each package under its release asset
+	// name (cache/<sha>/<the name SHA256SUMS gives>), the same name the
+	// shell tree fetches it under, and the media stages an extra package
+	// under its path's base (media/build-installer-img.sh
+	// inject_extra_pkgs). Nothing renames an OpenSSH package on the way.
 	OpenSSHPkgs []string
 	OpenSSHTag  string
 
-	// UpdatePkgs are paths to Apple's post-10.9.5 update packages, IN
-	// INSTALL ORDER: see the ORDER MATTERS comment in
-	// build-firstboot-pkg.sh's usage text.
-	UpdatePkgs []string
+	// UpdatePkgs are Apple's post-10.9.5 update packages, IN INSTALL
+	// ORDER (see the ORDER MATTERS comment in build-firstboot-pkg.sh's
+	// usage text), each with the name the installer media presents it
+	// under: fetch.Update.Staged (fetch.StagedName), never the base of
+	// the cache path, which is Apple's own name.
+	UpdatePkgs []MediaFile
 	Updates    string
 }
+
+// MediaFile is a package the installer media carries. Path is the file
+// on this host, validated as a flat package; Name is what the media
+// presents it as, and what firstboot.conf tells the guest to copy off the
+// media (image/payload/postinstall's carry_pkgs looks for exactly that
+// name). Name must be a plain base name. For an update it is
+// fetch.Update.Staged, not filepath.Base(Path): the two differ, and a
+// conf naming the wrong one leaves the guest without the package.
+type MediaFile struct{ Path, Name string }
 
 // DefaultConfig is build-firstboot-pkg.sh's defaults, MEASURED from that
 // script: user mavsuser, uid 501, gid 20 (staff), realname "Mavericks
@@ -88,6 +106,17 @@ func spaceBasenames(paths []string) string {
 	var b strings.Builder
 	for _, p := range paths {
 		b.WriteString(filepath.Base(p))
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
+
+// spaceNames is spaceBasenames for media files: each Name (never the base
+// of its Path) followed by one space, in the order given.
+func spaceNames(files []MediaFile) string {
+	var b strings.Builder
+	for _, f := range files {
+		b.WriteString(f.Name)
 		b.WriteByte(' ')
 	}
 	return b.String()
@@ -178,7 +207,7 @@ func Conf(c Config) ([]byte, error) {
 		if err := line(kv{"Updates", "MQG_FB_UPDATES", c.Updates}); err != nil {
 			return nil, err
 		}
-		if err := line(kv{"UpdatePkgs", "MQG_FB_UPDATE_PKGS", spaceBasenames(c.UpdatePkgs)}); err != nil {
+		if err := line(kv{"UpdatePkgs", "MQG_FB_UPDATE_PKGS", spaceNames(c.UpdatePkgs)}); err != nil {
 			return nil, err
 		}
 	}
@@ -379,6 +408,25 @@ func validatePkgs(field string, pkgs []string) error {
 	return nil
 }
 
+// validateMediaFiles is validatePkgs for media files: each Path exactly
+// as validatePkgs checks a path, and each Name a plain base name -- not
+// empty, not "." or "..", no "/" -- with no whitespace, since it is the
+// Name that travels through firstboot.conf's space-separated list.
+func validateMediaFiles(field string, files []MediaFile) error {
+	for _, f := range files {
+		if err := validatePkgs(field, []string{f.Path}); err != nil {
+			return err
+		}
+		if f.Name == "" || f.Name == "." || f.Name == ".." || strings.Contains(f.Name, "/") {
+			return fieldErrorf(field, "%s: media name %q is not a plain file name", f.Path, f.Name)
+		}
+		if strings.ContainsAny(f.Name, " \t\n\r\v\f") {
+			return fieldErrorf(field, "media name contains whitespace: %s", f.Name)
+		}
+	}
+	return nil
+}
+
 // validateConfig applies every build-firstboot-pkg.sh rule that can be
 // checked before assembling anything, in the same order that script
 // checks them (bar the key-validation reordering validateKey documents).
@@ -408,7 +456,7 @@ func validateConfig(c Config, log func(string, ...any)) ([]byte, error) {
 			"an image must record which OpenSSH it was built with")
 	}
 
-	if err := validatePkgs("UpdatePkgs", c.UpdatePkgs); err != nil {
+	if err := validateMediaFiles("UpdatePkgs", c.UpdatePkgs); err != nil {
 		return nil, err
 	}
 	if !matchesAny(c.Updates, config.UpdateChoices...) {
