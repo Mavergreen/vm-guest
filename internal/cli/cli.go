@@ -22,6 +22,8 @@ type Env struct {
 	Getenv func(string) string
 	// Runner runs external commands. A nil Runner means the real one.
 	Runner proc.Runner
+	// PID names this process's run directory. Zero means os.Getpid().
+	PID int
 }
 
 type command struct {
@@ -33,6 +35,7 @@ type command struct {
 // commandTable is every subcommand, in the order help lists them.
 func commandTable() []command {
 	return []command{
+		{"run", "Boot a built image on a throwaway overlay", cmdRun},
 		{"version", "Print this vmavs's version", cmdVersion},
 	}
 }
@@ -134,8 +137,6 @@ func parse(fs *flag.FlagSet, e *Env, help string, args []string) error {
 }
 
 // runner is e.Runner, or the real one.
-//
-//lint:ignore U1000 unused until a Task 5+ subcommand calls it
 func runner(e *Env) proc.Runner {
 	if e.Runner != nil {
 		return e.Runner

@@ -1,0 +1,97 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+
+	"github.com/Mavergreen/vm-guest/internal/config"
+	"github.com/Mavergreen/vm-guest/internal/manifest"
+	"github.com/Mavergreen/vm-guest/internal/vm"
+)
+
+const runHelp = `usage: vmavs run [--image NAME] [--keep] [machine options]
+
+Boot a built image: the most recently built one, or --image NAME. It boots
+on a throwaway overlay, so the image itself is never written, with the
+hardware the image was installed on (its manifest); a machine option given
+here overrides that. QEMU runs in the foreground; Ctrl-C stops it. The
+overlay is deleted on exit unless --keep.
+
+Then, from another terminal: vmavs ssh
+`
+
+func cmdRun(ctx context.Context, e *Env, args []string) error {
+	fs := newFlags("run")
+	flagged := config.DefaultMachine()
+	flagged.Register(fs)
+	name := fs.String("image", "", "image to boot (default: the most recently built)")
+	keep := fs.Bool("keep", false, "keep the run directory (overlay, NVRAM) after QEMU exits")
+	if err := parse(fs, e, runHelp, args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return usagef("run takes no arguments (got %q)", fs.Args())
+	}
+	p, err := paths(e)
+	if err != nil {
+		return err
+	}
+	m, err := chooseImage(e, p, *name)
+	if err != nil {
+		return err
+	}
+	hw := m.Hardware()
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	hw.Override(flagged, func(n string) bool { return set[n] })
+	if err := hw.Validate(); err != nil {
+		return usagef("%v", err)
+	}
+	pid := e.PID
+	if pid == 0 {
+		pid = os.Getpid()
+	}
+	r := runner(e)
+	run, err := vm.Prepare(ctx, r, p, m, hw, config.QEMU(e.Getenv), pid)
+	if err != nil {
+		return err
+	}
+	if !*keep {
+		defer run.Remove()
+	}
+	logf(e, "run", "booting %s (%s, %d MiB, %s); ssh on localhost:%d", m.Name, hw.CPU, hw.MemoryMB, hw.NIC, hw.SSHPort)
+	err = run.Boot(ctx, r, e.Stdin, e.Stdout, e.Stderr)
+	if ctx.Err() != nil {
+		logf(e, "run", "stopped")
+		return nil
+	}
+	return err
+}
+
+func paths(e *Env) (config.Paths, error) {
+	h, err := config.Home(e.Getenv)
+	return config.Paths{Home: h}, err
+}
+
+// chooseImage is the named image, or the most recently built one. With
+// none, it explains where the shell tree's images are, if they exist.
+func chooseImage(e *Env, p config.Paths, name string) (manifest.Manifest, error) {
+	if name != "" {
+		return manifest.Find(p.Images(), name)
+	}
+	all, err := manifest.List(p.Images())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return manifest.Manifest{}, err
+	}
+	if len(all) == 0 {
+		msg := fmt.Sprintf("no built images in %s; build one with `vmavs image`", p.Images())
+		if hint := config.LegacyHint(e.Getenv, config.Exists); hint != "" {
+			msg += "\n" + hint
+		}
+		return manifest.Manifest{}, errors.New(msg)
+	}
+	return all[0], nil
+}
