@@ -24,6 +24,9 @@ var ovmfBuild = fmt.Sprintf("set +u; . ./edksetup.sh >/dev/null || exit 1; exec 
 // not work with OpenCore on these hosts (NOTES.md, P3 Task 8); the one
 // built from acidanthera's audk does.
 func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
+	if err := b.requireEnv(); err != nil {
+		return nil, err
+	}
 	// The compiler first, and for this build above all: OvmfPkg compiled
 	// clean under C23 and emitted different firmware.
 	if err := b.Toolchain.Check(ctx, b.logf); err != nil {

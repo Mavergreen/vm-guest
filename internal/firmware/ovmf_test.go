@@ -229,3 +229,16 @@ func TestOVMFSaysWhenWarningsAreStillErrors(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestOVMFRefusesANilEnvironment(t *testing.T) {
+	f := ovmfFixture(t)
+	f.b.Env = nil
+	calls := len(f.fake.Calls)
+	_, err := f.ovmf()
+	if err == nil || !strings.Contains(err.Error(), "Builder.Env is nil: pass the environment the build tools inherit") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.fake.Calls) != calls {
+		t.Errorf("ran %v before refusing", f.fake.Calls[calls:])
+	}
+}

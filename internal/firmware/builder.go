@@ -74,6 +74,16 @@ func (b *Builder) input(in Inputs, name string) (string, error) {
 	return p, nil
 }
 
+// requireEnv refuses a nil Env. The builds call it before anything else:
+// a nil Env would hand the build tools no environment at all (not
+// vmavs's own, which a nil proc.Cmd.Env would mean): no PATH, no HOME.
+func (b *Builder) requireEnv() error {
+	if b.Env == nil {
+		return fmt.Errorf("Builder.Env is nil: pass the environment the build tools inherit")
+	}
+	return nil
+}
+
 // requireTools names, in one error, every tool that is not on PATH.
 func (b *Builder) requireTools(names ...string) error {
 	var missing []string
@@ -94,10 +104,8 @@ func (b *Builder) requireTools(names ...string) error {
 // files). Whether ccache was used is logged either way. The PATH it adds
 // comes after Env's, and a child takes the last of a repeated variable.
 func (b *Builder) buildEnv(_ context.Context) ([]string, bool, error) {
-	// A nil Env would hand the build tools no environment at all (not
-	// vmavs's own, which a nil proc.Cmd.Env would): no PATH, no HOME.
-	if b.Env == nil {
-		return nil, false, fmt.Errorf("Builder.Env is nil: pass the environment the build tools inherit")
+	if err := b.requireEnv(); err != nil {
+		return nil, false, err
 	}
 	env := append([]string(nil), b.Env...)
 	path, _ := b.Runner.LookPath("ccache")

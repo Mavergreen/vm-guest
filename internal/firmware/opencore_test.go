@@ -476,9 +476,26 @@ func TestOpenCoreRefusesANilEnvironment(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Builder.Env is nil: pass the environment the build tools inherit") {
 		t.Fatalf("err = %v", err)
 	}
-	if n := len(f.calls("./build_oc.tool")); n != 0 {
-		t.Errorf("build_oc.tool ran %d times", n)
+	if len(f.fake.Calls) != 0 {
+		t.Errorf("ran %v before refusing", f.fake.Calls)
 	}
+	if _, err := os.Stat(filepath.Join(f.home, "build")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("wrote under build/ before refusing: %v", err)
+	}
+}
+
+func TestOpenCoreHeaderProbeGetsTheEnvironment(t *testing.T) {
+	f := newFixture(t)
+	f.mustOpenCore()
+	for _, c := range f.calls("gcc") {
+		if len(c.Args) > 0 && c.Args[0] == "-fsyntax-only" {
+			if !reflect.DeepEqual(c.Env, f.b.Env) {
+				t.Errorf("the header probe's Env is %q, want %q", c.Env, f.b.Env)
+			}
+			return
+		}
+	}
+	t.Error("no header probe")
 }
 
 func TestOpenCoreCcachePathHasNoEmptyElement(t *testing.T) {

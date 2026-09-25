@@ -103,6 +103,10 @@ func untarGz(ctx context.Context, archive, dest string, strip int) (err error) {
 			return fmt.Errorf("%s: %s: %w", archive, h.Name, err)
 		}
 	}
+	// MkdirTemp made tmp 0700; the unpacked root is 0755, as tar leaves it.
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return err
+	}
 	return os.Rename(tmp, dest)
 }
 
@@ -288,6 +292,10 @@ func extractKext(ctx context.Context, archive, name, dest string) (err error) {
 		if err != nil {
 			return fmt.Errorf("%s: %s: %w", archive, f.Name, err)
 		}
+	}
+	// MkdirTemp made tmp 0700; the bundle is 0755, as unzip leaves it.
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return err
 	}
 	return os.Rename(tmp, dest)
 }

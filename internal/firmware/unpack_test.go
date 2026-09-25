@@ -426,3 +426,25 @@ func TestExtractKextPropagatesALstatErrorThatIsNotNotExist(t *testing.T) {
 		t.Fatalf("must propagate the Lstat error itself: %v", err)
 	}
 }
+
+// The unpacked root is 0755, as tar and unzip leave it, not the 0700 of
+// the temp directory it was built in.
+func TestUnpackedRootsAreNotPrivate(t *testing.T) {
+	dir := t.TempDir()
+	a := makeTarGz(t, dir, entry{name: "top/"}, entry{name: "top/a", body: "a"})
+	dest := filepath.Join(dir, "out")
+	if err := untarGz(context.Background(), a, dest, 1); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(dest); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("untarGz's root: %v, %v", fi.Mode(), err)
+	}
+	z := makeZip(t, dir, "k.zip", entry{name: "K.kext/Contents/Info.plist", body: "p"})
+	bundle := filepath.Join(dir, "K.kext")
+	if err := extractKext(context.Background(), z, "K", bundle); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(bundle); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Errorf("extractKext's root: %v, %v", fi.Mode(), err)
+	}
+}

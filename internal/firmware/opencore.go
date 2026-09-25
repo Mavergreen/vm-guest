@@ -22,6 +22,9 @@ const buildOCPatch = "0001-build_oc-source-pinned-efibuild.patch"
 // done (unpacking, patching, assembling the EDK II tree) are skipped;
 // build_oc.tool itself is incremental.
 func (b *Builder) OpenCore(ctx context.Context, in Inputs) ([]string, error) {
+	if err := b.requireEnv(); err != nil {
+		return nil, err
+	}
 	// The compiler first: a host below the floor hears that before
 	// anything expensive, not after a fetch and three minutes of gcc.
 	if err := b.Toolchain.Check(ctx, b.logf); err != nil {
@@ -284,7 +287,7 @@ func (b *Builder) requireHeaders(ctx context.Context) error {
 	for _, h := range Headers {
 		src := "#include <" + h + ">\nint main(void){return 0;}\n"
 		if err := b.Runner.Run(ctx, proc.Cmd{Name: b.Toolchain.GCC(), Args: []string{"-fsyntax-only", "-x", "c", "-"},
-			Stdin: strings.NewReader(src), Stdout: io.Discard, Stderr: io.Discard}); err != nil {
+			Stdin: strings.NewReader(src), Stdout: io.Discard, Stderr: io.Discard, Env: b.Env}); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}

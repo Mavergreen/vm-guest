@@ -148,14 +148,18 @@ func TestKextsKeepAnExistingBundle(t *testing.T) {
 	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
 		t.Fatal(err)
 	}
-	sentinel := filepath.Join(f.home, "build", "kexts", "Lilu.kext", "Contents", "sentinel")
-	if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
+	plist := filepath.Join(f.home, "build", "kexts", "Lilu.kext", "Contents", "Info.plist")
+	before, err := os.Stat(plist)
+	if err != nil {
 		t.Fatal(err)
 	}
+	// A bundle that is Go's and at the pin is kept without its release:
+	// nothing is unpacked again.
+	delete(f.in, "lilu-release")
 	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(sentinel); err != nil {
+	if after, err := os.Stat(plist); err != nil || !os.SameFile(before, after) {
 		t.Errorf("the bundle was unpacked again: %v", err)
 	}
 }
@@ -415,8 +419,64 @@ func TestKextsMarkWhatTheyUnpacked(t *testing.T) {
 	}
 	for _, k := range Kexts {
 		marker := filepath.Join(f.home, "build", "kexts", "."+k.Name+".kext.sha256")
-		if b, _ := os.ReadFile(marker); string(b) != sha(t, f.in[k.Source])+"\n" {
+		tree, err := treeDigest(filepath.Join(f.home, "build", "kexts", k.Name+".kext"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(marker); string(b) != sha(t, f.in[k.Source])+" "+tree+"\n" {
 			t.Errorf("%s holds %q", marker, b)
+		}
+	}
+}
+
+// wantMarker is the marker Kexts writes for source's bundle at the pin.
+func wantMarker(t *testing.T, f *fixture, source, bundle string) string {
+	t.Helper()
+	tree, err := treeDigest(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha(t, f.in[source]) + " " + tree + "\n"
+}
+
+func TestTreeDigestSeesPathsKindsAndBytes(t *testing.T) {
+	mk := func(files map[string]string, dirs ...string) string {
+		d := t.TempDir()
+		for _, dir := range dirs {
+			if err := os.MkdirAll(filepath.Join(d, dir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for p, body := range files {
+			if err := os.MkdirAll(filepath.Join(d, filepath.Dir(p)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(d, p), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sum, err := treeDigest(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sum) != 64 {
+			t.Fatalf("digest %q", sum)
+		}
+		return sum
+	}
+	base := mk(map[string]string{"a/b": "x", "c": "y"})
+	if again := mk(map[string]string{"c": "y", "a/b": "x"}); again != base {
+		t.Error("the same tree digests differently")
+	}
+	for name, other := range map[string]string{
+		"a byte":         mk(map[string]string{"a/b": "z", "c": "y"}),
+		"a path":         mk(map[string]string{"a/b": "x", "d": "y"}),
+		"an extra dir":   mk(map[string]string{"a/b": "x", "c": "y"}, "e"),
+		"a file for dir": mk(map[string]string{"a/b": "x", "c/f": "y"}),
+		"moved bytes":    mk(map[string]string{"a/b": "xy", "c": ""}),
+	} {
+		if other == base {
+			t.Errorf("%s changed and the digest did not", name)
 		}
 	}
 }
@@ -448,10 +508,6 @@ func TestKextsReplaceTheirOwnBundleWhenThePinMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := filepath.Join(f.home, "build", "kexts", "Lilu.kext")
-	sentinel := filepath.Join(bundle, "Contents", "sentinel")
-	if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	f.repin("lilu-release", liluZip(t, "plist Lilu, the next release"))
 	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
 		t.Fatal(err)
@@ -459,13 +515,125 @@ func TestKextsReplaceTheirOwnBundleWhenThePinMoves(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist")); string(b) != "plist Lilu, the next release" {
 		t.Errorf("the bundle was not replaced: Info.plist holds %q", b)
 	}
-	if _, err := os.Stat(sentinel); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("the old bundle survives: %v", err)
-	}
-	if b, _ := os.ReadFile(filepath.Join(f.home, "build", "kexts", ".Lilu.kext.sha256")); string(b) != sha(t, f.in["lilu-release"])+"\n" {
+	if b, _ := os.ReadFile(filepath.Join(f.home, "build", "kexts", ".Lilu.kext.sha256")); string(b) != wantMarker(t, f, "lilu-release", bundle) {
 		t.Errorf("the marker holds %q", b)
 	}
 	noTemps(t, f)
+}
+
+// A pinned release that is not a usable bundle does not replace one that
+// is: it is checked before the old bundle goes.
+func TestKextsKeepTheirOwnBundleWhenTheNewPinIsBroken(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	kexts := filepath.Join(f.home, "build", "kexts")
+	marker := filepath.Join(kexts, ".Lilu.kext.sha256")
+	oldMarker, _ := os.ReadFile(marker)
+	plist := filepath.Join(kexts, "Lilu.kext", "Contents", "Info.plist")
+	before, err := os.Stat(plist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.repin("lilu-release", makeZip(t, t.TempDir(), "Lilu-RELEASE.zip", entry{name: "Lilu.kext/Contents/Info.plist", body: "no binary"}))
+	_, err = f.b.Kexts(context.Background(), f.in)
+	if err == nil || !strings.Contains(err.Error(), "Contents/MacOS/Lilu") || !strings.Contains(err.Error(), "lilu-release") {
+		t.Fatalf("err = %v", err)
+	}
+	if after, err := os.Stat(plist); err != nil || !os.SameFile(before, after) {
+		t.Errorf("the old bundle was replaced: %v", err)
+	}
+	if b, _ := os.ReadFile(marker); string(b) != string(oldMarker) {
+		t.Errorf("the marker changed: %q, then %q", oldMarker, b)
+	}
+	noTemps(t, f)
+}
+
+// foreign replaces a Go-marked Lilu.kext with a bundle Go did not unpack,
+// leaving the marker: the reviewer's probe.
+func foreign(t *testing.T, f *fixture) string {
+	t.Helper()
+	bundle := filepath.Join(f.home, "build", "kexts", "Lilu.kext")
+	if err := os.RemoveAll(bundle); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"Contents/Info.plist", "Contents/MacOS/Lilu"} {
+		if err := os.MkdirAll(filepath.Join(bundle, filepath.Dir(p)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bundle, p), []byte("foreign "+p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bundle
+}
+
+func TestKextsCompareAForeignBundleBehindAMarkerAtTheSamePin(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	bundle := foreign(t, f)
+	_, err := f.b.Kexts(context.Background(), f.in)
+	want := bundle + " does not match the pinned lilu-release (" + sha(t, f.in["lilu-release"]) + "); remove it and re-run"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant %s", err, want)
+	}
+	if b, _ := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist")); string(b) != "foreign Contents/Info.plist" {
+		t.Errorf("the foreign bundle was touched: %q", b)
+	}
+	noTemps(t, f)
+}
+
+func TestKextsNeverRemoveAForeignBundleBehindAMarkerWhenThePinMoves(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	bundle := foreign(t, f)
+	f.repin("lilu-release", liluZip(t, "plist Lilu, the next release"))
+	_, err := f.b.Kexts(context.Background(), f.in)
+	want := bundle + " does not match the pinned lilu-release (" + sha(t, f.in["lilu-release"]) + "); remove it and re-run"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant %s", err, want)
+	}
+	if b, _ := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist")); string(b) != "foreign Contents/Info.plist" {
+		t.Errorf("the foreign bundle was touched: %q", b)
+	}
+	noTemps(t, f)
+}
+
+// Round 1's marker, the zip's sha256 alone, says nothing about the
+// bundle, so it counts as no marker.
+func TestKextsTreatAOneFieldMarkerAsNone(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	kexts := filepath.Join(f.home, "build", "kexts")
+	marker := filepath.Join(kexts, ".Lilu.kext.sha256")
+	if err := os.WriteFile(marker, []byte(sha(t, f.in["lilu-release"])+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.b.Kexts(context.Background(), f.in); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(kexts, "Lilu.kext")
+	if b, _ := os.ReadFile(marker); string(b) != wantMarker(t, f, "lilu-release", bundle) {
+		t.Errorf("a matching bundle's marker is %q", b)
+	}
+
+	if err := os.WriteFile(marker, []byte(sha(t, f.in["lilu-release"])+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	foreign(t, f)
+	if _, err := f.b.Kexts(context.Background(), f.in); err == nil || !strings.Contains(err.Error(), "does not match the pinned") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(bundle, "Contents", "Info.plist")); string(b) != "foreign Contents/Info.plist" {
+		t.Errorf("the foreign bundle was touched: %q", b)
+	}
 }
 
 func TestKextsAdoptAnUnmarkedBundleThatMatches(t *testing.T) {
@@ -489,7 +657,7 @@ func TestKextsAdoptAnUnmarkedBundleThatMatches(t *testing.T) {
 	if err != nil || !os.SameFile(before, after) {
 		t.Errorf("the matching bundle was replaced: %v", err)
 	}
-	if b, _ := os.ReadFile(marker); string(b) != sha(t, f.in["lilu-release"])+"\n" {
+	if b, _ := os.ReadFile(marker); string(b) != wantMarker(t, f, "lilu-release", filepath.Join(f.home, "build", "kexts", "Lilu.kext")) {
 		t.Errorf("the marker holds %q", b)
 	}
 	noTemps(t, f)
