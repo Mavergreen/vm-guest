@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,6 +75,95 @@ func TestAMismatchedDownloadNeverTakesItsFinalName(t *testing.T) {
 	}
 }
 
+// TestDownloadNeverWritesThroughAPreexistingPartName reproduces the
+// reviewer's finding: the old code always wrote a download to a FIXED
+// name, dest+".part". If that name is already a hard link to some other
+// file -- left behind by a crashed adopt, or simply planted here -- the
+// old code's os.Create truncated that shared inode before a single byte
+// was verified, corrupting whatever else pointed at it (in the field,
+// the shell tree's own download). This must never happen: every attempt
+// creates its own uniquely named temp file and never opens a
+// pre-existing path for writing.
+func TestDownloadNeverWritesThroughAPreexistingPartName(t *testing.T) {
+	g := getter(t)
+	want := sum([]byte("good"))
+	dest := g.Paths.CacheFile(want, "x.zip")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(t.TempDir(), "original")
+	if err := os.WriteFile(original, []byte("good"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixedPart := dest + ".part" // the OLD fixed name this code must never touch
+	if err := os.Link(original, fixedPart); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("evil")) }))
+	defer srv.Close()
+
+	if _, err := g.Get(context.Background(), Item{Name: "x", URL: srv.URL + "/x.zip", SHA256: want}); err == nil {
+		t.Fatal("a checksum mismatch must still be an error")
+	}
+	if b, err := os.ReadFile(original); err != nil || string(b) != "good" {
+		t.Fatalf("the original, reachable through a pre-existing fixed .part link, was overwritten: %q %v", b, err)
+	}
+	if b, err := os.ReadFile(fixedPart); err != nil || string(b) != "good" {
+		t.Fatalf("the fixed .part name's shared inode was overwritten: %q %v", b, err)
+	}
+}
+
+// TestConcurrentGetsOfOneItemNeverProduceATornFile: with a fixed .part
+// name, one goroutine's verify-then-rename could race a second goroutine
+// still writing into what just became the first's dest, handing back a
+// path whose bytes changed after Get verified them. Each attempt's own
+// unique temp file rules this out.
+func TestConcurrentGetsOfOneItemNeverProduceATornFile(t *testing.T) {
+	good := []byte("the correct bytes, more than a few of them")
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&n, 1) == 1 {
+			w.Write(good)
+			return
+		}
+		w.Write([]byte("evil bytes of a different length"))
+	}))
+	defer srv.Close()
+	g := getter(t)
+	it := Item{Name: "x", URL: srv.URL + "/x.zip", SHA256: sum(good)}
+
+	var wg sync.WaitGroup
+	paths := make([]string, 2)
+	errs := make([]error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			paths[i], errs[i] = g.Get(context.Background(), it)
+		}(i)
+	}
+	wg.Wait()
+
+	succeeded := 0
+	for i, err := range errs {
+		if err == nil {
+			succeeded++
+			b, rerr := os.ReadFile(paths[i])
+			if rerr != nil || sum(b) != it.SHA256 {
+				t.Fatalf("returned path's bytes do not verify: err=%v bytes=%q", rerr, b)
+			}
+		}
+	}
+	if succeeded == 0 {
+		t.Fatal("the request that received the correct bytes must succeed")
+	}
+	dest := g.Paths.CacheFile(it.SHA256, "x.zip")
+	if b, err := os.ReadFile(dest); err == nil && sum(b) != it.SHA256 {
+		t.Fatalf("the cache file is torn or unverified: sum = %s", sum(b))
+	}
+}
+
 func TestARotCachedFileIsAnErrorNotARedownload(t *testing.T) {
 	g := getter(t)
 	want := sum([]byte("good"))
@@ -93,16 +184,71 @@ func TestAdoptionReusesAVerifiedFileWithoutTheNetwork(t *testing.T) {
 	bad := filepath.Join(t.TempDir(), "x.zip")
 	os.WriteFile(bad, []byte("wrong"), 0o644)
 	var logged []string
-	g.Log = func(f string, a ...any) { logged = append(logged, f) }
+	var mu sync.Mutex
+	g.Log = func(f string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(f, a...))
+	}
 	p, err := g.Get(context.Background(), Item{Name: "x", URL: "http://127.0.0.1:1/x.zip", SHA256: sum(body), Adopt: []string{bad, old}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := g.Paths.CacheFile(sum(body), "x.zip"); p != want {
+		t.Fatalf("p = %q, want the cache path %q", p, want)
 	}
 	if b, _ := os.ReadFile(p); string(b) != string(body) {
 		t.Fatal("adopted file differs")
 	}
 	if b, _ := os.ReadFile(old); string(b) != string(body) {
 		t.Fatal("adoption must not disturb the original")
+	}
+	sawSkip, sawAdopted := false, false
+	for _, l := range logged {
+		if strings.Contains(l, "not adopting") && strings.Contains(l, bad) {
+			sawSkip = true
+		}
+		if strings.Contains(l, "adopted") && strings.Contains(l, old) {
+			sawAdopted = true
+		}
+	}
+	if !sawSkip {
+		t.Errorf("logged = %v, want a line about skipping %s", logged, bad)
+	}
+	if !sawAdopted {
+		t.Errorf("logged = %v, want a line about adopting %s", logged, old)
+	}
+}
+
+// TestAdoptionVerifiesWhatItPlacedNotJustWhatItHashed reproduces the
+// review's finding that adoption hashed the source once, then linked or
+// copied it without checking that what got placed was still what got
+// hashed. testAdoptHook fires in that exact window.
+func TestAdoptionVerifiesWhatItPlacedNotJustWhatItHashed(t *testing.T) {
+	g := getter(t)
+	good := []byte("good")
+	old := filepath.Join(t.TempDir(), "x.zip")
+	if err := os.WriteFile(old, good, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prev := testAdoptHook
+	testAdoptHook = func() {
+		// Simulate the source being replaced in the window between the
+		// first hash and the link/copy: a new inode with different bytes
+		// at the same path.
+		os.Remove(old)
+		os.WriteFile(old, []byte("swapped underfoot"), 0o644)
+	}
+	t.Cleanup(func() { testAdoptHook = prev })
+
+	_, err := g.Get(context.Background(), Item{Name: "x", URL: "http://127.0.0.1:1/x.zip", SHA256: sum(good), Adopt: []string{old}})
+	if err == nil {
+		t.Fatal("adoption of a source that changed underfoot must fall through to a (failing) download, not succeed")
+	}
+	dest := g.Paths.CacheFile(sum(good), "x.zip")
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatal("adoption placed unverified bytes into the cache")
 	}
 }
 
@@ -152,9 +298,9 @@ func TestHeadersAreSent(t *testing.T) {
 }
 
 func TestNoFetchNeverContactsTheNetwork(t *testing.T) {
-	contacted := false
+	var contacted atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		contacted = true
+		contacted.Store(true)
 		w.WriteHeader(500)
 	}))
 	defer srv.Close()
@@ -164,8 +310,71 @@ func TestNoFetchNeverContactsTheNetwork(t *testing.T) {
 	if !errors.Is(err, errNotCached) {
 		t.Fatalf("err = %v, want errNotCached", err)
 	}
-	if contacted {
+	if contacted.Load() {
 		t.Fatal("noFetch must never contact the network")
+	}
+}
+
+// TestPathTraversalInputsAreRejected: a checksum column like
+// "../../../escaped" or a "https://h/x/.." URL must never reach
+// CacheFile/os.Create unvalidated.
+func TestPathTraversalInputsAreRejected(t *testing.T) {
+	g := getter(t)
+	if _, err := g.Get(context.Background(), Item{Name: "x", URL: "http://h/x/a.zip", SHA256: "../../../escaped"}); err == nil || !strings.Contains(err.Error(), `"../../../escaped"`) {
+		t.Fatalf("a non-hex checksum must be refused: %v", err)
+	}
+	if _, err := g.Get(context.Background(), Item{Name: "x", URL: "https://h/x/..", SHA256: sum([]byte("x"))}); err == nil || !strings.Contains(err.Error(), `".."`) {
+		t.Fatalf("a \"..\" filename must be refused: %v", err)
+	}
+	if _, err := os.Stat(g.Paths.Cache()); !os.IsNotExist(err) {
+		t.Fatal("a rejected item must create nothing under the cache directory")
+	}
+}
+
+func TestATruncatedBodyIsRetried(t *testing.T) {
+	body := []byte("payload bytes, more than just a few of them")
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&n, 1) == 1 {
+			w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+			w.WriteHeader(200)
+			w.Write(body[:len(body)/2]) // declared more than sent: io.ErrUnexpectedEOF
+			return
+		}
+		w.Write(body)
+	}))
+	defer srv.Close()
+	g := getter(t)
+	p, err := g.Get(context.Background(), Item{Name: "t", URL: srv.URL + "/t", SHA256: sum(body)})
+	if err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != string(body) {
+		t.Fatal("wrong bytes after the retry")
+	}
+}
+
+func TestAStalledDownloadIsAbortedAndRetried(t *testing.T) {
+	body := []byte("ok")
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&n, 1) == 1 {
+			w.Header().Set("Content-Length", "1000000")
+			w.WriteHeader(200)
+			w.(http.Flusher).Flush()
+			time.Sleep(500 * time.Millisecond) // well past the test's stall timeout
+			return
+		}
+		w.Write(body)
+	}))
+	defer srv.Close()
+	g := &Getter{Paths: config.Paths{Home: t.TempDir()}, Backoff: time.Millisecond, StallTimeout: 50 * time.Millisecond, Log: func(string, ...any) {}}
+	p, err := g.Get(context.Background(), Item{Name: "t", URL: srv.URL + "/t", SHA256: sum(body)})
+	if err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != string(body) {
+		t.Fatal("wrong bytes after the stall retry")
 	}
 }
 
