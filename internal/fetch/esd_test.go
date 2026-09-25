@@ -65,7 +65,9 @@ func fakeApple(t *testing.T, asset []byte) (*httptest.Server, *pins.Registry) {
 	return srv, reg
 }
 
-func fixedRand() io.Reader { return bytes.NewReader([]byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF}) }
+func fixedRand() io.Reader {
+	return bytes.NewReader([]byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF})
+}
 
 func TestInstallESDHandshakesDownloadsAndVerifies(t *testing.T) {
 	asset := []byte("not really Apple's installer")
