@@ -13,7 +13,7 @@ import (
 const specialChars = " '\"\\|&;()<>!{}*[?]^$`,"
 
 // bashQuote is bash's `printf '%q'` for printable ASCII: an empty string
-// becomes ''; the characters in specialChars are backslash-escaped
+// becomes a pair of single quotes; the characters in specialChars are backslash-escaped
 // wherever they occur; '#' is escaped only at position 0 (a comment
 // there, not elsewhere); '~' is escaped at position 0 or right after '='
 // or ':' (a tilde expansion there, not elsewhere). Anything outside
