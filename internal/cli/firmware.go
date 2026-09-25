@@ -88,6 +88,13 @@ func cmdFirmware(ctx context.Context, e *Env, args []string) error {
 	if hint := fetchLegacyHint(e); hint != "" {
 		logf(e, "firmware", "%s", hint)
 	}
+	// A home too long for EDK II is refused before anything is fetched:
+	// the build would otherwise fail minutes in.
+	for _, t := range targets {
+		if err := firmware.CheckBuildPath(p, t); err != nil {
+			return err
+		}
+	}
 	reg := e.Registry
 	if reg == nil {
 		if reg, err = pins.Embedded(); err != nil {

@@ -6877,8 +6877,9 @@ tree's home.
 
 **A finding first: the build directory's path length is an input.** The
 first reference build ran with `VMAVS_HOME` in the session scratchpad, a
-path 130 characters long. It died two minutes in with this, from EDK II's
-GenFw:
+path 130 characters long. It died two minutes in with this, from audk's
+ImageTool (`BaseTools/ImageTool/Image.c`, which refuses a
+`SymbolsPathLen` over `MAX_UINT8`):
 
 ```
 ERROR: Debug symbol path exceeds maximum allowed range of 255 bytes!
@@ -6888,11 +6889,20 @@ The deepest module's `…/DEBUG/*.dll` path under
 `build/OpenCorePkg-1.0.7/UDK/Build/OpenCorePkg/RELEASE_GCC/X64/` passed
 255 bytes. EDK II writes that path into each PE image, so the path both
 limits the build and is an input to its bytes (INHERITED:
-`lib/ccache.sh`'s note). The default homes are about 40 characters and
-fit. A long `VMAVS_HOME` does not, and today `vmavs firmware` would find
-that out after the fetch and minutes of compiling. The ledger records it
-as a follow-up: refuse too long a build path up front. Everything below
-ran in `/tmp/vp3.hD7Z5x`, which is 15 characters.
+`lib/ccache.sh`'s note). The deepest debug paths below `UDK/` in this
+pin are 130 bytes for OpenCore
+(`…/FirmwareSettingsEntry/DEBUG/FirmwareSettingsEntry.dll`) and 162 for
+OVMF (`…/ReportStatusCodeRouterRuntimeDxe/DEBUG/ReportStatusCodeRouterRuntimeDxe.dll`),
+MEASURED 2026-09-25T17:29:27Z with `find Build/<platform> -name '*.dll'`
+in this build's `UDK`. With `/build/OpenCorePkg-1.0.7/UDK/` (29 bytes)
+above them, `VMAVS_HOME` can be at most **96 bytes for OpenCore and 64
+for OVMF**. The default homes are about 40 characters and fit. A long
+`VMAVS_HOME` does not, and today `vmavs firmware` would find that out
+after the fetch and minutes of compiling. The ledger records it as a
+follow-up: refuse too long a build path up front. (Since done:
+`vmavs firmware` refuses such a home for `opencore` and `ovmf` before
+fetching anything, and a build that hits the limit anyway says why.)
+Everything below ran in `/tmp/vp3.hD7Z5x`, which is 15 characters.
 
 **The shell tree's build as the reference, in the temp home.**
 - Started at 2026-09-25T16:45:43Z.

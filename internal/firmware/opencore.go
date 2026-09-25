@@ -22,6 +22,10 @@ const buildOCPatch = "0001-build_oc-source-pinned-efibuild.patch"
 // done (unpacking, patching, assembling the EDK II tree) are skipped;
 // build_oc.tool itself is incremental.
 func (b *Builder) OpenCore(ctx context.Context, in Inputs) ([]string, error) {
+	// A home too long for EDK II otherwise fails minutes into the build.
+	if err := CheckBuildPath(b.Paths, "opencore"); err != nil {
+		return nil, err
+	}
 	if err := b.requireEnv(); err != nil {
 		return nil, err
 	}

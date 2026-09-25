@@ -24,6 +24,10 @@ var ovmfBuild = fmt.Sprintf("set +u; . ./edksetup.sh >/dev/null || exit 1; exec 
 // not work with OpenCore on these hosts (NOTES.md, P3 Task 8); the one
 // built from acidanthera's audk does.
 func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
+	// A home too long for EDK II otherwise fails minutes into the build.
+	if err := CheckBuildPath(b.Paths, "ovmf"); err != nil {
+		return nil, err
+	}
 	if err := b.requireEnv(); err != nil {
 		return nil, err
 	}

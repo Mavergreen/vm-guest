@@ -82,6 +82,28 @@ func trackRequests(srv *httptest.Server) *[]string {
 	return &paths
 }
 
+// buildHome is a new, empty VMAVS_HOME short enough for the EDK II
+// builds on any host (firmware.CheckBuildPath): under /tmp, not
+// t.TempDir(), which on macOS sits under a $TMPDIR of about 50 bytes and
+// names the test too. It is removed when the test ends.
+func buildHome(t *testing.T) string {
+	t.Helper()
+	base := "/tmp"
+	if fi, err := os.Stat(base); err != nil || !fi.IsDir() {
+		base = ""
+	}
+	d, err := os.MkdirTemp(base, "vf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(d); err != nil {
+			t.Errorf("removing %s: %v", d, err)
+		}
+	})
+	return d
+}
+
 func firmwareRegistry(t *testing.T, rows []string) *pins.Registry {
 	t.Helper()
 	reg, err := pins.Parse(strings.NewReader(strings.Join(rows, "\n") + "\n"))
@@ -95,7 +117,7 @@ func TestFirmwareRunsEveryTargetInOrderByDefault(t *testing.T) {
 	_, _, rows := fakeFirmwareServer(t, false)
 	rec := &recordingFirmwareBuilder{}
 	stubFirmwareBuilder(t, rec)
-	env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()}
+	env := map[string]string{"VMAVS_HOME": buildHome(t), "HOME": t.TempDir()}
 	e, out, errb := fetchEnv(env)
 	e.Registry = firmwareRegistry(t, rows)
 	code := Run(context.Background(), []string{"firmware"}, e)
@@ -126,7 +148,7 @@ func TestFirmwareRunsOnlyTheNamedTargetsInTheirOrder(t *testing.T) {
 	seen := trackRequests(srv)
 	rec := &recordingFirmwareBuilder{}
 	stubFirmwareBuilder(t, rec)
-	env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()}
+	env := map[string]string{"VMAVS_HOME": buildHome(t), "HOME": t.TempDir()}
 	e, _, errb := fetchEnv(env)
 	e.Registry = firmwareRegistry(t, rows)
 	code := Run(context.Background(), []string{"firmware", "efi", "opencore"}, e)
@@ -221,7 +243,7 @@ func TestFirmwareArgOrderingsParseCorrectly(t *testing.T) {
 			_, _, rows := fakeFirmwareServer(t, false)
 			rec := &recordingFirmwareBuilder{}
 			stubFirmwareBuilder(t, rec)
-			env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()}
+			env := map[string]string{"VMAVS_HOME": buildHome(t), "HOME": t.TempDir()}
 			e, _, errb := fetchEnv(env)
 			e.Registry = firmwareRegistry(t, rows)
 			code := Run(context.Background(), append([]string{"firmware"}, c.args...), e)
@@ -398,7 +420,7 @@ func TestFirmwareEFIForReal(t *testing.T) {
 // home, with a fake gcc banner inside the declared range so the compiler
 // check itself does not stop it first.
 func TestFirmwareOVMFWithoutATreeSaysWhatToRun(t *testing.T) {
-	env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()}
+	env := map[string]string{"VMAVS_HOME": buildHome(t), "HOME": t.TempDir()}
 	e, _, errb := fetchEnv(env)
 	e.Runner = &proc.Fake{Paths: map[string]string{"gcc": "/usr/bin/gcc"}, Handle: func(c proc.Cmd) error {
 		if c.Name == "gcc" && len(c.Args) == 1 && c.Args[0] == "--version" {
@@ -431,5 +453,43 @@ func TestFirmwareGivesFetchsLegacyHint(t *testing.T) {
 	}
 	if strings.Contains(errb.String(), "mv ") {
 		t.Fatalf("stderr=%s, want the export advice only, no mv", errb.String())
+	}
+}
+
+// TestFirmwareRefusesALongHomeBeforeFetching: a VMAVS_HOME too long for
+// an EDK II build is refused for the targets that build with it, before
+// a single request; efi alone does not care.
+func TestFirmwareRefusesALongHomeBeforeFetching(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"firmware"}, 1},
+		{[]string{"firmware", "ovmf"}, 1},
+		{[]string{"firmware", "opencore", "efi"}, 1},
+		{[]string{"firmware", "efi"}, 0},
+	} {
+		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
+			srv, _, rows := fakeFirmwareServer(t, false)
+			seen := trackRequests(srv)
+			rec := &recordingFirmwareBuilder{}
+			stubFirmwareBuilder(t, rec)
+			home := filepath.Join(buildHome(t), strings.Repeat("h", 100))
+			e, _, errb := fetchEnv(map[string]string{"VMAVS_HOME": home, "HOME": t.TempDir()})
+			e.Registry = firmwareRegistry(t, rows)
+			code := Run(context.Background(), c.args, e)
+			if code != c.code {
+				t.Fatalf("code=%d, want %d; stderr=%s", code, c.code, errb.String())
+			}
+			if c.code == 0 {
+				return
+			}
+			if !strings.Contains(errb.String(), "shorter VMAVS_HOME") {
+				t.Errorf("stderr=%s, want the fix named", errb.String())
+			}
+			if len(*seen) != 0 || len(rec.calls) != 0 {
+				t.Errorf("fetched %v and built %v before refusing", *seen, rec.calls)
+			}
+		})
 	}
 }

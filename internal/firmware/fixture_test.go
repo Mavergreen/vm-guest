@@ -2,6 +2,7 @@ package firmware
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -39,6 +40,7 @@ type fixture struct {
 	flags       string   // the fake GNUmakefile's CC_FLAGS
 	patchesTake bool     // whether a fake `git apply -p1 -` changes the file
 	buildErr    error    // build_oc.tool's (and EDK II build's) result
+	buildOut    string   // what either build prints, if not its default line or two
 	fv          []string // OVMF's outputs; default: OVMFFiles
 	stdins      [][]byte // every patch git apply read from stdin
 	ocvalidate  error    // what an ocvalidate (built or on PATH) returns
@@ -70,9 +72,32 @@ func audkEntries() []entry {
 	return es
 }
 
+// shortHome is a new, empty directory for a VMAVS_HOME that
+// CheckBuildPath allows on any host: under /tmp, not t.TempDir(), which
+// on macOS sits under a $TMPDIR of about 50 bytes, and names the test
+// too -- the OVMF build allows a home of 64 bytes at most. It is removed
+// when the test ends.
+func shortHome(t *testing.T) string {
+	t.Helper()
+	base := "/tmp"
+	if fi, err := os.Stat(base); err != nil || !fi.IsDir() {
+		base = ""
+	}
+	d, err := os.MkdirTemp(base, "vf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(d); err != nil {
+			t.Errorf("removing %s: %v", d, err)
+		}
+	})
+	return d
+}
+
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := &fixture{t: t, home: t.TempDir(), in: Inputs{}, banner: "gcc (GCC) 13.3.0",
+	f := &fixture{t: t, home: shortHome(t), in: Inputs{}, banner: "gcc (GCC) 13.3.0",
 		flags: "-std=gnu17 -Wno-error", patchesTake: true}
 	for _, a := range Artifacts {
 		f.built = append(f.built, a.Built)
@@ -182,7 +207,7 @@ func (f *fixture) handle(c proc.Cmd) error {
 		}
 	case c.Name == "./build_oc.tool":
 		if c.Stdout != nil {
-			io.WriteString(c.Stdout, "compiling OpenCore\nline 2\n")
+			io.WriteString(c.Stdout, cmp.Or(f.buildOut, "compiling OpenCore\nline 2\n"))
 		}
 		if f.buildErr != nil {
 			return f.buildErr
@@ -203,7 +228,7 @@ func (f *fixture) handle(c proc.Cmd) error {
 		return f.ocvalidate
 	case c.Name == "bash" && len(c.Args) == 2 && c.Args[0] == "-c" && strings.Contains(c.Args[1], "edksetup.sh"):
 		if c.Stdout != nil {
-			io.WriteString(c.Stdout, "building OVMF\n")
+			io.WriteString(c.Stdout, cmp.Or(f.buildOut, "building OVMF\n"))
 		}
 		if f.buildErr != nil {
 			return f.buildErr

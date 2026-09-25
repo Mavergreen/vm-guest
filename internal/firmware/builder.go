@@ -164,7 +164,8 @@ func (b *Builder) ccacheStats(ctx context.Context) {
 
 // runLogged runs c with its output in logPath (spec §2: stdout carries a
 // command's own output, and a firmware build's is not that). On failure
-// it logs the last 20 lines of the log and returns an error naming it.
+// it logs the last 20 lines of the log and returns an error naming it,
+// and saying so when the cause is the build path's length.
 func (b *Builder) runLogged(ctx context.Context, c proc.Cmd, logPath string) error {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
@@ -184,7 +185,9 @@ func (b *Builder) runLogged(ctx context.Context, c proc.Cmd, logPath string) err
 	if runErr == nil {
 		return nil
 	}
+	why := ""
 	if data, err := os.ReadFile(logPath); err == nil {
+		why = debugPathError(data)
 		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 		if len(lines) > 20 {
 			lines = lines[len(lines)-20:]
@@ -193,6 +196,9 @@ func (b *Builder) runLogged(ctx context.Context, c proc.Cmd, logPath string) err
 		for _, l := range lines {
 			b.logf("  %s", l)
 		}
+	}
+	if why != "" {
+		return fmt.Errorf("%s: %w (log: %s)", why, runErr, logPath)
 	}
 	return fmt.Errorf("%w (log: %s)", runErr, logPath)
 }
