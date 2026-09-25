@@ -77,8 +77,10 @@ func TestIngredientsMatchTheShellFingerprint(t *testing.T) {
 	_, here, _, _ := runtime.Caller(0)
 	root := filepath.Join(filepath.Dir(here), "..", "..")
 	script := filepath.Join(root, "bin", "ingredient-fingerprint.sh")
-	if _, err := exec.LookPath("sha256sum"); err != nil {
-		t.Skip("sha256sum not available; CI runs this")
+	for _, cmd := range []string{"bash", "sha256sum"} {
+		if _, err := exec.LookPath(cmd); err != nil {
+			t.Skipf("%s not available; CI runs this", cmd)
+		}
 	}
 	list, err := exec.Command(script, "--list").Output()
 	if err != nil {

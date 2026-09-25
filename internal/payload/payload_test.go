@@ -11,7 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -87,8 +89,9 @@ func extractPostinstall(t *testing.T, pkg []byte) []byte {
 
 // shellPostinstall runs build-firstboot-pkg.sh with the given arguments
 // and returns the postinstall it assembled, for byte-for-byte comparison
-// against Postinstall's own output. It skips when python3, sha256sum or
-// bash is unavailable; CI has all three.
+// against Postinstall's own output. It skips off Linux, when python3 or
+// sha256sum is unavailable, or when bash is older than 5; the Linux CI
+// jobs have all of it.
 func shellPostinstall(t *testing.T, args ...string) []byte {
 	t.Helper()
 	return shellPostinstallEnv(t, nil, args...)
@@ -100,11 +103,18 @@ func shellPostinstall(t *testing.T, args ...string) []byte {
 // MQG_FIRSTBOOT_PASSWORD sets an account secret"), never as a flag.
 func shellPostinstallEnv(t *testing.T, extraEnv []string, args ...string) []byte {
 	t.Helper()
-	for _, cmd := range []string{"python3", "sha256sum", "bash"} {
+	// build-firstboot-pkg.sh is Linux-only by its own header: it runs GNU
+	// `stat -c`, and writes firstboot.conf with bash's printf %q, which
+	// Conf reproduces as bash 5 has it.
+	if runtime.GOOS != "linux" {
+		t.Skipf("build-firstboot-pkg.sh runs on Linux only (GNU stat); this is %s", runtime.GOOS)
+	}
+	for _, cmd := range []string{"python3", "sha256sum"} {
 		if _, err := exec.LookPath(cmd); err != nil {
 			t.Skipf("%s not available", cmd)
 		}
 	}
+	requireBash5(t)
 	dir := t.TempDir()
 	out := filepath.Join(dir, "sh.pkg")
 	script := filepath.Join(repoRoot(), "image", "payload", "build-firstboot-pkg.sh")
@@ -123,10 +133,27 @@ func shellPostinstallEnv(t *testing.T, extraEnv []string, args ...string) []byte
 
 // --- Task 10's ten tests ----------------------------------------------
 
-func TestBashQuoteMatchesBash(t *testing.T) {
+// requireBash5 skips unless the bash on PATH is version 5 or later.
+// bashQuote is bash 5's printf %q, which is what the shell tree's hosts
+// run; macOS's /bin/bash is 3.2 (the go-macos CI job's), whose %q quotes
+// differently, so comparing against it would fail for no reason
+// connected to this code.
+func requireBash5(t *testing.T) {
+	t.Helper()
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
+	out, err := exec.Command("bash", "-c", `echo "${BASH_VERSINFO[0]}"`).Output()
+	if err != nil {
+		t.Skipf("cannot ask bash its version: %v", err)
+	}
+	if major, err := strconv.Atoi(strings.TrimSpace(string(out))); err != nil || major < 5 {
+		t.Skipf("bash major version %q: printf %%q before bash 5 is not what bashQuote reproduces", strings.TrimSpace(string(out)))
+	}
+}
+
+func TestBashQuoteMatchesBash(t *testing.T) {
+	requireBash5(t)
 	corpus := []string{
 		"mavsuser", "Mavericks User", "/bin/bash", "a.pkg b.pkg ", "it's",
 		"$HOME", "~root", "a=~b", "#x", "x#", "100%", "a,b", "semi;colon",
