@@ -25,7 +25,10 @@ type Env struct {
 	Getenv func(string) string
 	// Runner runs external commands. A nil Runner means the real one.
 	Runner proc.Runner
-	// PID names this process's run directory. Zero means os.Getpid().
+	// PID is the pid run records in a run's state file, for a person
+	// reading it. Nothing decides anything by it: a run directory is
+	// named by os.MkdirTemp, and liveness is the state file's lock. Zero
+	// means os.Getpid().
 	PID int
 	// Host is what cmdDoctor probes for host facts. nil means the real
 	// host (runtime.GOOS, os.ReadFile, syscall.Access, ...); a test gives
