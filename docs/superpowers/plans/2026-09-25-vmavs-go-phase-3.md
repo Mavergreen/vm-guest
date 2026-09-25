@@ -5994,7 +5994,7 @@ git commit   # subject: "NOTES: vmavs firmware builds the boot stack byte for by
 | `fetch/`: kexts, edk2, opencorepkg (§3) | Task 3 |
 | `vmavs firmware` (§2, renamed from `boot-stack`) | Task 12 |
 | embedded `config.plist` and patches (§3) | Task 1; `config.plist` since phase 2 |
-| golden/structural tests for GPT/FAT images (§7) | Tasks 7, 8, 11 |
+| golden/structural tests for GPT/FAT images (§7) | structural: Tasks 7, 8, 11; golden bytes (the images' sha256 and DerivedGUID's known answers, which no task delivered): the final fix wave's `internal/diskimg/golden_test.go` and `TestEFIImageIsDeterministic` |
 | parity tests with the shell tree, differences named (§7) | Tasks 2, 5, 6, 7, 8, 11 |
 | carrying the bats knowledge (§7) | the mapping table above |
 | `doctor` reports the tools, derived from the code (§3) | Task 12 (`firmware.Tools`) |
