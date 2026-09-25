@@ -42,6 +42,10 @@ type fixture struct {
 	fv          []string // OVMF's outputs; default: OVMFFiles
 	stdins      [][]byte // every patch git apply read from stdin
 	ocvalidate  error    // what an ocvalidate (built or on PATH) returns
+
+	missingHeaders []string          // headers the fake compiler cannot find
+	applyErr       error             // `git apply --ignore-whitespace`'s result
+	makefiles      map[string]string // more GNUmakefiles build_oc.tool writes: path under the build dir -> CC_FLAGS
 }
 
 func sha(t *testing.T, p string) string {
@@ -161,6 +165,15 @@ func (f *fixture) handle(c proc.Cmd) error {
 		io.WriteString(c.Stdout, f.banner+"\n")
 	case c.Name == f.b.Toolchain.GCC() && len(c.Args) == 1 && c.Args[0] == "-dumpmachine":
 		io.WriteString(c.Stdout, "x86_64-linux-gnu\n")
+	case c.Name == f.b.Toolchain.GCC() && len(c.Args) == 4 && c.Args[0] == "-fsyntax-only":
+		src, _ := io.ReadAll(c.Stdin)
+		for _, h := range f.missingHeaders {
+			if strings.Contains(string(src), "#include <"+h+">") {
+				return &proc.ExitError{Cmd: c.String(), Code: 1}
+			}
+		}
+	case c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "apply" && c.Args[3] == "--ignore-whitespace":
+		return f.applyErr
 	case c.Name == "git" && len(c.Args) >= 4 && c.Args[2] == "apply" && c.Args[len(c.Args)-1] == "-":
 		patch, _ := io.ReadAll(c.Stdin)
 		f.stdins = append(f.stdins, patch)
@@ -177,6 +190,10 @@ func (f *fixture) handle(c proc.Cmd) error {
 		built := filepath.Join(c.Dir, "UDK", "Build", "OpenCorePkg", Target+"_"+EDKToolchain, Arch)
 		os.MkdirAll(filepath.Join(built, "OpenCorePkg", "Library", "x"), 0o755)
 		os.WriteFile(filepath.Join(built, "OpenCorePkg", "Library", "x", "GNUmakefile"), []byte("CC_FLAGS = -Os "+f.flags+"\n"), 0o644)
+		for rel, flags := range f.makefiles {
+			os.MkdirAll(filepath.Join(built, filepath.Dir(rel)), 0o755)
+			os.WriteFile(filepath.Join(built, rel), []byte("CC_FLAGS = -Os "+flags+"\n"), 0o644)
+		}
 		for _, n := range f.built {
 			os.WriteFile(filepath.Join(built, n), []byte("built "+n), 0o644)
 		}

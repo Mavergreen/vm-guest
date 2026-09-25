@@ -3,6 +3,7 @@ package firmware
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -38,8 +39,13 @@ func (b *Builder) OpenCore(ctx context.Context, in Inputs) ([]string, error) {
 		files[n] = p
 	}
 	// git: efibuild.sh insists on it, and patches are applied with it.
-	// zip: efibuild.sh will not start without it.
-	if err := b.requireTools("bash", "git", "zip", "make", "python3", b.Toolchain.GCC()); err != nil {
+	// zip: efibuild.sh will not start without it. nasm and iasl: it
+	// needs both, and where it cannot find them (macOS) it offers to
+	// fetch and install them with curl and sudo.
+	if err := b.requireTools("bash", "git", "zip", "make", "python3", "nasm", "iasl", b.Toolchain.GCC()); err != nil {
+		return nil, err
+	}
+	if err := b.requireHeaders(ctx); err != nil {
 		return nil, err
 	}
 	if err := b.unpackOpenCorePkg(ctx, files["opencorepkg-src"]); err != nil {
@@ -135,7 +141,8 @@ func (b *Builder) patchBuildOCTool(ctx context.Context) error {
 // exist before build_oc.tool runs, or efibuild.sh deletes the tree.
 func (b *Builder) assembleUDK(ctx context.Context, files map[string]string) error {
 	marker := filepath.Join(b.udk(), ".mqg-prepared")
-	if have, err := os.ReadFile(marker); err == nil && string(have) == AudkCommit+"\n" {
+	// Compared as the shell's $(cat) reads it: trailing newlines dropped.
+	if have, err := os.ReadFile(marker); err == nil && strings.TrimRight(string(have), "\n") == AudkCommit {
 		b.logf("EDK II tree already assembled at audk %s", AudkCommit)
 		return nil
 	}
@@ -185,7 +192,7 @@ func (b *Builder) assembleUDK(ctx context.Context, files map[string]string) erro
 		}
 	}
 	for _, r := range []string{"patches.ready", "submodules.ready", "UDK.ready"} {
-		if err := os.WriteFile(filepath.Join(b.udk(), r), nil, 0o644); err != nil {
+		if err := writeFileAtomic(filepath.Join(b.udk(), r), nil, 0o644); err != nil {
 			return err
 		}
 	}
@@ -195,26 +202,29 @@ func (b *Builder) assembleUDK(ctx context.Context, files map[string]string) erro
 // checkFlags asserts both halves of BuildOptions reached the compiler, in
 // the first generated GNUmakefile: the check a tab quietly becoming a
 // space, or upstream's hook quietly going away on a pin bump, cannot get
-// past. The makefiles are rewritten on every build, warm or cold.
-// WalkDir's lexical order is `find | sort`'s in the C locale.
+// past. The makefiles are rewritten on every build, warm or cold. The one
+// checked is build-opencore.sh's: the first of `find | LC_ALL=C sort`,
+// which sorts whole paths byte by byte -- not a directory walk's order,
+// in which x/ comes before x-y/ although "x-y/" sorts before "x/".
 func checkFlags(built string) error {
-	var mk string
+	var mks []string
 	err := filepath.WalkDir(built, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if !d.IsDir() && d.Name() == "GNUmakefile" {
-			mk = p
-			return fs.SkipAll
+			mks = append(mks, p)
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if mk == "" {
+	if len(mks) == 0 {
 		return fmt.Errorf("no GNUmakefile under %s -- cannot check the build flags", built)
 	}
+	sort.Strings(mks)
+	mk := mks[0]
 	data, err := os.ReadFile(mk)
 	if err != nil {
 		return err
@@ -257,4 +267,36 @@ func (b *Builder) shipArtifacts(built string) ([]string, error) {
 	}
 	b.logf("built %d artifacts into %s", len(out), b.artifactsDir())
 	return out, nil
+}
+
+// headerPackages names, for each of Headers, the package that provides
+// it, as boot/prereqs.sh's REQUIRED_HEADERS does.
+var headerPackages = map[string]string{
+	"uuid/uuid.h": "the uuid development package: uuid-dev on Debian, util-linux-libs on Arch",
+}
+
+// requireHeaders asks the compiler whether each of Headers compiles
+// (boot/prereqs.sh's header_status), and names every one that does not
+// with its package, before anything is unpacked: a missing header
+// otherwise surfaces minutes into BaseTools as a fatal error.
+func (b *Builder) requireHeaders(ctx context.Context) error {
+	var missing []string
+	for _, h := range Headers {
+		src := "#include <" + h + ">\nint main(void){return 0;}\n"
+		if err := b.Runner.Run(ctx, proc.Cmd{Name: b.Toolchain.GCC(), Args: []string{"-fsyntax-only", "-x", "c", "-"},
+			Stdin: strings.NewReader(src), Stdout: io.Discard, Stderr: io.Discard}); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			m := h
+			if p := headerPackages[h]; p != "" {
+				m += " (" + p + ")"
+			}
+			missing = append(missing, m)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%s cannot include %s -- install it, or run 'vmavs doctor'", b.Toolchain.GCC(), strings.Join(missing, ", "))
+	}
+	return nil
 }

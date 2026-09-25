@@ -97,6 +97,12 @@ var Kexts = []Kext{{"lilu-release", "Lilu"}, {"virtualsmc-release", "VirtualSMC"
 // EFIDrivers is what goes in EFI/OC/Drivers, in image order.
 var EFIDrivers = []string{"OpenRuntime.efi", "OpenPartitionDxe.efi", "OpenHfsPlus.efi"}
 
+// Headers is every C header the firmware build needs that no tool check
+// can see: EDK II's BaseTools include uuid/uuid.h (boot/prereqs.sh's
+// REQUIRED_HEADERS). Each is asked of the compiler, which alone knows its
+// own search path.
+var Headers = []string{"uuid/uuid.h"}
+
 // A Pin is one registry source the OpenCore build needs and the commit
 // its URL must name.
 type Pin struct{ Source, Commit string }

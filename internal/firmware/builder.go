@@ -94,6 +94,11 @@ func (b *Builder) requireTools(names ...string) error {
 // files). Whether ccache was used is logged either way. The PATH it adds
 // comes after Env's, and a child takes the last of a repeated variable.
 func (b *Builder) buildEnv(_ context.Context) ([]string, bool, error) {
+	// A nil Env would hand the build tools no environment at all (not
+	// vmavs's own, which a nil proc.Cmd.Env would): no PATH, no HOME.
+	if b.Env == nil {
+		return nil, false, fmt.Errorf("Builder.Env is nil: pass the environment the build tools inherit")
+	}
 	env := append([]string(nil), b.Env...)
 	path, _ := b.Runner.LookPath("ccache")
 	verdict, detail := CcacheVerdict(b.Ccache, path)
@@ -113,7 +118,12 @@ func (b *Builder) buildEnv(_ context.Context) ([]string, bool, error) {
 	if err := writeCcacheShims(shims, path, b.Runner.LookPath); err != nil {
 		return nil, false, err
 	}
-	env = append(env, "PATH="+shims+string(os.PathListSeparator)+lookupEnv(b.Env, "PATH"), "CCACHE_DIR="+cache)
+	// No empty element: an empty PATH entry means the current directory.
+	shimPath := shims
+	if base := lookupEnv(b.Env, "PATH"); base != "" {
+		shimPath += string(os.PathListSeparator) + base
+	}
+	env = append(env, "PATH="+shimPath, "CCACHE_DIR="+cache)
 	b.logf("ccache: %s, cache in %s, shims in %s", path, cache, shims)
 	b.logf("ccache: the compiler the manifest records is still the real one -- a shim answers --version as what it wraps")
 	return env, true, nil
@@ -150,6 +160,9 @@ func (b *Builder) ccacheStats(ctx context.Context) {
 func (b *Builder) runLogged(ctx context.Context, c proc.Cmd, logPath string) error {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return err
+	}
+	if fi, err := os.Lstat(logPath); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink; refusing to write the build log through it", logPath)
 	}
 	lf, err := os.Create(logPath)
 	if err != nil {

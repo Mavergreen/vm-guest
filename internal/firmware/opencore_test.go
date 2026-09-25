@@ -333,12 +333,20 @@ func TestOpenCoreRefusesACompilerBelowTheFloor(t *testing.T) {
 
 func TestOpenCoreNamesEveryMissingTool(t *testing.T) {
 	f := newFixture(t)
-	delete(f.fake.Paths, "zip")
-	delete(f.fake.Paths, "python3")
+	for _, tool := range []string{"zip", "python3", "nasm", "iasl"} {
+		delete(f.fake.Paths, tool)
+	}
 	_, err := f.openCore()
-	if err == nil || !strings.Contains(err.Error(), "zip") || !strings.Contains(err.Error(), "python3") ||
-		!strings.Contains(err.Error(), "vmavs doctor") {
+	if err == nil || !strings.Contains(err.Error(), "vmavs doctor") {
 		t.Fatalf("err = %v", err)
+	}
+	for _, tool := range []string{"zip", "python3", "nasm", "iasl"} {
+		if !strings.Contains(err.Error(), tool) {
+			t.Errorf("the error does not name %s: %v", tool, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.home, "build", "OpenCorePkg-1.0.7")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("unpacked without the tools: %v", err)
 	}
 }
 
@@ -401,5 +409,168 @@ func TestOpenCoreWithCcache(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(g.home, "build", "ccache-bin")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("a shim directory without ccache: %v", err)
+	}
+}
+
+func TestOpenCoreRefusesAMissingHeaderBeforeUnpacking(t *testing.T) {
+	if !reflect.DeepEqual(Headers, []string{"uuid/uuid.h"}) {
+		t.Fatalf("Headers = %q", Headers)
+	}
+	f := newFixture(t)
+	f.missingHeaders = []string{"uuid/uuid.h"}
+	_, err := f.openCore()
+	if err == nil || !strings.Contains(err.Error(), "uuid/uuid.h") ||
+		!strings.Contains(err.Error(), "the uuid development package: uuid-dev on Debian, util-linux-libs on Arch") {
+		t.Fatalf("err = %v", err)
+	}
+	var probe *proc.Cmd
+	for _, c := range f.calls("gcc") {
+		if len(c.Args) > 0 && c.Args[0] == "-fsyntax-only" {
+			probe = &c
+		}
+	}
+	if probe == nil || !reflect.DeepEqual(probe.Args, []string{"-fsyntax-only", "-x", "c", "-"}) {
+		t.Fatalf("the header was not asked of the compiler: %v", probe)
+	}
+	if _, err := os.Stat(filepath.Join(f.home, "build", "OpenCorePkg-1.0.7")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("unpacked without the header: %v", err)
+	}
+
+	g := newFixture(t)
+	g.mustOpenCore()
+	for _, c := range g.calls("gcc") {
+		if len(c.Args) > 0 && c.Args[0] == "-fsyntax-only" {
+			return
+		}
+	}
+	t.Error("a build that passed never checked the header")
+}
+
+func TestOpenCoreBelowTheFloorUnpacksNothing(t *testing.T) {
+	f := newFixture(t)
+	f.banner = "gcc (GCC) 12.2.0"
+	if _, err := f.openCore(); err == nil {
+		t.Fatal("built below the floor")
+	}
+	if _, err := os.Stat(filepath.Join(f.home, "build", "OpenCorePkg-1.0.7")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("OpenCorePkg was unpacked: %v", err)
+	}
+}
+
+// checkFlags reads the first GNUmakefile in `find | LC_ALL=C sort` order,
+// where "x-y/GNUmakefile" sorts before "x/GNUmakefile" ('-' < '/') though
+// a directory walk visits x first.
+func TestOpenCoreChecksTheFirstMakefileInSortOrder(t *testing.T) {
+	f := newFixture(t)
+	f.makefiles = map[string]string{"OpenCorePkg/Library/x-y/GNUmakefile": "-std=gnu17"}
+	_, err := f.openCore()
+	if err == nil || !strings.Contains(err.Error(), "-Wno-error") || !strings.Contains(err.Error(), filepath.Join("x-y", "GNUmakefile")) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenCoreRefusesANilEnvironment(t *testing.T) {
+	f := newFixture(t)
+	f.b.Env = nil
+	_, err := f.openCore()
+	if err == nil || !strings.Contains(err.Error(), "Builder.Env is nil: pass the environment the build tools inherit") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := len(f.calls("./build_oc.tool")); n != 0 {
+		t.Errorf("build_oc.tool ran %d times", n)
+	}
+}
+
+func TestOpenCoreCcachePathHasNoEmptyElement(t *testing.T) {
+	f := newFixture(t)
+	f.b.Env = []string{"HOME=" + f.home}
+	f.b.Ccache = true
+	f.fake.Paths["ccache"] = "/usr/bin/ccache"
+	f.mustOpenCore()
+	env := f.calls("./build_oc.tool")[0].Env
+	if want := "PATH=" + filepath.Join(f.home, "build", "ccache-bin"); !hasEnv(env, want) {
+		t.Errorf("Env lacks %q: %q", want, env)
+	}
+}
+
+func TestOpenCoreRefusesASymlinkedLog(t *testing.T) {
+	f := newFixture(t)
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	if err := os.WriteFile(target, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(f.home, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(f.home, "build", "opencore-build.log")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.openCore()
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "mine" {
+		t.Errorf("wrote through the symlink: %q", b)
+	}
+	if n := len(f.calls("./build_oc.tool")); n != 0 {
+		t.Errorf("build_oc.tool ran %d times", n)
+	}
+}
+
+func TestOpenCoreReadsTheMarkerAsTheShellDoes(t *testing.T) {
+	f := newFixture(t)
+	f.mustOpenCore()
+	udk := filepath.Join(f.home, "build", "OpenCorePkg-1.0.7", "UDK")
+	sentinel := filepath.Join(udk, "sentinel")
+	if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{AudkCommit, AudkCommit + "\n\n"} {
+		if err := os.WriteFile(filepath.Join(udk, ".mqg-prepared"), []byte(marker), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		f.mustOpenCore()
+		if _, err := os.Stat(sentinel); err != nil {
+			t.Fatalf("marker %q: the tree was rebuilt", marker)
+		}
+	}
+}
+
+func TestOpenCoreReplacesAnUnmarkedTree(t *testing.T) {
+	f := newFixture(t)
+	f.mustOpenCore()
+	udk := filepath.Join(f.home, "build", "OpenCorePkg-1.0.7", "UDK")
+	if err := os.Remove(filepath.Join(udk, ".mqg-prepared")); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(udk, "sentinel")
+	if err := os.WriteFile(sentinel, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.mustOpenCore()
+	if _, err := os.Stat(sentinel); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a tree without a marker was kept: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(udk, ".mqg-prepared")); string(b) != AudkCommit+"\n" {
+		t.Errorf(".mqg-prepared = %q", b)
+	}
+}
+
+func TestOpenCoreAFailedUpstreamPatchLeavesNoMarker(t *testing.T) {
+	f := newFixture(t)
+	f.applyErr = &proc.ExitError{Cmd: "git apply", Code: 1}
+	_, err := f.openCore()
+	if err == nil || !strings.Contains(err.Error(), "0001-first.patch") {
+		t.Fatalf("err = %v", err)
+	}
+	udk := filepath.Join(f.home, "build", "OpenCorePkg-1.0.7", "UDK")
+	if _, err := os.Stat(filepath.Join(udk, ".mqg-prepared")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a marker after a failed patch: %v", err)
+	}
+	before := len(f.applies(udk, "--ignore-whitespace"))
+	f.applyErr = nil
+	f.mustOpenCore()
+	if after := len(f.applies(udk, "--ignore-whitespace")); after != before+2 {
+		t.Errorf("the tree was not reassembled: %d upstream patch calls, then %d", before, after)
 	}
 }

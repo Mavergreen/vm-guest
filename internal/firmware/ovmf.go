@@ -33,7 +33,7 @@ func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
 	switch {
 	case err != nil:
 		return nil, fmt.Errorf("no assembled EDK II tree at %s -- run 'vmavs firmware opencore' first", b.udk())
-	case string(have) != AudkCommit+"\n":
+	case strings.TrimRight(string(have), "\n") != AudkCommit: // as the shell's $(cat) reads it
 		return nil, fmt.Errorf("the EDK II tree at %s holds audk %s, not the pinned %s -- run 'vmavs firmware opencore'",
 			b.udk(), strings.TrimSpace(string(have)), AudkCommit)
 	}
@@ -45,11 +45,13 @@ func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	dsc := filepath.Join(b.udk(), filepath.FromSlash(OVMFDsc))
-	for _, p := range []struct{ patch, marker, what string }{
-		{"0002-ovmf-pin-the-c-dialect.patch", "std=gnu17", "state a C dialect"},
-		{"0003-firmware-drop-werror.patch", "Wno-error", "stop promoting upstream's warnings to errors"},
+	// doing is what the log says the patch is for; still is what the dsc
+	// still does if it did not take -- build-ovmf.sh's words for both.
+	for _, p := range []struct{ patch, marker, doing, still string }{
+		{"0002-ovmf-pin-the-c-dialect.patch", "std=gnu17", "state its C dialect", "does not state a C dialect"},
+		{"0003-firmware-drop-werror.patch", "Wno-error", "stop treating upstream's warnings as errors", "promotes upstream's warnings to errors"},
 	} {
-		if err := b.patchOnce(ctx, dsc, p.patch, p.marker, p.what); err != nil {
+		if err := b.patchOnce(ctx, dsc, p.patch, p.marker, p.doing, p.still); err != nil {
 			return nil, err
 		}
 	}
@@ -106,7 +108,7 @@ func (b *Builder) OVMF(ctx context.Context) ([]string, error) {
 // patchOnce applies one of our dsc patches unless the dsc already has its
 // marker, then checks that it does. The tree is re-unpacked whenever the
 // audk pin moves, which is why this runs on every build.
-func (b *Builder) patchOnce(ctx context.Context, dsc, patch, marker, what string) error {
+func (b *Builder) patchOnce(ctx context.Context, dsc, patch, marker, doing, still string) error {
 	has := func() (bool, error) {
 		data, err := os.ReadFile(dsc)
 		return strings.Contains(string(data), marker), err
@@ -116,7 +118,7 @@ func (b *Builder) patchOnce(ctx context.Context, dsc, patch, marker, what string
 		return err
 	}
 	if !ok {
-		b.logf("patching %s to %s", OVMFDsc, what)
+		b.logf("patching %s to %s", OVMFDsc, doing)
 		if err := b.applyPatch(ctx, b.udk(), patch); err != nil {
 			return fmt.Errorf("cannot patch %s -- did audk %s change? %w", OVMFDsc, AudkCommit, err)
 		}
@@ -125,7 +127,7 @@ func (b *Builder) patchOnce(ctx context.Context, dsc, patch, marker, what string
 		}
 	}
 	if !ok {
-		return fmt.Errorf("%s still does not %s", OVMFDsc, what)
+		return fmt.Errorf("%s still %s", OVMFDsc, still)
 	}
 	return nil
 }

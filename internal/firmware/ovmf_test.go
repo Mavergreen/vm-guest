@@ -205,3 +205,27 @@ func TestOVMFNeedsNasmAndIasl(t *testing.T) {
 		t.Errorf("ran bash")
 	}
 }
+
+func TestOVMFReadsTheMarkerAsTheShellDoes(t *testing.T) {
+	for _, marker := range []string{AudkCommit, AudkCommit + "\n\n"} {
+		f := ovmfFixture(t)
+		if err := os.WriteFile(filepath.Join(f.udk(), ".mqg-prepared"), []byte(marker), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.ovmf(); err != nil {
+			t.Errorf("marker %q: %v", marker, err)
+		}
+	}
+}
+
+func TestOVMFSaysWhenWarningsAreStillErrors(t *testing.T) {
+	f := ovmfFixture(t)
+	// The dialect patch is already in; only 0003's is tried, and it
+	// does nothing.
+	appendTo(filepath.Join(f.udk(), "OvmfPkg", "OvmfPkgX64.dsc"), "  GCC:*_*_*_CC_FLAGS = -std=gnu17\n")
+	f.patchesTake = false
+	_, err := f.ovmf()
+	if err == nil || err.Error() != "OvmfPkg/OvmfPkgX64.dsc still promotes upstream's warnings to errors" {
+		t.Fatalf("err = %v", err)
+	}
+}
