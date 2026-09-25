@@ -715,6 +715,41 @@ func TestEFIImageLeavesNoTempWhenTheSidecarCannotBeWritten(t *testing.T) {
 	}
 }
 
+// An existing image is never clobbered in place: a build that fails
+// leaves it as it was, and one that succeeds replaces it whole (written
+// beside it and renamed over it).
+func TestEFIImageLeavesThePreviousImageWhenItFails(t *testing.T) {
+	f := newFixture(t)
+	shipped(f)
+	img := filepath.Join(f.home, "build", "opencore.img")
+	if err := os.WriteFile(img, []byte("the previous image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	efi := filepath.Join(f.home, "build", "artifacts", "OpenCore.efi")
+	good, err := os.ReadFile(efi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(efi, []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.efiImage(""); err == nil {
+		t.Fatal("built from an artifact SHA256SUMS does not vouch for")
+	}
+	if b, _ := os.ReadFile(img); string(b) != "the previous image" {
+		t.Errorf("a failed build changed the previous image (%d bytes now)", len(b))
+	}
+	if err := os.WriteFile(efi, good, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.efiImage(""); err != nil {
+		t.Fatal(err)
+	}
+	if got := sha(t, img); got != goldenEFIImage {
+		t.Errorf("the rebuilt image is %s, not the whole new image %s", got, goldenEFIImage)
+	}
+}
+
 func TestEFIImageRefusesSHA256SUMSMissingAnArtifact(t *testing.T) {
 	f := newFixture(t)
 	shipped(f)

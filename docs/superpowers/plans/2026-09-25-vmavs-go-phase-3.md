@@ -404,11 +404,11 @@ replace; it moves when that file does.
 
 | bats test | Go test (task) |
 |---|---|
-| efi: GPT image with one ESP; refuses to clobber; ESP offset | `TestGPTRoundTrip`, `TestWriteImageRefusesAnExistingFile` (7, 11) |
-| efi: files readable back out; nested dirs; bundle copied as tree | `TestFATRoundTrip`, `TestFATNestedDirectories`, `TestEFIImageLayout` (8, 11) |
+| efi: GPT image with one ESP; refuses to clobber; ESP offset | `TestGPTRoundTrip`, `TestGPTMatchesSgdisk` (7) and `TestEFIImageLayout` (11) for the ESP and its offset. Go does not refuse an existing image: it replaces it atomically (written beside it, renamed over it once whole), so it never clobbers one half-way -- `TestEFIImageLeavesThePreviousImageWhenItFails` (final fix wave), `TestEFIImageLeavesNoTempWhenTheSidecarCannotBeWritten` (11) |
+| efi: files readable back out; nested dirs; bundle copied as tree | `TestFATRoundTrip`, `TestFATNestedDirectoriesAndLongDirectories`, `TestEFIImageLayout` (8, 11) |
 | efi: missing source fails loudly | `TestEFIImageNamesTheMissingPiece` (11) |
 | efi: filesystem stays inside its partition | `TestFATStaysInsideItsPartition` (8) |
-| efi: efi_fits demands headroom | `TestFitsDemandsHeadroom` (11) |
+| efi: efi_fits demands headroom | `TestFitsDemandsHeadroomLikeEfiFits` (11) |
 | boot_scripts: fetch-opencorepkg refuses unpinned; reports tag | `TestCheckPinsRefusesUnpinned`, `TestPinsMatchTheScripts` (2) |
 | boot_scripts: build-opencore fails when tree absent / names fetch | `TestOpenCoreNamesTheMissingInput` (9) |
 | boot_scripts: lists artifacts; pins commits; sources.tsv names commit; no mutable branch | `TestPinsMatchTheScripts`, `TestCheckPinsRefusesAURLWithoutItsCommit`, `TestEveryPinIsAnImmutableURL` (2) |
@@ -420,10 +420,10 @@ replace; it moves when that file does.
 | boot_scripts: build-efi-image lists contents; names missing artifacts / kext piece; refuses SHA256SUMS mismatch; layout | `TestEFIImage*` (11) |
 | boot_scripts: make-nvram.sh (7 tests) | stays: per-run NVRAM is phase 1's `vm` package; the build-time copy is phase 5's |
 | boot_scripts: prereqs.sh (package names per manager, busybox, headers) | the firmware part is `TestDoctorFirmwareRow` (12); the package-name table and media tools stay until phase 4/6 |
-| ccache (12 tests) | `TestCcache*` (5); "not a stage input" is phase 5's |
-| compiler (33 tests) | `TestCompiler*` (5), parity-checked against `lib/compiler.sh` |
-| smbios (17 tests) | `TestSMBIOS*` (6), parity-checked against `lib/smbios.sh` |
-| vendor: source_field / fetch_source URL rules | phase 2's `pins` and `fetch.Filename`; `TestPinnedAdopts*` (3) |
+| ccache (12 tests) | `TestCcacheIsOffByDefault`, `TestCcacheVerdictMatchesTheLibrary`, `TestTheShimWrapsTheRealCompilerByAbsolutePath` (5), `TestOpenCoreWithCcache`, `TestOpenCoreCcachePathHasNoEmptyElement` (9); "not a stage input" is phase 5's |
+| compiler (33 tests) | `TestRangeVerdictMatchesTheLibrary`, `TestParseCompilerMatchesTheLibrary`, `TestTheDeclaredRangeIsGcc13Through16`, `TestStatusNamesWhatItCouldNotRead`, `TestTheOverrideReplacesDetectionAndIsRecorded`, `TestCompilerLine`, `TestCheckRefusesBelowTheFloorAndWarnsAbove` (5), parity-checked against `lib/compiler.sh` |
+| smbios (17 tests) | `TestTheTableIsTheLibrarysWordForWord`, `TestTheDefaultIsWhatConfigPlistShips`, `TestVerdictsAndManifestLinesMatchTheLibrary`, `TestWellformedness`, `TestSetProductNameMatchesTheLibraryByteForByte`, `TestSettingTheModelAlreadyThereChangesNoByte`, `TestProductNameAndSetProductNameMirrorAWKWhenACommentPrecedesTheStringTag`, `TestSetProductNameRefusesWhenKeyAndValueShareALine`, `TestSetProductNameRefusesWhatItCannotDoSafely`, `TestCheckNeverFails` (6), parity-checked against `lib/smbios.sh` |
+| vendor: source_field / fetch_source URL rules | phase 2's `pins` and `fetch.Filename`; `TestPinnedAdoptsFromTheShellTreesBuildDirectory` (3) |
 | config_plist (6 tests) | stays: `boot/config/config.plist` is unchanged, and the bats tests keep checking it |
 
 ---
