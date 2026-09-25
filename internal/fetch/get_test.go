@@ -593,3 +593,43 @@ func TestCacheFileModes(t *testing.T) {
 		t.Fatalf("adoption changed the original's mode to %v (%v), want 0640", fi.Mode().Perm(), err)
 	}
 }
+
+// TestRemoveEmptyNeverUnlinksAFile: removeEmpty takes back directories a
+// failed Get made. If something has since put a file where one of them
+// was, that file is not removeEmpty's to remove, whatever the list says.
+func TestRemoveEmptyNeverUnlinksAFile(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removeEmpty([]string{f})
+	if _, err := os.Stat(f); err != nil {
+		t.Fatalf("removeEmpty unlinked a file: %v", err)
+	}
+}
+
+// TestATempSurvivesItsDirectoryVanishing: between Get making cache/<sha>/
+// and creating its temp there, a concurrent vmavs whose own Get failed
+// may remove the directory (it was empty, and that Get made it too).
+// Creating the temp then fails with ENOENT; the directory is made again,
+// once, and the temp created -- and the remade directory is Get's to
+// take back if it fails.
+func TestATempSurvivesItsDirectoryVanishing(t *testing.T) {
+	d := &cacheDir{path: filepath.Join(t.TempDir(), "cache", "sha")}
+	if err := d.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(d.path); err != nil {
+		t.Fatal(err)
+	}
+	f, err := inCacheDir(d, func() (*os.File, error) { return os.CreateTemp(d.path, ".x.*.part") })
+	if err != nil {
+		t.Fatalf("the temp was not created after its directory vanished: %v", err)
+	}
+	f.Close()
+	os.Remove(f.Name())
+	d.cleanup()
+	if _, err := os.Stat(d.path); !os.IsNotExist(err) {
+		t.Fatalf("the remade directory was not taken back: %v", err)
+	}
+}

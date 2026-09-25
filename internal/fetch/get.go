@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
@@ -153,22 +155,10 @@ func (g *Getter) Get(ctx context.Context, it Item) (path string, err error) {
 		return "", fmt.Errorf("stat %s: %w", dest, err)
 	}
 
-	var created []string
-	ready := false
-	prepare := func() error {
-		if ready {
-			return nil
-		}
-		c, err := mkdirs(dir)
-		if err != nil {
-			return err
-		}
-		created, ready = c, true
-		return nil
-	}
+	cd := &cacheDir{path: dir}
 	defer func() {
 		if err != nil {
-			removeEmpty(created)
+			cd.cleanup()
 		}
 	}()
 
@@ -177,7 +167,7 @@ func (g *Getter) Get(ctx context.Context, it Item) (path string, err error) {
 		if err := ctx.Err(); err != nil {
 			return "", fmt.Errorf("%s: %w", it.Name, err)
 		}
-		if g.adoptCandidate(ctx, it, old, dest, dir, name, prepare) {
+		if g.adoptCandidate(ctx, it, old, dest, cd, name) {
 			return dest, nil
 		}
 	}
@@ -188,13 +178,64 @@ func (g *Getter) Get(ctx context.Context, it Item) (path string, err error) {
 	if it.noFetch {
 		return "", errNotCached
 	}
-	if err := prepare(); err != nil {
+	if err := cd.prepare(); err != nil {
 		return "", err
 	}
-	if err := g.download(ctx, it, dir, name, dest); err != nil {
+	if err := g.download(ctx, it, cd, name, dest); err != nil {
 		return "", err
 	}
 	return dest, nil
+}
+
+// cacheDir is the directory Get places an item in, made only when
+// something is about to be written there, and remembering which
+// directories it made so a failed Get can take exactly those back.
+type cacheDir struct {
+	path    string
+	ready   bool
+	created []string // deepest first
+}
+
+// prepare makes the directory, and any missing parent, the first time it
+// is called.
+func (d *cacheDir) prepare() error {
+	if d.ready {
+		return nil
+	}
+	if err := d.remake(); err != nil {
+		return err
+	}
+	d.ready = true
+	return nil
+}
+
+// remake makes the directory and any missing parent, recording the ones
+// it made ahead of those made before.
+func (d *cacheDir) remake() error {
+	c, err := mkdirs(d.path)
+	if err != nil {
+		return err
+	}
+	d.created = append(c, d.created...)
+	return nil
+}
+
+// cleanup removes, deepest first, every directory d made that is empty.
+func (d *cacheDir) cleanup() { removeEmpty(d.created) }
+
+// inCacheDir runs create, which makes a temp inside d. A concurrent vmavs
+// whose own Get failed may have removed d between prepare and create --
+// it was empty, and that Get had made it too -- so an ENOENT from create
+// makes d again, once, and tries once more.
+func inCacheDir[T any](d *cacheDir, create func() (T, error)) (T, error) {
+	v, err := create()
+	if errors.Is(err, fs.ErrNotExist) {
+		if rerr := d.remake(); rerr != nil {
+			return v, err
+		}
+		v, err = create()
+	}
+	return v, err
 }
 
 // mkdirs is os.MkdirAll(dir), returning the directories it had to create,
@@ -219,12 +260,14 @@ func mkdirs(dir string) ([]string, error) {
 	return missing, nil
 }
 
-// removeEmpty removes each of dirs, in order, that is empty: os.Remove
-// refuses a directory with anything in it, so a directory a concurrent
-// vmavs has since put a file in stays, as does everything after it.
+// removeEmpty removes each of dirs, in order, that is an empty directory.
+// It uses rmdir(2) itself, never os.Remove, which would unlink a file
+// that had somehow taken one of those names; rmdir refuses a file and a
+// non-empty directory alike, so a directory a concurrent vmavs has since
+// put something in stays, as does everything above it.
 func removeEmpty(dirs []string) {
 	for _, d := range dirs {
-		os.Remove(d)
+		syscall.Rmdir(d)
 	}
 }
 
@@ -315,7 +358,7 @@ var testAdoptHook func()
 // whole Get: an adoption candidate is an optimization, and one candidate
 // being unusable says nothing about whether the next one, or a download,
 // will work.
-func (g *Getter) adoptCandidate(ctx context.Context, it Item, old, dest, dir, name string, prepare func() error) bool {
+func (g *Getter) adoptCandidate(ctx context.Context, it Item, old, dest string, cd *cacheDir, name string) bool {
 	real, err := filepath.EvalSymlinks(old)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -338,11 +381,11 @@ func (g *Getter) adoptCandidate(ctx context.Context, it Item, old, dest, dir, na
 		testAdoptHook()
 	}
 
-	if err := prepare(); err != nil {
+	if err := cd.prepare(); err != nil {
 		g.logf("%s: cannot prepare to adopt %s: %v", it.Name, old, err)
 		return false
 	}
-	tmpDir, err := os.MkdirTemp(dir, ".adopt-*")
+	tmpDir, err := inCacheDir(cd, func() (string, error) { return os.MkdirTemp(cd.path, ".adopt-*") })
 	if err != nil {
 		g.logf("%s: cannot prepare to adopt %s: %v", it.Name, old, err)
 		return false
@@ -387,10 +430,10 @@ func (g *Getter) adoptCandidate(ctx context.Context, it Item, old, dest, dir, na
 // make this attempt write through a name that already points somewhere
 // else (an earlier crash's leftover, or -- the bug this guards against --
 // an adopted file's shared inode).
-func (g *Getter) download(ctx context.Context, it Item, dir, name, dest string) error {
-	g.cleanStaleTemps(it, dir, name)
+func (g *Getter) download(ctx context.Context, it Item, cd *cacheDir, name, dest string) error {
+	g.cleanStaleTemps(it, cd.path, name)
 	return g.retryPolicy().do(ctx, it.Name, func() (bool, error) {
-		return g.attempt(ctx, it, dir, name, dest)
+		return g.attempt(ctx, it, cd, name, dest)
 	})
 }
 
@@ -402,8 +445,8 @@ func (g *Getter) retryPolicy() retryPolicy { return newRetryPolicy(g.Retries, g.
 // temp file on every failure (network error, stall, or checksum mismatch)
 // -- nothing is kept "for inspection": a unique name is never reused, so
 // there is nothing a next attempt could confuse for its own.
-func (g *Getter) attempt(ctx context.Context, it Item, dir, name, dest string) (retry bool, err error) {
-	f, err := os.CreateTemp(dir, "."+name+".*.part")
+func (g *Getter) attempt(ctx context.Context, it Item, cd *cacheDir, name, dest string) (retry bool, err error) {
+	f, err := inCacheDir(cd, func() (*os.File, error) { return os.CreateTemp(cd.path, "."+name+".*.part") })
 	if err != nil {
 		return false, err
 	}
