@@ -192,7 +192,10 @@ func runner(e *Env) proc.Runner {
 	return proc.Exec{}
 }
 
-// environ is e.Environ(), or os.Environ().
+// environ is e.Environ(), or os.Environ(). Unused until the firmware
+// builds (phase 3's later tasks) hand it to proc.Cmd.Env.
+//
+//lint:ignore U1000 groundwork for the firmware builds, not yet called
 func environ(e *Env) []string {
 	if e.Environ != nil {
 		return e.Environ()
