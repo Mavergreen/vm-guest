@@ -37,6 +37,7 @@ func commandTable() []command {
 	return []command{
 		{"run", "Boot a built image on a throwaway overlay", cmdRun},
 		{"ssh", "Open a shell in the running guest", cmdSSH},
+		{"emit", "Write a Packer template for this machine", cmdEmit},
 		{"version", "Print this vmavs's version", cmdVersion},
 	}
 }

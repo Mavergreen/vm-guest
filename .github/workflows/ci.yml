@@ -90,26 +90,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
       - uses: hashicorp/setup-packer@v3.4.0
         with:
           version: ${{ env.PACKER_VERSION }}
 
-      # Every profile, not one: the values and the drive mapping come from
-      # the profile, so each one is a different template. --check supplies
-      # placeholder variables and a throwaway key, which is what validate
-      # needs; it does not run init itself, because it will not download.
-      - name: Every profile's Packer template validates
+      # The Go vmavs emits one template: the machine it installs and boots
+      # (internal/machine). The shell emitter's per-profile templates retire
+      # with the shell tree in phase 6; until then, tests/emit.bats covers
+      # them.
+      - name: vmavs emit packer validates
         run: |
           set -eu
-          for f in vm/profiles/*.args; do
-              p=$(basename "$f" .args)
-              out="$RUNNER_TEMP/$p.pkr.hcl"
-              echo "::group::$p"
-              ./bin/vmavs emit packer --profile "$p" --out "$out"
-              packer init "$out"
-              ./bin/vmavs emit packer --profile "$p" --out "$out" --check
-              echo "::endgroup::"
-          done
+          go build -o out/vmavs ./cmd/vmavs
+          out="$RUNNER_TEMP/mavericks.pkr.hcl"
+          ./out/vmavs emit packer --out "$out"
+          packer init "$out"
+          ./out/vmavs emit packer --out "$out" --check
 
   # The Go vmavs (docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md).
   # Builds for every host the tool targets, not only the one CI runs on:
