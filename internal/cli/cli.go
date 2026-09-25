@@ -204,6 +204,43 @@ func environ(e *Env) []string {
 	return os.Environ()
 }
 
+// parseInterleaved lets targets and flags appear in either order (a
+// command's usage puts a target first: "vmavs fetch updates --updates
+// none", or "vmavs firmware efi --smbios MacPro5,1"), which
+// flag.FlagSet.Parse does not support on its own -- it stops permanently
+// at the first non-flag argument. Instead this parses repeatedly: fs.Parse
+// consumes a run of flags (deciding for itself, the standard way, which
+// take a value -- including "--updates X", "--updates=X" and "-updates
+// X"), then the first remaining argument is taken as one target and
+// parsing resumes on the rest. Every flag's variable ends up set exactly
+// as a single fs.Parse(args) would have set it, since flag.FlagSet
+// accumulates across repeated Parse calls on the same FlagSet.
+//
+// "--" ends flag parsing for good: fs.Parse consumes it and stops, and
+// every argument after it is a plain target, never looked at as a flag
+// again even if it starts with "-" (so `-- esd --probe` names an unknown
+// target, "--probe"). fs.Parse stopped at a "--" when that is the last
+// argument it consumed. The one look-alike is "--" given as a flag's
+// value ("--updates --"), and --updates refuses that value anyway.
+func parseInterleaved(fs *flag.FlagSet, e *Env, help string, args []string) ([]string, error) {
+	var targets []string
+	remaining := args
+	for {
+		if err := parse(fs, e, help, remaining); err != nil {
+			return nil, err
+		}
+		consumed := len(remaining) - fs.NArg()
+		if consumed > 0 && remaining[consumed-1] == "--" {
+			return append(targets, fs.Args()...), nil
+		}
+		if fs.NArg() == 0 {
+			return targets, nil
+		}
+		targets = append(targets, fs.Arg(0))
+		remaining = fs.Args()[1:]
+	}
+}
+
 // orderedTargets validates args against order and returns the requested
 // targets, deduplicated, in order's own order regardless of the order
 // they were named in: every one of order when args is empty (spec §2:
@@ -219,7 +256,7 @@ func orderedTargets(cmd string, args, order []string) ([]string, error) {
 	want := map[string]bool{}
 	for _, a := range args {
 		if !slices.Contains(order, a) {
-			return nil, usagef("unknown %s target %q; choose from %s", cmd, a, strings.Join(order, ", "))
+			return nil, usagef("unknown %s target %q: choose from %s", cmd, a, strings.Join(order, ", "))
 		}
 		want[a] = true
 	}

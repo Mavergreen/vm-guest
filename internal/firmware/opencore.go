@@ -278,6 +278,21 @@ var headerPackages = map[string]string{
 	"uuid/uuid.h": "the uuid development package: uuid-dev on Debian, util-linux-libs on Arch",
 }
 
+// HeaderCompiles asks gcc whether it can find and compile against
+// header: "gcc -fsyntax-only -x c -", fed a one-line source that only
+// #includes it, run through r with env (nil means the child gets r's own
+// default -- see proc.Cmd.Env). Only the compiler itself knows its own
+// search path, so this is the one place that asks it, shared by
+// Builder.requireHeaders (which has already confirmed gcc is on PATH,
+// via requireTools) and vmavs doctor (which has not, and checks that
+// itself -- "cannot tell" is not "missing").
+func HeaderCompiles(ctx context.Context, r proc.Runner, gcc string, env []string, header string) bool {
+	src := "#include <" + header + ">\nint main(void){return 0;}\n"
+	err := r.Run(ctx, proc.Cmd{Name: gcc, Args: []string{"-fsyntax-only", "-x", "c", "-"},
+		Stdin: strings.NewReader(src), Stdout: io.Discard, Stderr: io.Discard, Env: env})
+	return err == nil
+}
+
 // requireHeaders asks the compiler whether each of Headers compiles
 // (boot/prereqs.sh's header_status), and names every one that does not
 // with its package, before anything is unpacked: a missing header
@@ -285,18 +300,17 @@ var headerPackages = map[string]string{
 func (b *Builder) requireHeaders(ctx context.Context) error {
 	var missing []string
 	for _, h := range Headers {
-		src := "#include <" + h + ">\nint main(void){return 0;}\n"
-		if err := b.Runner.Run(ctx, proc.Cmd{Name: b.Toolchain.GCC(), Args: []string{"-fsyntax-only", "-x", "c", "-"},
-			Stdin: strings.NewReader(src), Stdout: io.Discard, Stderr: io.Discard, Env: b.Env}); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			m := h
-			if p := headerPackages[h]; p != "" {
-				m += " (" + p + ")"
-			}
-			missing = append(missing, m)
+		if HeaderCompiles(ctx, b.Runner, b.Toolchain.GCC(), b.Env, h) {
+			continue
 		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		m := h
+		if p := headerPackages[h]; p != "" {
+			m += " (" + p + ")"
+		}
+		missing = append(missing, m)
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("%s cannot include %s -- install it, or run 'vmavs doctor'", b.Toolchain.GCC(), strings.Join(missing, ", "))

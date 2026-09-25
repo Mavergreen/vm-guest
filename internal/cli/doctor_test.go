@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -106,54 +105,40 @@ func TestDoctorExitsZeroOnGO(t *testing.T) {
 	}
 }
 
-// TestDoctorHeaderProbeAsksTheCompiler: the real Host.Header runs
-// `<gcc> -fsyntax-only -x c -` through the Runner, feeding it a one-line
-// #include of the name asked about, the same probe firmware's own build
-// runs before doing anything else.
-func TestDoctorHeaderProbeAsksTheCompiler(t *testing.T) {
-	fake := &proc.Fake{Paths: map[string]string{"gcc": "/usr/bin/gcc"}, Handle: func(c proc.Cmd) error {
-		if c.Name != "gcc" || !reflectDeepEqualArgs(c.Args, []string{"-fsyntax-only", "-x", "c", "-"}) {
-			t.Fatalf("unexpected command: %+v", c)
+// TestDoctorRealHostWiresGCCBinAndTheHeaderProbe: with no Host override
+// (so cmdDoctor builds the real doctor.Host itself), GCC_BIN reaches
+// Host.GCCBin, and Host.Header calls firmware.HeaderCompiles through the
+// Runner with the GCC_BIN-prefixed compiler name -- the fake only knows
+// "x86_64-elf-gcc", so this also proves GCCBin is not silently dropped.
+func TestDoctorRealHostWiresGCCBinAndTheHeaderProbe(t *testing.T) {
+	compiles := true
+	fake := &proc.Fake{Paths: map[string]string{"x86_64-elf-gcc": "/usr/bin/x86_64-elf-gcc"}, Handle: func(c proc.Cmd) error {
+		if c.Name != "x86_64-elf-gcc" || len(c.Args) != 4 || c.Args[0] != "-fsyntax-only" {
+			return nil
 		}
-		src, _ := io.ReadAll(c.Stdin)
-		if !strings.Contains(string(src), "#include <good/h.h>") && !strings.Contains(string(src), "#include <bad/h.h>") {
-			t.Fatalf("stdin = %q, want an #include of the header asked about", src)
+		if compiles {
+			return nil
 		}
-		if strings.Contains(string(src), "bad/h.h") {
-			return &proc.ExitError{Cmd: c.String(), Code: 1}
-		}
-		return nil
+		return &proc.ExitError{Cmd: c.String(), Code: 1}
 	}}
-	probe := doctorHeader(context.Background(), fake, "gcc")
-	if !probe("good/h.h") {
-		t.Fatalf("probe(good/h.h) = false, want true")
-	}
-	if probe("bad/h.h") {
-		t.Fatalf("probe(bad/h.h) = true, want false")
-	}
-}
+	env := map[string]string{"VMAVS_HOME": t.TempDir(), "GCC_BIN": "x86_64-elf-"}
+	e := &Env{Stdin: strings.NewReader(""), Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{},
+		Getenv: func(k string) string { return env[k] }, Runner: fake, PID: 777}
 
-// TestDoctorHeaderProbeCannotTellWithNoCompiler: with no gcc on PATH the
-// probe says true -- the missing compiler is already its own row, and
-// "cannot tell" is not "missing".
-func TestDoctorHeaderProbeCannotTellWithNoCompiler(t *testing.T) {
-	fake := &proc.Fake{Handle: func(proc.Cmd) error { t.Fatal("ran a command though gcc is not on PATH"); return nil }}
-	probe := doctorHeader(context.Background(), fake, "gcc")
-	if !probe("uuid/uuid.h") {
-		t.Fatalf("probe with no gcc = false, want true (cannot tell)")
+	compiles = false
+	var out bytes.Buffer
+	e.Stdout = &out
+	Run(context.Background(), []string{"doctor"}, e)
+	if !strings.Contains(out.String(), "uuid/uuid.h (a C header: the uuid development package)") {
+		t.Fatalf("stdout lacks the missing header -- Host.Header should have called x86_64-elf-gcc, which refuses it:\n%s", out.String())
 	}
-}
 
-func reflectDeepEqualArgs(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+	compiles = true
+	out.Reset()
+	Run(context.Background(), []string{"doctor"}, e)
+	if strings.Contains(out.String(), "uuid/uuid.h (a C header") {
+		t.Fatalf("stdout still lists the header as missing though the fake x86_64-elf-gcc now accepts it:\n%s", out.String())
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // TestDoctorSubcommandOrderIsFetchFirmwareRunSSHEmit: the SUBCOMMAND

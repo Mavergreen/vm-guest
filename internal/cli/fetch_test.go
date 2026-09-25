@@ -438,6 +438,21 @@ func TestFetchArgErrorsExitTwo(t *testing.T) {
 	}
 }
 
+// TestFetchUnknownTargetExactWording pins fetch's own shipped wording
+// (colon, not semicolon) so a shared helper that changes it is caught.
+func TestFetchUnknownTargetExactWording(t *testing.T) {
+	env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()}
+	e, _, errb := fetchEnv(env)
+	code := Run(context.Background(), []string{"fetch", "bogus"}, e)
+	if code != 2 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
+	want := `vmavs fetch: unknown fetch target "bogus": choose from esd, openssh, updates, firmware` + "\n"
+	if !strings.HasPrefix(errb.String(), want) {
+		t.Fatalf("stderr=%q, want it to start with %q", errb.String(), want)
+	}
+}
+
 // TestFetchDuplicateTargetsAreDeduped: naming the same target twice is
 // redundant, not contradictory, so fetchTargets dedupes rather than
 // erroring (the comment on fetchTargets says why).

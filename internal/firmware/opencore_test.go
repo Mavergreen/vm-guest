@@ -3,6 +3,7 @@ package firmware
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -444,6 +445,31 @@ func TestOpenCoreRefusesAMissingHeaderBeforeUnpacking(t *testing.T) {
 		}
 	}
 	t.Error("a build that passed never checked the header")
+}
+
+// TestHeaderCompilesAsksGCC: HeaderCompiles is the exported probe
+// Builder.requireHeaders and vmavs doctor share -- one place that knows
+// how to ask a compiler whether it can find a header.
+func TestHeaderCompilesAsksGCC(t *testing.T) {
+	fake := &proc.Fake{Handle: func(c proc.Cmd) error {
+		if c.Name != "gcc" || !reflect.DeepEqual(c.Args, []string{"-fsyntax-only", "-x", "c", "-"}) {
+			t.Fatalf("unexpected command: %+v", c)
+		}
+		src, _ := io.ReadAll(c.Stdin)
+		if !strings.Contains(string(src), "#include <good/h.h>") && !strings.Contains(string(src), "#include <bad/h.h>") {
+			t.Fatalf("stdin = %q, want a one-line #include", src)
+		}
+		if strings.Contains(string(src), "bad/h.h") {
+			return &proc.ExitError{Cmd: c.String(), Code: 1}
+		}
+		return nil
+	}}
+	if !HeaderCompiles(context.Background(), fake, "gcc", nil, "good/h.h") {
+		t.Fatal("HeaderCompiles(good/h.h) = false, want true")
+	}
+	if HeaderCompiles(context.Background(), fake, "gcc", nil, "bad/h.h") {
+		t.Fatal("HeaderCompiles(bad/h.h) = true, want false")
+	}
 }
 
 func TestOpenCoreBelowTheFloorUnpacksNothing(t *testing.T) {

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -11,7 +10,7 @@ import (
 
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/doctor"
-	"github.com/Mavergreen/vm-guest/internal/proc"
+	"github.com/Mavergreen/vm-guest/internal/firmware"
 )
 
 const doctorHelp = `usage: vmavs doctor
@@ -34,6 +33,7 @@ func cmdDoctor(ctx context.Context, e *Env, args []string) error {
 	}
 	r := runner(e)
 	gccBin := e.Getenv("GCC_BIN")
+	gcc := gccBin + "gcc"
 	h := doctor.Host{
 		GOOS:     runtime.GOOS,
 		ReadFile: os.ReadFile,
@@ -41,7 +41,16 @@ func cmdDoctor(ctx context.Context, e *Env, args []string) error {
 		Writable: func(path string) bool { return syscall.Access(path, 2) == nil }, // 2 is W_OK
 		LookPath: r.LookPath,
 		GCCBin:   gccBin,
-		Header:   doctorHeader(ctx, r, gccBin+"gcc"),
+		// With no gcc on PATH the probe answers true and checks nothing:
+		// the missing compiler is already its own row, and "cannot tell"
+		// is not "missing". firmware.HeaderCompiles is the same probe
+		// firmware's own build runs before unpacking anything.
+		Header: func(name string) bool {
+			if _, err := r.LookPath(gcc); err != nil {
+				return true
+			}
+			return firmware.HeaderCompiles(ctx, r, gcc, nil, name)
+		},
 	}
 	if e.Host != nil {
 		h = *e.Host
@@ -72,21 +81,4 @@ func cmdDoctor(ctx context.Context, e *Env, args []string) error {
 		return &ExitError{Code: 1}
 	}
 	return nil
-}
-
-// doctorHeader is doctor.Host.Header for the real host: whether gcc
-// (already GCC_BIN-prefixed) can compile a file that only #includes name,
-// the same probe firmware's own build runs before unpacking anything. With
-// no gcc on PATH it answers true and checks nothing: the missing compiler
-// is already its own row, and "cannot tell" is not "missing".
-func doctorHeader(ctx context.Context, r proc.Runner, gcc string) func(name string) bool {
-	return func(name string) bool {
-		if _, err := r.LookPath(gcc); err != nil {
-			return true
-		}
-		src := "#include <" + name + ">\nint main(void){return 0;}\n"
-		err := r.Run(ctx, proc.Cmd{Name: gcc, Args: []string{"-fsyntax-only", "-x", "c", "-"},
-			Stdin: strings.NewReader(src), Stdout: io.Discard, Stderr: io.Discard})
-		return err == nil
-	}
 }

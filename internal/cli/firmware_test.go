@@ -147,36 +147,108 @@ func TestFirmwareRunsOnlyTheNamedTargetsInTheirOrder(t *testing.T) {
 	}
 }
 
+// TestFirmwarePassesItsFlags runs with the target once before its flags
+// and once after: cmdFirmware's flags and targets may appear in either
+// order (fix round 1), and both orderings must reach the Builder the
+// same way.
 func TestFirmwarePassesItsFlags(t *testing.T) {
-	_, _, rows := fakeFirmwareServer(t, false)
-	rec := &recordingFirmwareBuilder{}
-	stubFirmwareBuilder(t, rec)
-	env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir(), "GCC_BIN": "x86_64-elf-"}
-	e, _, errb := fetchEnv(env)
-	e.Registry = firmwareRegistry(t, rows)
-	e.Environ = func() []string { return []string{"PATH=/usr/bin", "HOME=/x"} }
-	code := Run(context.Background(), []string{"firmware",
-		"--smbios", "MacPro5,1", "--ccache", "--compiler", "gcc 15.1.0"}, e)
-	if code != 0 {
-		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	orderings := []struct {
+		name string
+		args []string
+	}{
+		{"flags then target", []string{"firmware", "--smbios", "MacPro5,1", "--ccache", "--compiler", "gcc 15.1.0", "efi"}},
+		{"target then flags", []string{"firmware", "efi", "--smbios", "MacPro5,1", "--ccache", "--compiler", "gcc 15.1.0"}},
 	}
-	if rec.model != "MacPro5,1" {
-		t.Fatalf("EFIImage model = %q, want MacPro5,1", rec.model)
+	for _, o := range orderings {
+		t.Run(o.name, func(t *testing.T) {
+			_, _, rows := fakeFirmwareServer(t, false)
+			rec := &recordingFirmwareBuilder{}
+			stubFirmwareBuilder(t, rec)
+			env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir(), "GCC_BIN": "x86_64-elf-"}
+			e, _, errb := fetchEnv(env)
+			e.Registry = firmwareRegistry(t, rows)
+			e.Environ = func() []string { return []string{"PATH=/usr/bin", "HOME=/x"} }
+			code := Run(context.Background(), o.args, e)
+			if code != 0 {
+				t.Fatalf("code=%d stderr=%s", code, errb.String())
+			}
+			if !slices.Equal(rec.calls, []string{"Kexts", "EFIImage"}) {
+				t.Fatalf("calls = %v, want just the efi target (Kexts, EFIImage)", rec.calls)
+			}
+			if rec.model != "MacPro5,1" {
+				t.Fatalf("EFIImage model = %q, want MacPro5,1", rec.model)
+			}
+			if rec.captured == nil {
+				t.Fatal("newFirmwareBuilder was never called")
+			}
+			if !rec.captured.Ccache {
+				t.Fatalf("Builder.Ccache = false, want true")
+			}
+			if rec.captured.Toolchain.Override != "gcc 15.1.0" {
+				t.Fatalf("Toolchain.Override = %q, want %q", rec.captured.Toolchain.Override, "gcc 15.1.0")
+			}
+			if rec.captured.Toolchain.GCCBin != "x86_64-elf-" {
+				t.Fatalf("Toolchain.GCCBin = %q, want x86_64-elf-", rec.captured.Toolchain.GCCBin)
+			}
+			if want := e.Environ(); !slices.Equal(rec.captured.Env, want) {
+				t.Fatalf("Builder.Env = %v, want %v", rec.captured.Env, want)
+			}
+		})
 	}
-	if rec.captured == nil {
-		t.Fatal("newFirmwareBuilder was never called")
+}
+
+// TestFirmwareArgOrderingsParseCorrectly covers the orderings fix round
+// 1 asked for: a target before its flags, a target between two flags,
+// and "--" ending flag parsing for good so a flag-shaped word after it
+// is an unknown target, not a flag -- exactly as vmavs fetch's own
+// parseInterleaved-based parsing behaves.
+func TestFirmwareArgOrderingsParseCorrectly(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		wantTargets []string // in the order they ran; nil means an error
+		wantCode    int
+		wantErr     string
+	}{
+		{"target, then a flag+value", []string{"efi", "--smbios", "MacPro5,1"}, []string{"efi"}, 0, ""},
+		{"flag+value, then target", []string{"--smbios", "MacPro5,1", "efi"}, []string{"efi"}, 0, ""},
+		{"target, flag, target", []string{"opencore", "--ccache", "ovmf"}, []string{"opencore", "ovmf"}, 0, ""},
+		{"target, then a flag with a quoted value", []string{"efi", "--compiler", "gcc 15.1.0"}, []string{"efi"}, 0, ""},
+		{"-- then a flag-shaped target", []string{"--", "efi", "--probe"}, nil, 2, `unknown firmware target "--probe"`},
 	}
-	if !rec.captured.Ccache {
-		t.Fatalf("Builder.Ccache = false, want true")
-	}
-	if rec.captured.Toolchain.Override != "gcc 15.1.0" {
-		t.Fatalf("Toolchain.Override = %q, want %q", rec.captured.Toolchain.Override, "gcc 15.1.0")
-	}
-	if rec.captured.Toolchain.GCCBin != "x86_64-elf-" {
-		t.Fatalf("Toolchain.GCCBin = %q, want x86_64-elf-", rec.captured.Toolchain.GCCBin)
-	}
-	if want := e.Environ(); !slices.Equal(rec.captured.Env, want) {
-		t.Fatalf("Builder.Env = %v, want %v", rec.captured.Env, want)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, rows := fakeFirmwareServer(t, false)
+			rec := &recordingFirmwareBuilder{}
+			stubFirmwareBuilder(t, rec)
+			env := map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()}
+			e, _, errb := fetchEnv(env)
+			e.Registry = firmwareRegistry(t, rows)
+			code := Run(context.Background(), append([]string{"firmware"}, c.args...), e)
+			if code != c.wantCode {
+				t.Fatalf("code=%d, want %d; stderr=%s", code, c.wantCode, errb.String())
+			}
+			if c.wantErr != "" && !strings.Contains(errb.String(), c.wantErr) {
+				t.Fatalf("stderr=%q, want it to contain %q", errb.String(), c.wantErr)
+			}
+			if c.wantCode != 0 {
+				return
+			}
+			var ran []string
+			for _, call := range rec.calls {
+				switch call {
+				case "OpenCore":
+					ran = append(ran, "opencore")
+				case "OVMF":
+					ran = append(ran, "ovmf")
+				case "EFIImage":
+					ran = append(ran, "efi")
+				}
+			}
+			if !slices.Equal(ran, c.wantTargets) {
+				t.Fatalf("targets ran = %v, want %v (raw calls: %v)", ran, c.wantTargets, rec.calls)
+			}
+		})
 	}
 }
 

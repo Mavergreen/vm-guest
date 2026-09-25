@@ -172,38 +172,10 @@ func adoptCandidates(p config.Paths, legacyBase string, at func(config.Paths) st
 	return dirs
 }
 
-// parseFetchArgs lets targets and flags appear in either order (the usage
-// this command was given puts a target first: "vmavs fetch updates
-// --updates none"), which flag.FlagSet.Parse does not support on its own
-// -- it stops permanently at the first non-flag argument. Instead this
-// parses repeatedly: fs.Parse consumes a run of flags (deciding for
-// itself, the standard way, which take a value -- including "--updates
-// X", "--updates=X" and "-updates X"), then the first remaining argument
-// is taken as one target and parsing resumes on the rest.
-//
-// "--" ends flag parsing for good: fs.Parse consumes it and stops, and
-// every argument after it is a plain target, never looked at as a flag
-// again even if it starts with "-" (so `-- esd --probe` names an unknown
-// target, "--probe"). fs.Parse stopped at a "--" when that is the last
-// argument it consumed. The one look-alike is "--" given as a flag's
-// value ("--updates --"), and --updates refuses that value anyway.
+// parseFetchArgs is parseInterleaved (cli.go), named for fetch's own
+// callers and tests; cmdFirmware uses parseInterleaved directly.
 func parseFetchArgs(fs *flag.FlagSet, e *Env, help string, args []string) ([]string, error) {
-	var targets []string
-	remaining := args
-	for {
-		if err := parse(fs, e, help, remaining); err != nil {
-			return nil, err
-		}
-		consumed := len(remaining) - fs.NArg()
-		if consumed > 0 && remaining[consumed-1] == "--" {
-			return append(targets, fs.Args()...), nil
-		}
-		if fs.NArg() == 0 {
-			return targets, nil
-		}
-		targets = append(targets, fs.Arg(0))
-		remaining = fs.Args()[1:]
-	}
+	return parseInterleaved(fs, e, help, args)
 }
 
 // fetchTargets validates args against fetchOrder and returns the
