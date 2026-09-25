@@ -28,7 +28,7 @@ Then, from another terminal: vmavs ssh
 func cmdRun(ctx context.Context, e *Env, args []string) error {
 	fs := newFlags("run")
 	flagged := config.DefaultMachine()
-	flagged.Register(fs)
+	registerMachine(fs, &flagged)
 	name := fs.String("image", "", "image to boot (default: the most recently built)")
 	keep := fs.Bool("keep", false, "keep the run directory (overlay, NVRAM) after QEMU exits")
 	if err := parse(fs, e, runHelp, args); err != nil {

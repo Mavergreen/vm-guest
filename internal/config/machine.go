@@ -1,7 +1,6 @@
 package config
 
 import (
-	"flag"
 	"fmt"
 	"slices"
 	"strings"
@@ -26,17 +25,6 @@ func DefaultMachine() Machine {
 		MemoryMB: DefaultMemoryMB, SMP: DefaultSMP, NIC: DefaultNIC,
 		SSHPort: DefaultSSHPort, Display: DefaultDisplay,
 	}
-}
-
-// Register adds the machine flags every machine-using subcommand shares.
-func (m *Machine) Register(fs *flag.FlagSet) {
-	fs.StringVar(&m.Accel, "accel", m.Accel, "accelerator: kvm, hvf, nvmm or tcg")
-	fs.StringVar(&m.CPU, "cpu", m.CPU, "QEMU -cpu line (docs/decisions/0009)")
-	fs.IntVar(&m.MemoryMB, "memory", m.MemoryMB, "guest memory in MiB")
-	fs.IntVar(&m.SMP, "smp", m.SMP, "guest CPUs")
-	fs.StringVar(&m.NIC, "nic", m.NIC, "network device: "+strings.Join(NICChoices, ", "))
-	fs.IntVar(&m.SSHPort, "ssh-port", m.SSHPort, "host port forwarded to the guest's port 22")
-	fs.StringVar(&m.Display, "display", m.Display, "QEMU -display: none, gtk, sdl or cocoa")
 }
 
 // Override copies the fields whose flags were set on the command line.

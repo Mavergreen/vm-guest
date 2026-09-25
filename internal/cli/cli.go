@@ -1,8 +1,9 @@
 // Package cli is vmavs's command line: the subcommand table, flag
 // parsing, help, logging and exit codes. It owns argv and the command
 // table, and reads the environment for the packages it calls, which take
-// plain values. (config.Machine.Register also knows about flags: it adds
-// the shared machine options to a FlagSet cli hands it.)
+// plain values. cli is the only package that knows about flags or argv:
+// config owns the defaults a machine-using subcommand's flags start from
+// (registerMachine binds them to a FlagSet cli hands it).
 package cli
 
 import (

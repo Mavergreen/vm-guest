@@ -37,7 +37,7 @@ func cmdEmit(ctx context.Context, e *Env, args []string) error {
 	}
 	fs := newFlags("emit")
 	hw := config.DefaultMachine()
-	hw.Register(fs)
+	registerMachine(fs, &hw)
 	out := fs.String("out", "", "write the template here (default: stdout)")
 	check := fs.Bool("check", false, "run packer validate on --out afterwards")
 	if err := parse(fs, e, emitHelp, args); err != nil {

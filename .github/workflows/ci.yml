@@ -165,3 +165,18 @@ jobs:
           for target in linux/amd64 darwin/amd64 darwin/arm64 netbsd/amd64; do
               GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/vmavs
           done
+
+  # The go job cross-builds for darwin; this one RUNS the tests there.
+  # flock semantics, sun_path's 104-byte limit and signal delivery are
+  # host behaviour a cross-build cannot check.
+  go-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test -race ./...
