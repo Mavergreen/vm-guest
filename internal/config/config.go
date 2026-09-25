@@ -42,6 +42,12 @@ const (
 // (docs/open-questions.md Q2).
 var NICChoices = []string{"usb-net", "e1000-82545em", "virtio-net-pci"}
 
+// Which post-10.9.5 updates an image carries (docs/decisions/0011): a
+// build-time choice whose default is a decision.
+var UpdateChoices = []string{"none", "security", "all"}
+
+const DefaultUpdates = "security"
+
 // Paths is the layout of VMAVS_HOME (spec §5).
 type Paths struct{ Home string }
 
