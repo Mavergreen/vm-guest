@@ -121,7 +121,7 @@ func chooseImage(e *Env, p config.Paths, name string) (manifest.Manifest, error)
 		return manifest.Manifest{}, err
 	}
 	if len(all) == 0 {
-		msg := fmt.Sprintf("no built images in %s; build one with `vmavs image`", p.Images())
+		msg := fmt.Sprintf("no built images in %s; build one with bin/vmavs image (until it is ported)", p.Images())
 		if hint := config.LegacyHint(e.Getenv, config.Exists); hint != "" {
 			msg += "\n" + hint
 		}

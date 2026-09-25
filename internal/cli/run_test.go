@@ -145,6 +145,17 @@ func TestRunWithNoImagesGivesTheLegacyHint(t *testing.T) {
 	}
 }
 
+// TestRunWithNoImagesNamesACommandThatExists: out/vmavs has no `image`
+// subcommand yet, so pointing at `vmavs image` sends a user to one that
+// fails.
+func TestRunWithNoImagesNamesACommandThatExists(t *testing.T) {
+	home := shortTempDir(t)
+	code, stderr := runVmavs(t, &proc.Fake{}, map[string]string{"VMAVS_HOME": home}, "run")
+	if code != 1 || !strings.Contains(stderr, "bin/vmavs image (until it is ported)") {
+		t.Fatalf("code=%d stderr=%s", code, stderr)
+	}
+}
+
 func TestRunStopsCleanlyWhenCtxIsCancelled(t *testing.T) {
 	h := shellHome(t)
 	br := blockingRunner{create: &proc.Fake{}}

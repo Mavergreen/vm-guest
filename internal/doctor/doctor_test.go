@@ -85,7 +85,7 @@ func TestRunNeedsAnImageFirmwareAndQEMU(t *testing.T) {
 		}
 	}
 	missing := strings.Join(run.Missing, " ")
-	for _, want := range []string{"qemu-img", "a built image", "OVMF_CODE.fd", "OVMF_VARS.fd", "opencore"} {
+	for _, want := range []string{"qemu-img", "a built image -- bin/vmavs image (until it is ported)", "OVMF_CODE.fd", "OVMF_VARS.fd", "opencore"} {
 		if !strings.Contains(missing, want) {
 			t.Errorf("run's missing list %q lacks %s", missing, want)
 		}

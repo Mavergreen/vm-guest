@@ -99,7 +99,7 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 		}
 	}
 	if ms, _ := manifest.List(p.Images()); len(ms) == 0 {
-		run.Missing = append(run.Missing, "a built image (vmavs image)")
+		run.Missing = append(run.Missing, "a built image -- bin/vmavs image (until it is ported)")
 	}
 	for _, f := range []string{p.OVMFCode(), p.OVMFVarsTemplate(), p.OpenCoreImage()} {
 		if _, err := os.Stat(f); err != nil {
