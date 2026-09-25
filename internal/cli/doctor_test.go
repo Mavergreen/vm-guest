@@ -74,6 +74,18 @@ func TestDoctorPrintsTablesAndTheVerdictAndExitsNonZeroOnNOGO(t *testing.T) {
 	}
 }
 
+// TestDoctorListsWhatIsMissingCommaJoined: the table says what is missing
+// the way the verdict does, not as a Go slice ("[a b c]"), whose items
+// run together when one has a space in it.
+func TestDoctorListsWhatIsMissingCommaJoined(t *testing.T) {
+	home := t.TempDir()
+	host := fakeHost(goodCPUInfo, "Y", true)
+	_, stdout, _ := runDoctor(t, host, map[string]string{"VMAVS_HOME": home})
+	if !strings.Contains(stdout, "missing: qemu-system-x86_64, qemu-img, a built image") || strings.Contains(stdout, "missing: [") {
+		t.Fatalf("stdout=%s", stdout)
+	}
+}
+
 func TestDoctorExitsZeroOnGO(t *testing.T) {
 	home := t.TempDir()
 	p := config.Paths{Home: home}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
@@ -50,7 +51,7 @@ func cmdDoctor(_ context.Context, e *Env, args []string) error {
 	for _, s := range subs {
 		status, detail := "READY", "-"
 		if !s.Ready() {
-			status, detail = "BLOCKED", fmt.Sprintf("missing: %v", s.Missing)
+			status, detail = "BLOCKED", "missing: "+strings.Join(s.Missing, ", ")
 		}
 		fmt.Fprintf(e.Stdout, "%-8s  %-12s  %s\n", status, s.Subcommand, detail)
 		for _, n := range s.Notes {
