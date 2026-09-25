@@ -118,7 +118,7 @@ func TestRunBootsTheLatestImageOnItsOwnHardwareAndCleansUp(t *testing.T) {
 func TestRunKeepAndFlagsWin(t *testing.T) {
 	h := shellHome(t)
 	f := &proc.Fake{}
-	code, _ := runVmavs(t, f, map[string]string{"VMAVS_HOME": h, "VMAVS_QEMU": "/opt/q"},
+	code, stderr := runVmavs(t, f, map[string]string{"VMAVS_HOME": h, "VMAVS_QEMU": "/opt/q"},
 		"run", "--keep", "--nic", "e1000-82545em", "--memory", "8192", "--ssh-port", strconv.Itoa(freePort(t)))
 	if code != 0 {
 		t.Fatal(code)
@@ -130,6 +130,9 @@ func TestRunKeepAndFlagsWin(t *testing.T) {
 	dirs := runDirs(t, h)
 	if len(dirs) != 1 {
 		t.Fatalf("--keep must keep exactly one run directory, got %v", dirs)
+	}
+	if kept := filepath.Join(h, "run", dirs[0].Name()); !strings.Contains(stderr, "kept run directory "+kept) {
+		t.Fatalf("stderr=%s, want it to name the run directory it kept (%s)", stderr, kept)
 	}
 	if _, err := os.Stat(filepath.Join(h, "run", dirs[0].Name(), "OVMF_VARS.fd")); err != nil {
 		t.Fatal("--keep must keep the run directory's contents")

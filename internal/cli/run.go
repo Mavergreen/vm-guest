@@ -71,13 +71,16 @@ func cmdRun(ctx context.Context, e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
-	if !*keep {
-		defer func() {
-			if err := run.Remove(); err != nil {
-				logf(e, "run", "cleanup: %v", err)
-			}
-		}()
-	}
+	defer func() {
+		if *keep {
+			run.Close()
+			logf(e, "run", "kept run directory %s", run.Dir)
+			return
+		}
+		if err := run.Remove(); err != nil {
+			logf(e, "run", "cleanup: %v", err)
+		}
+	}()
 	logf(e, "run", "booting %s (%s, %d MiB, %s); ssh on localhost:%d", m.Name, hw.CPU, hw.MemoryMB, hw.NIC, hw.SSHPort)
 	err = run.Boot(ctx, r, e.Stdin, e.Stdout, e.Stderr)
 	if ctx.Err() != nil {
