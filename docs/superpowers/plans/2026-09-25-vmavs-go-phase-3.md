@@ -338,8 +338,10 @@ commands shown, unless marked otherwise.
   | 2048 | 4192223 | 8 | 4086 | 32 |
 
   Every one has 2 FATs, root cluster 2, FSInfo at 1, backup boot at 6,
-  media `0xf8`, heads 16, sectors/track 63 and hidden 0. The serial
-  number is random.
+  media `0xf8`, sectors/track 63 and hidden 0. The serial number is
+  random. Heads are 16 up to about 504 MiB and more above that (32 at
+  512 MiB; corrected 2026-09-25 by the Task 7-8 implementer's
+  measurement). The 192 MiB EFI image has 16.
 - **`lib/smbios.sh`.**
   - The default is `iMac14,2`.
   - Well-formed means non-empty, only `[A-Za-z0-9,._-]`, and at most 64
