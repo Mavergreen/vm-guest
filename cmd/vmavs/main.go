@@ -18,7 +18,15 @@ func main() {
 	// reaper process; a run that is not cleaned up this way (a crash, a
 	// SIGKILL) is swept up by the next `vmavs run` or `vmavs ssh`
 	// (vm.Reap), unless it was started with --keep.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	//
+	// SIGHUP is only watched if it isn't already being ignored: `nohup
+	// vmavs run &` arranges exactly that (so the run survives its
+	// terminal closing), and catching it anyway here would defeat that.
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if !signal.Ignored(syscall.SIGHUP) {
+		sigs = append(sigs, syscall.SIGHUP)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
 	code := cli.Run(ctx, os.Args[1:], &cli.Env{
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
