@@ -184,6 +184,24 @@ func TestSSHNamesTheRunningGuestsWhenImageDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestSSHReapsStaleRunDirectoriesFirst(t *testing.T) {
+	home := guestHome(t)
+	stale := filepath.Join(home, "run", "old-stale")
+	os.MkdirAll(stale, 0o755)
+	os.WriteFile(filepath.Join(stale, "state"), []byte("image\told\nport\t2222\npid\t1\nkeep\tfalse\n"), 0o644)
+
+	code, _, errs := sshVmavs(t, home, "--", "sw_vers")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+	if !strings.Contains(errs, "removed stale run directory") || !strings.Contains(errs, "old-stale") {
+		t.Fatalf("err=%q, want it to log the removed stale run directory", errs)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("stale run directory not reaped")
+	}
+}
+
 func TestSSHRefusesAnUnreachablePortWithTheBootingHint(t *testing.T) {
 	home := shortTempDir(t)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
