@@ -229,7 +229,7 @@ func TestShellRunsAnInteractiveSessionAndReturnsItsStatus(t *testing.T) {
 	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey()})
 	c := dialGuest(t, addr, s)
 	var out, errOut bytes.Buffer
-	code, err := Shell(context.Background(), c, nonTerminal(t), &out, &errOut)
+	code, err := Shell(context.Background(), c, "", nonTerminal(t), &out, &errOut)
 	if err != nil || code != 0 || out.String() != "shell\n" {
 		t.Fatalf("code=%d err=%v out=%q", code, err, out.String())
 	}
@@ -241,7 +241,7 @@ func TestShellPropagatesAChosenExitStatus(t *testing.T) {
 	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey(), ShellStatus: 7})
 	c := dialGuest(t, addr, s)
 	var out bytes.Buffer
-	code, err := Shell(context.Background(), c, nonTerminal(t), &out, io.Discard)
+	code, err := Shell(context.Background(), c, "", nonTerminal(t), &out, io.Discard)
 	if err != nil || code != 7 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
@@ -253,7 +253,7 @@ func TestShellWithNoExitStatusIs255(t *testing.T) {
 	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey(), ShellNoStatus: true})
 	c := dialGuest(t, addr, s)
 	var out bytes.Buffer
-	code, err := Shell(context.Background(), c, nonTerminal(t), &out, io.Discard)
+	code, err := Shell(context.Background(), c, "", nonTerminal(t), &out, io.Discard)
 	if err != nil || code != 255 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}

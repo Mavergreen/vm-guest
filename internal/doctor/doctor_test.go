@@ -26,7 +26,9 @@ func linux(cpuinfo, msrs string, kvmWritable bool, tools ...string) Host {
 			}
 			return nil, os.ErrNotExist
 		},
-		Exists:   func(p string) bool { return p == "/dev/kvm" },
+		// /dev/kvm is described; anything else (the files a test lays
+		// out under its own temporary VMAVS_HOME) is looked up for real.
+		Exists:   func(p string) bool { return p == "/dev/kvm" || config.Exists(p) },
 		Writable: func(p string) bool { return p == "/dev/kvm" && kvmWritable },
 		LookPath: func(n string) (string, error) {
 			if have[n] {
@@ -99,6 +101,25 @@ func TestRunNeedsAnImageFirmwareAndQEMU(t *testing.T) {
 	ok, line := Verdict(HostRows(linux(intel, "Y", true)), subs)
 	if !ok || !strings.Contains(line, "ready: run") {
 		t.Fatalf("ok=%v %s", ok, line)
+	}
+}
+
+// TestRunReadinessAsksTheHostWhetherFirmwareExists: Subcommands judges
+// the firmware files through Host.Exists, like every other host fact, so
+// a test (or another host description) is believed rather than bypassed
+// with a direct os.Stat.
+func TestRunReadinessAsksTheHostWhetherFirmwareExists(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	os.MkdirAll(p.Images(), 0o755)
+	os.WriteFile(filepath.Join(p.Images(), "i.qcow2"), nil, 0o644)
+	os.WriteFile(filepath.Join(p.Images(), "i.manifest"), []byte("name\ti\n"), 0o644)
+	h := linux(intel, "Y", true, "qemu-system-x86_64", "qemu-img")
+	firmware := map[string]bool{p.OVMFCode(): true, p.OVMFVarsTemplate(): true, p.OpenCoreImage(): true}
+	h.Exists = func(path string) bool { return path == "/dev/kvm" || firmware[path] }
+	for _, s := range Subcommands(h, p, "qemu-system-x86_64") {
+		if s.Subcommand == "run" && !s.Ready() {
+			t.Fatalf("run missing %v, though Host.Exists says the firmware is there", s.Missing)
+		}
 	}
 }
 

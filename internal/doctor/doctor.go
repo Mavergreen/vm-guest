@@ -5,7 +5,6 @@ package doctor
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
@@ -102,7 +101,7 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 		run.Missing = append(run.Missing, "a built image -- bin/vmavs image (until it is ported)")
 	}
 	for _, f := range []string{p.OVMFCode(), p.OVMFVarsTemplate(), p.OpenCoreImage()} {
-		if _, err := os.Stat(f); err != nil {
+		if !h.Exists(f) {
 			run.Missing = append(run.Missing, f)
 		}
 	}

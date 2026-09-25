@@ -22,6 +22,10 @@ type Target struct {
 	// Legacy is a guest running Apple's OpenSSH 6.2 (manifest.LegacySSH).
 	Legacy  bool
 	Timeout time.Duration
+	// Term is the TERM an interactive Shell asks the guest's pty for;
+	// "" means xterm. cli sets it from its own environment, so this
+	// package reads none.
+	Term string
 }
 
 // ClientConfig trusts any host key: every overlay has fresh host keys, so
@@ -126,9 +130,10 @@ func Exec(ctx context.Context, c *ssh.Client, command string, stdin io.Reader, s
 	return code, err
 }
 
-// Shell is an interactive login shell on a terminal. Cancelling ctx closes
-// the session the same way Exec does.
-func Shell(ctx context.Context, c *ssh.Client, in *os.File, out, errOut io.Writer) (int, error) {
+// Shell is an interactive login shell on a terminal, whose pty asks for
+// TERM termName (Target.Term; "" means xterm). Cancelling ctx closes the
+// session the same way Exec does.
+func Shell(ctx context.Context, c *ssh.Client, termName string, in *os.File, out, errOut io.Writer) (int, error) {
 	s, err := c.NewSession()
 	if err != nil {
 		return 0, err
@@ -155,7 +160,6 @@ func Shell(ctx context.Context, c *ssh.Client, in *os.File, out, errOut io.Write
 		if err != nil {
 			w, h = 80, 24
 		}
-		termName := os.Getenv("TERM")
 		if termName == "" {
 			termName = "xterm"
 		}

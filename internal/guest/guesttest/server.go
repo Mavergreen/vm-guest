@@ -32,6 +32,8 @@ type Options struct {
 	// session takes when the connection simply drops (guest.status()'s
 	// *ssh.ExitMissingError case).
 	ShellNoStatus bool
+	// OnPty, if set, is called with the TERM a "pty-req" asks for.
+	OnPty func(term string)
 }
 
 // Start serves until the test ends. It returns host:port.
@@ -134,6 +136,15 @@ func handleSession(ch ssh.Channel, in <-chan *ssh.Request, o Options) {
 			ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{code}))
 			return
 		case "pty-req":
+			if o.OnPty != nil {
+				var p struct {
+					Term                         string
+					Columns, Rows, Width, Height uint32
+					Modes                        string
+				}
+				ssh.Unmarshal(req.Payload, &p)
+				o.OnPty(p.Term)
+			}
 			req.Reply(true, nil)
 		case "shell":
 			req.Reply(true, nil)

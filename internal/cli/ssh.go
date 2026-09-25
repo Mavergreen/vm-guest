@@ -60,7 +60,7 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 		return err
 	}
 	t := guest.Target{Addr: net.JoinHostPort("127.0.0.1", strconv.Itoa(*port)), User: *user,
-		Signer: signer, Legacy: m.LegacySSH(), Timeout: 10 * time.Second}
+		Signer: signer, Legacy: m.LegacySSH(), Timeout: 10 * time.Second, Term: e.Getenv("TERM")}
 	c, err := guest.Dial(ctx, t)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -77,7 +77,7 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 		if !ok {
 			return errors.New("an interactive shell needs a terminal; pass a command after --")
 		}
-		code, err = guest.Shell(ctx, c, in, e.Stdout, e.Stderr)
+		code, err = guest.Shell(ctx, c, t.Term, in, e.Stdout, e.Stderr)
 	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

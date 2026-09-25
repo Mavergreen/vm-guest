@@ -229,8 +229,10 @@ run/      per-run overlays and NVRAM — removed on exit
 keys/     the generated SSH key pair
 ```
 
-Every path comes from `config.Paths`. No code builds a path under
-`VMAVS_HOME` itself.
+Every directory under `VMAVS_HOME` comes from `config.Paths`; no other
+code places one there. The package that owns a directory names the files
+inside it (`vm` a run directory's state, overlay, NVRAM and monitor
+socket).
 
 If `~/.local/share/mavericks-qemu-guest` exists and `VMAVS_HOME` does not,
 `vmavs` says so and prints the `mv` that moves it. It moves nothing itself.

@@ -1,6 +1,9 @@
 // Package config holds every default vmavs has, and the layout of
-// VMAVS_HOME. No other package decides a default or builds a path under
-// VMAVS_HOME itself.
+// VMAVS_HOME: where each directory under it is. No other package decides
+// a default or places a directory there. What goes inside a directory is
+// its owner's business: vm names the files inside a run directory it made
+// (state, disk.qcow2, OVMF_VARS.fd, monitor.sock), and manifest and guest
+// look inside the images/ and keys/ directories config names.
 package config
 
 import (

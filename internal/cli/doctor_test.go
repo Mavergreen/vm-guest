@@ -34,7 +34,9 @@ func fakeHost(cpuinfo, msrs string, kvmWritable bool, tools ...string) doctor.Ho
 			}
 			return nil, os.ErrNotExist
 		},
-		Exists:   func(p string) bool { return p == "/dev/kvm" },
+		// /dev/kvm is described; anything else (the files a test lays
+		// out under its own temporary VMAVS_HOME) is looked up for real.
+		Exists:   func(p string) bool { return p == "/dev/kvm" || config.Exists(p) },
 		Writable: func(p string) bool { return p == "/dev/kvm" && kvmWritable },
 		LookPath: func(n string) (string, error) {
 			if have[n] {
