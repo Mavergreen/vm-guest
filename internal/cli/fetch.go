@@ -72,7 +72,7 @@ func cmdFetch(ctx context.Context, e *Env, args []string) error {
 	// Before anything can fail: the user whose images are in the shell
 	// tree's home should hear where they are whether this fetch works or
 	// not.
-	if hint := legacyHint(e); hint != "" {
+	if hint := fetchLegacyHint(e); hint != "" {
 		logf(e, "fetch", "%s", hint)
 	}
 	reg := e.Registry

@@ -41,9 +41,9 @@ func OpenSSHTag() (string, error) {
 
 // OpenSSH fetches the release's two packages, verified against the
 // release's own SHA256SUMS. A returned path may be a hard link to the
-// user's original (see Get): read-only; never open it for writing. Nothing constructs an asset name from a
-// prefix: the names are whatever SUMS says, so a renamed prefix cannot
-// 404 across a pin bump.
+// user's original (see Get): read-only; never open it for writing.
+// Nothing constructs an asset name from a prefix: the names are whatever
+// SUMS says, so a renamed prefix cannot 404 across a pin bump.
 //
 // adoptDirs is tried in order, like InstallESD's adopt list: a partial or
 // stale copy in the first directory must not shadow a good one in the

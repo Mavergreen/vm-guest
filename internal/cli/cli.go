@@ -198,3 +198,12 @@ func logf(e *Env, cmd, format string, a ...any) {
 func legacyHint(e *Env) string {
 	return config.LegacyHint(e.Getenv, manifest.Any, config.Exists)
 }
+
+// fetchLegacyHint is legacyHint as fetch gives it: the export advice
+// only, never the mv. A fetch that stores anything creates the default
+// home, and once that exists moving the old home over it is stale advice
+// (it may hold hard links into the old home) -- so fetch asks as if it
+// already did.
+func fetchLegacyHint(e *Env) string {
+	return config.LegacyHint(e.Getenv, manifest.Any, func(string) bool { return true })
+}

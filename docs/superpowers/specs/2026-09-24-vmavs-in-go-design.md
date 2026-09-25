@@ -252,9 +252,10 @@ If `VMAVS_HOME` is unset, the shell tree's
 `~/.local/share/mavericks-qemu-guest/images/` holds a built image and the
 default home's `images/` holds none, `vmavs` says so (`run`, `doctor` and
 `fetch`) and prints the `export VMAVS_HOME=...` that uses it. While the
-default home does not exist yet, it also prints the `mv` that moves the old
-one there; once it does (any `fetch` creates it), it may hold hard links
-into the old home, so no `mv` is offered. It moves nothing itself.
+default home does not exist yet, `run` and `doctor` also print the `mv` that
+moves the old one there; once it does (a fetch that stores something creates
+it), it may hold hard links into the old home, so no `mv` is offered. `fetch`,
+which is about to create it, never offers one. It moves nothing itself.
 
 **Images built by the shell pipeline, phases 1–5.** The shell tree already
 uses this layout for `images/`, `build/firmware/` and `keys/`. It differs

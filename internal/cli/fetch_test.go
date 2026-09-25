@@ -337,6 +337,11 @@ func TestAFailedFetchDoesNotSilenceTheLegacyHint(t *testing.T) {
 	if !strings.Contains(errb.String(), "vmavs fetch: ") || !strings.Contains(errb.String(), "export VMAVS_HOME=") {
 		t.Fatalf("fetch stderr=%s, want the legacy-home hint", errb.String())
 	}
+	// A fetch that stores anything creates the default home, so the mv
+	// the hint would otherwise offer is stale by the time it is read.
+	if strings.Contains(errb.String(), "mv ") {
+		t.Fatalf("fetch stderr=%s, want the export advice only, no mv", errb.String())
+	}
 	cur := filepath.Join(home, ".local", "share", "vmavs")
 	if _, err := os.Stat(cur); !os.IsNotExist(err) {
 		t.Fatalf("a failed fetch left %s behind (%v)", cur, err)
