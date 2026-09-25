@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -40,6 +42,7 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
+	reap(e, "ssh", p)
 	m, livePort, err := sshTarget(e, p, *name, *port)
 	if err != nil {
 		return err
@@ -60,18 +63,18 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 		Signer: signer, Legacy: m.LegacySSH(), Timeout: 10 * time.Second}
 	c, err := guest.Dial(ctx, t)
 	if err != nil {
-		return err
+		return bootingHint(err, *port)
 	}
 	defer c.Close()
 	var code int
 	if fs.NArg() > 0 {
-		code, err = guest.Exec(c, strings.Join(fs.Args(), " "), e.Stdin, e.Stdout, e.Stderr)
+		code, err = guest.Exec(ctx, c, strings.Join(fs.Args(), " "), e.Stdin, e.Stdout, e.Stderr)
 	} else {
 		in, ok := e.Stdin.(*os.File)
 		if !ok {
 			return errors.New("an interactive shell needs a terminal; pass a command after --")
 		}
-		code, err = guest.Shell(c, in, e.Stdout, e.Stderr)
+		code, err = guest.Shell(ctx, c, in, e.Stdout, e.Stderr)
 	}
 	if err != nil {
 		return err
@@ -82,6 +85,25 @@ func cmdSSH(ctx context.Context, e *Env, args []string) error {
 	return nil
 }
 
+// bootingHint explains a Dial failure that has the shape of a guest whose
+// sshd has not come up yet: refused (nothing listening), an EOF partway
+// through the handshake (the guest reset the connection), or a timeout
+// (nothing answered within Target.Timeout).
+func bootingHint(err error, port int) error {
+	if err == nil {
+		return nil
+	}
+	var netErr net.Error
+	refused := errors.Is(err, syscall.ECONNREFUSED)
+	timedOut := errors.As(err, &netErr) && netErr.Timeout()
+	eof := errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	if refused || timedOut || eof {
+		return fmt.Errorf("the guest on port %d isn't answering SSH yet -- is it still booting? "+
+			"(vmavs run prints its port): %w", port, err)
+	}
+	return err
+}
+
 // sshTarget is the image to talk to and the port its run forwards. With
 // --port and no running guest, the image is --image or the latest built.
 func sshTarget(e *Env, p config.Paths, name string, port int) (manifest.Manifest, int, error) {
@@ -90,7 +112,9 @@ func sshTarget(e *Env, p config.Paths, name string, port int) (manifest.Manifest
 		return manifest.Manifest{}, 0, err
 	}
 	var match []vm.State
+	var running []string
 	for _, s := range live {
+		running = append(running, s.Image)
 		if name == "" || s.Image == name {
 			match = append(match, s)
 		}
@@ -100,14 +124,16 @@ func sshTarget(e *Env, p config.Paths, name string, port int) (manifest.Manifest
 		m, err := manifest.Find(p.Images(), match[0].Image)
 		return m, match[0].Port, err
 	case len(match) > 1:
-		var names []string
+		var choices []string
 		for _, s := range match {
-			names = append(names, fmt.Sprintf("%s (port %d)", s.Image, s.Port))
+			choices = append(choices, fmt.Sprintf("%s (port %d)", s.Image, s.Port))
 		}
-		return manifest.Manifest{}, 0, usagef("several guests are running: %s; pick one with --image", strings.Join(names, ", "))
+		return manifest.Manifest{}, 0, usagef("several guests are running: %s; pick one with --image", strings.Join(choices, ", "))
 	case port != 0:
 		m, err := chooseImage(e, p, name)
 		return m, port, err
+	case name != "" && len(live) > 0:
+		return manifest.Manifest{}, 0, usagef("no running guest named %q; running: %s", name, strings.Join(running, ", "))
 	default:
 		return manifest.Manifest{}, 0, errors.New("no guest is running; start one with `vmavs run`, or pass --port")
 	}

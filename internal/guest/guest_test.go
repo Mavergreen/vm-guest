@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"encoding/pem"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,13 +51,62 @@ func TestExecRunsTheCommandAndReturnsItsStatus(t *testing.T) {
 	// only ever writes stdout, so stderr is discarded rather than given
 	// a second buffer nothing would land in).
 	var out bytes.Buffer
-	code, err := Exec(c, "sw_vers", nil, &out, io.Discard)
+	code, err := Exec(context.Background(), c, "sw_vers", nil, &out, io.Discard)
 	if err != nil || code != 0 || out.String() != "ran: sw_vers\n" {
 		t.Fatalf("code=%d err=%v out=%q", code, err, out.String())
 	}
-	code, err = Exec(c, "fail", nil, &out, io.Discard)
+	code, err = Exec(context.Background(), c, "fail", nil, &out, io.Discard)
 	if err != nil || code != 3 {
 		t.Fatalf("fail: code=%d err=%v", code, err)
+	}
+}
+
+func TestExecReturnsPromptlyWhenCtxIsCancelled(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	s, _ := ssh.NewSignerFromKey(priv)
+	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey()})
+	c, err := Dial(context.Background(), Target{Addr: addr, User: "mavsuser", Signer: s, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	if _, err := Exec(ctx, c, "hang", nil, io.Discard, io.Discard); err == nil {
+		t.Fatal("want an error once ctx is cancelled")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Exec took %v after ctx was cancelled, want it to return promptly", elapsed)
+	}
+}
+
+func TestDialReturnsPromptlyAgainstASilentListener(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			// Accepts and never speaks: the handshake never completes,
+			// so only Dial's own deadline can end it.
+			io.Copy(io.Discard, c)
+		}
+	}()
+	start := time.Now()
+	_, err = Dial(context.Background(), Target{Addr: ln.Addr().String(), User: "mavsuser",
+		Signer: mustEd(t), Timeout: 200 * time.Millisecond})
+	if err == nil {
+		t.Fatal("want an error from a silent listener")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Dial took %v, want it to return within its Timeout", elapsed)
 	}
 }
 
@@ -151,7 +201,7 @@ func TestShellRunsAnInteractiveSessionAndReturnsItsStatus(t *testing.T) {
 	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey()})
 	c := dialGuest(t, addr, s)
 	var out, errOut bytes.Buffer
-	code, err := Shell(c, nonTerminal(t), &out, &errOut)
+	code, err := Shell(context.Background(), c, nonTerminal(t), &out, &errOut)
 	if err != nil || code != 0 || out.String() != "shell\n" {
 		t.Fatalf("code=%d err=%v out=%q", code, err, out.String())
 	}
@@ -163,7 +213,7 @@ func TestShellPropagatesAChosenExitStatus(t *testing.T) {
 	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey(), ShellStatus: 7})
 	c := dialGuest(t, addr, s)
 	var out bytes.Buffer
-	code, err := Shell(c, nonTerminal(t), &out, io.Discard)
+	code, err := Shell(context.Background(), c, nonTerminal(t), &out, io.Discard)
 	if err != nil || code != 7 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
@@ -175,7 +225,7 @@ func TestShellWithNoExitStatusIs255(t *testing.T) {
 	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey(), ShellNoStatus: true})
 	c := dialGuest(t, addr, s)
 	var out bytes.Buffer
-	code, err := Shell(c, nonTerminal(t), &out, io.Discard)
+	code, err := Shell(context.Background(), c, nonTerminal(t), &out, io.Discard)
 	if err != nil || code != 255 {
 		t.Fatalf("code=%d err=%v", code, err)
 	}

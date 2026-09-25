@@ -51,39 +51,82 @@ func (t Target) ClientConfig() *ssh.ClientConfig {
 	return cfg
 }
 
+// Dial connects and completes the SSH handshake. The handshake itself is
+// bounded by t.Timeout (net.Conn's deadline, since ssh.NewClientConn takes
+// no context); ctx bounds the dial and, if cancelled while the handshake
+// is still running, closes the connection under it so the handshake fails
+// promptly instead of waiting out the full timeout.
 func Dial(ctx context.Context, t Target) (*ssh.Client, error) {
 	d := net.Dialer{Timeout: t.Timeout}
 	conn, err := d.DialContext(ctx, "tcp", t.Addr)
 	if err != nil {
 		return nil, err
 	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
+	if t.Timeout > 0 {
+		conn.SetDeadline(time.Now().Add(t.Timeout))
+	}
 	c, chans, reqs, err := ssh.NewClientConn(conn, t.Addr, t.ClientConfig())
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("ssh %s@%s: %w", t.User, t.Addr, err)
 	}
+	conn.SetDeadline(time.Time{}) // handshake is over; the client manages its own I/O from here
 	return ssh.NewClient(c, chans, reqs), nil
 }
 
-// Exec runs one command and returns its exit status.
-func Exec(c *ssh.Client, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+// Exec runs one command and returns its exit status. Cancelling ctx closes
+// the session, so a guest that never answers (or never exits) does not
+// hang vmavs; the caller then sees ctx.Err().
+func Exec(ctx context.Context, c *ssh.Client, command string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	s, err := c.NewSession()
 	if err != nil {
 		return 0, err
 	}
 	defer s.Close()
 	s.Stdin, s.Stdout, s.Stderr = stdin, stdout, stderr
-	return status(s.Run(command))
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			s.Close()
+		case <-done:
+		}
+	}()
+	code, err := status(s.Run(command))
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	return code, err
 }
 
-// Shell is an interactive login shell on a terminal.
-func Shell(c *ssh.Client, in *os.File, out, errOut io.Writer) (int, error) {
+// Shell is an interactive login shell on a terminal. Cancelling ctx closes
+// the session the same way Exec does.
+func Shell(ctx context.Context, c *ssh.Client, in *os.File, out, errOut io.Writer) (int, error) {
 	s, err := c.NewSession()
 	if err != nil {
 		return 0, err
 	}
 	defer s.Close()
 	s.Stdin, s.Stdout, s.Stderr = in, out, errOut
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			s.Close()
+		case <-done:
+		}
+	}()
 	fd := int(in.Fd())
 	if term.IsTerminal(fd) {
 		old, err := term.MakeRaw(fd)
@@ -106,7 +149,11 @@ func Shell(c *ssh.Client, in *os.File, out, errOut io.Writer) (int, error) {
 	if err := s.Shell(); err != nil {
 		return 0, err
 	}
-	return status(s.Wait())
+	code, err := status(s.Wait())
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	return code, err
 }
 
 func status(err error) (int, error) {

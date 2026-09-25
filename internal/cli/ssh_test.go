@@ -7,9 +7,12 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -17,27 +20,68 @@ import (
 	"github.com/Mavergreen/vm-guest/internal/guest/guesttest"
 )
 
+// lockRunState takes the same exclusive, non-blocking flock vm.Prepare
+// takes on a run's state file, standing in for a live vmavs run: vm.Live
+// (and so cli.sshTarget) now decide liveness by whether that lock is
+// still held, not by whether a pid is running. It is released, and the
+// file closed, when the test ends.
+func lockRunState(t *testing.T, statePath string) {
+	t.Helper()
+	f, err := os.OpenFile(statePath, os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+}
+
+// oneImageKeyed writes VMAVS_HOME/images/<name>.{qcow2,manifest} whose
+// manifest authorizes s's key, and returns the manifest's sshkey line's
+// fingerprint (already baked in).
+func writeKeyedImage(t *testing.T, home, name string, s ssh.Signer) {
+	t.Helper()
+	os.MkdirAll(filepath.Join(home, "images"), 0o755)
+	os.WriteFile(filepath.Join(home, "images", name+".qcow2"), nil, 0o644)
+	os.WriteFile(filepath.Join(home, "images", name+".manifest"), []byte(fmt.Sprintf(
+		"name\t%s\nopenssh\t10.5p1-mavericks.2\nsshkey\t%s build\n", name, ssh.FingerprintSHA256(s.PublicKey()))), 0o644)
+}
+
+// startLiveRun starts a guesttest server authorized for s, and records a
+// held (locked) run/<name>-<n>/state pointing at it, the way vmavs run
+// would have left one behind.
+func startLiveRun(t *testing.T, home, name string, s ssh.Signer, o guesttest.Options) (port string) {
+	t.Helper()
+	o.AuthorizedKey = s.PublicKey()
+	addr := guesttest.Start(t, o)
+	port = addr[strings.LastIndex(addr, ":")+1:]
+	runDir := filepath.Join(home, "run")
+	os.MkdirAll(runDir, 0o755)
+	dir, err := os.MkdirTemp(runDir, name+"-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "state")
+	os.WriteFile(statePath, []byte(fmt.Sprintf("image\t%s\nport\t%s\npid\t%d\nkeep\tfalse\n", name, port, os.Getpid())), 0o644)
+	lockRunState(t, statePath)
+	return port
+}
+
 // guestHome is a VMAVS_HOME with one image whose manifest names the key in
-// keys/, a live run of it (this process's pid) forwarding to a test server,
-// and the server's port.
+// keys/, a live run of it forwarding to a test server, and the server's
+// port.
 func guestHome(t *testing.T) (home string) {
 	t.Helper()
-	home = t.TempDir()
+	home = shortTempDir(t)
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	s, _ := ssh.NewSignerFromKey(priv)
 	block, _ := ssh.MarshalPrivateKey(priv, "build")
 	os.MkdirAll(filepath.Join(home, "keys"), 0o700)
 	os.WriteFile(filepath.Join(home, "keys", "mqg_ed25519"), pem.EncodeToMemory(block), 0o600)
 	os.WriteFile(filepath.Join(home, "keys", "mqg_ed25519.pub"), ssh.MarshalAuthorizedKey(s.PublicKey()), 0o644)
-	os.MkdirAll(filepath.Join(home, "images"), 0o755)
-	os.WriteFile(filepath.Join(home, "images", "img.qcow2"), nil, 0o644)
-	os.WriteFile(filepath.Join(home, "images", "img.manifest"), []byte(fmt.Sprintf(
-		"name\timg\nopenssh\t10.5p1-mavericks.2\nsshkey\t%s build\n", ssh.FingerprintSHA256(s.PublicKey()))), 0o644)
-	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey()})
-	port := addr[strings.LastIndex(addr, ":")+1:]
-	dir := filepath.Join(home, "run", fmt.Sprintf("img-%d", os.Getpid()))
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "state"), []byte(fmt.Sprintf("image\timg\nport\t%s\npid\t%d\n", port, os.Getpid())), 0o644)
+	writeKeyedImage(t, home, "img", s)
+	startLiveRun(t, home, "img", s, guesttest.Options{})
 	return home
 }
 
@@ -65,9 +109,99 @@ func TestSSHPassesTheRemoteExitStatusThrough(t *testing.T) {
 }
 
 func TestSSHWithNoRunningGuestSaysHowToStartOne(t *testing.T) {
-	home := t.TempDir()
+	home := shortTempDir(t)
 	code, _, errs := sshVmavs(t, home, "--", "true")
 	if code != 1 || !strings.Contains(errs, "vmavs run") {
+		t.Fatalf("code=%d err=%q", code, errs)
+	}
+}
+
+func TestSSHWithTwoLiveGuestsPicksTheNamedOneWithImage(t *testing.T) {
+	home := shortTempDir(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	s, _ := ssh.NewSignerFromKey(priv)
+	block, _ := ssh.MarshalPrivateKey(priv, "build")
+	os.MkdirAll(filepath.Join(home, "keys"), 0o700)
+	os.WriteFile(filepath.Join(home, "keys", "mqg_ed25519"), pem.EncodeToMemory(block), 0o600)
+	os.WriteFile(filepath.Join(home, "keys", "mqg_ed25519.pub"), ssh.MarshalAuthorizedKey(s.PublicKey()), 0o644)
+
+	writeKeyedImage(t, home, "one", s)
+	writeKeyedImage(t, home, "two", s)
+	startLiveRun(t, home, "one", s, guesttest.Options{})
+	startLiveRun(t, home, "two", s, guesttest.Options{ShellStatus: 9})
+
+	code, out, errs := sshVmavs(t, home, "--image", "two", "--", "sw_vers")
+	if code != 0 || out != "ran: sw_vers\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
+	}
+}
+
+func TestSSHWithNoLiveGuestButAPortFallsBackToTheChosenImage(t *testing.T) {
+	home := shortTempDir(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	s, _ := ssh.NewSignerFromKey(priv)
+	block, _ := ssh.MarshalPrivateKey(priv, "build")
+	os.MkdirAll(filepath.Join(home, "keys"), 0o700)
+	os.WriteFile(filepath.Join(home, "keys", "mqg_ed25519"), pem.EncodeToMemory(block), 0o600)
+	os.WriteFile(filepath.Join(home, "keys", "mqg_ed25519.pub"), ssh.MarshalAuthorizedKey(s.PublicKey()), 0o644)
+	writeKeyedImage(t, home, "img", s)
+
+	addr := guesttest.Start(t, guesttest.Options{AuthorizedKey: s.PublicKey()})
+	port := addr[strings.LastIndex(addr, ":")+1:]
+
+	code, out, errs := sshVmavs(t, home, "--port", port, "--", "sw_vers")
+	if code != 0 || out != "ran: sw_vers\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
+	}
+}
+
+func TestSSHWithExplicitKeyIgnoresTheManifestFingerprint(t *testing.T) {
+	home := shortTempDir(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	s, _ := ssh.NewSignerFromKey(priv)
+	block, _ := ssh.MarshalPrivateKey(priv, "explicit")
+	keyPath := filepath.Join(home, "explicit_ed25519")
+	os.WriteFile(keyPath, pem.EncodeToMemory(block), 0o600)
+
+	// The manifest names a fingerprint that matches nothing on disk:
+	// --key must still work, bypassing guest.ChooseKey entirely.
+	writeKeyedImage(t, home, "img", s)
+	os.WriteFile(filepath.Join(home, "images", "img.manifest"), []byte(
+		"name\timg\nopenssh\t10.5p1-mavericks.2\nsshkey\tSHA256:doesnotmatchanything\n"), 0o644)
+	startLiveRun(t, home, "img", s, guesttest.Options{})
+
+	code, out, errs := sshVmavs(t, home, "--key", keyPath, "--", "sw_vers")
+	if code != 0 || out != "ran: sw_vers\n" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errs)
+	}
+}
+
+func TestSSHNamesTheRunningGuestsWhenImageDoesNotMatch(t *testing.T) {
+	home := guestHome(t)
+	_, _, errs := sshVmavs(t, home, "--image", "nope", "--", "true")
+	if !strings.Contains(errs, "img") {
+		t.Fatalf("err=%q, want it to name the running guest(s)", errs)
+	}
+}
+
+func TestSSHRefusesAnUnreachablePortWithTheBootingHint(t *testing.T) {
+	home := shortTempDir(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	s, _ := ssh.NewSignerFromKey(priv)
+	writeKeyedImage(t, home, "img", s)
+	block, _ := ssh.MarshalPrivateKey(priv, "explicit")
+	keyPath := filepath.Join(home, "explicit_ed25519")
+	os.WriteFile(keyPath, pem.EncodeToMemory(block), 0o600)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close() // now refused: nothing listens there any more
+
+	code, _, errs := sshVmavs(t, home, "--port", strconv.Itoa(port), "--key", keyPath, "--", "true")
+	if code != 1 || !strings.Contains(errs, "isn't answering SSH yet") {
 		t.Fatalf("code=%d err=%q", code, errs)
 	}
 }

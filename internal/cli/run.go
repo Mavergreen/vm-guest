@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/manifest"
@@ -39,6 +41,7 @@ func cmdRun(ctx context.Context, e *Env, args []string) error {
 	if err != nil {
 		return err
 	}
+	reap(e, "run", p)
 	m, err := chooseImage(e, p, *name)
 	if err != nil {
 		return err
@@ -50,17 +53,24 @@ func cmdRun(ctx context.Context, e *Env, args []string) error {
 	if err := hw.Validate(); err != nil {
 		return usagef("%v", err)
 	}
+	if err := portFree(hw.SSHPort); err != nil {
+		return err
+	}
 	pid := e.PID
 	if pid == 0 {
 		pid = os.Getpid()
 	}
 	r := runner(e)
-	run, err := vm.Prepare(ctx, r, p, m, hw, config.QEMU(e.Getenv), pid)
+	run, err := vm.Prepare(ctx, r, p, m, hw, config.QEMU(e.Getenv), pid, *keep)
 	if err != nil {
 		return err
 	}
 	if !*keep {
-		defer run.Remove()
+		defer func() {
+			if err := run.Remove(); err != nil {
+				logf(e, "run", "cleanup: %v", err)
+			}
+		}()
 	}
 	logf(e, "run", "booting %s (%s, %d MiB, %s); ssh on localhost:%d", m.Name, hw.CPU, hw.MemoryMB, hw.NIC, hw.SSHPort)
 	err = run.Boot(ctx, r, e.Stdin, e.Stdout, e.Stderr)
@@ -74,6 +84,30 @@ func cmdRun(ctx context.Context, e *Env, args []string) error {
 func paths(e *Env) (config.Paths, error) {
 	h, err := config.Home(e.Getenv)
 	return config.Paths{Home: h}, err
+}
+
+// reap removes stale run directories before doing anything else with
+// run/, and logs each one it removed. It is best-effort: a failure here
+// (an unreadable run/, say) does not stop the subcommand.
+func reap(e *Env, cmd string, p config.Paths) {
+	removed, err := vm.Reap(p)
+	if err != nil {
+		return
+	}
+	for _, dir := range removed {
+		logf(e, cmd, "removed stale run directory %s", dir)
+	}
+}
+
+// portFree reports an error naming port if something is already
+// listening on it: two runs racing for the same forwarded port otherwise
+// fail with whatever confusing thing QEMU's hostfwd does instead.
+func portFree(port int) error {
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return fmt.Errorf("port %d is in use (another vmavs run?); pick another with --ssh-port", port)
+	}
+	return ln.Close()
 }
 
 // chooseImage is the named image, or the most recently built one. With

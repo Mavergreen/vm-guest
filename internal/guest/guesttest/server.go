@@ -106,6 +106,17 @@ func handleSession(ch ssh.Channel, in <-chan *ssh.Request, o Options) {
 			var p struct{ Command string }
 			ssh.Unmarshal(req.Payload, &p)
 			req.Reply(true, nil)
+			if p.Command == "hang" {
+				// Stands in for a command that never returns: sends no
+				// output and no exit-status, so the loop below just
+				// keeps waiting on `in` -- which only closes once the
+				// client tears the whole channel down (guest.Exec does
+				// this itself when its ctx is cancelled). A client-side
+				// half-close (stdin EOF, sent even for a nil Stdin)
+				// must not end this early, which is why this blocks on
+				// the request channel rather than on reading ch.
+				continue
+			}
 			fmt.Fprintf(ch, "ran: %s\n", p.Command)
 			code := uint32(0)
 			if p.Command == "fail" {
