@@ -103,6 +103,14 @@ var EFIDrivers = []string{"OpenRuntime.efi", "OpenPartitionDxe.efi", "OpenHfsPlu
 // own search path.
 var Headers = []string{"uuid/uuid.h"}
 
+// Tools is every external program the firmware builds run, for doctor:
+// gcc is the Toolchain's GCC() (GCC_BIN-prefixed). bash runs edksetup.sh,
+// build_oc.tool and efibuild.sh; git and zip are efibuild.sh's own
+// requirements; nasm and iasl are OvmfPkg's.
+func Tools(gcc string) []string {
+	return []string{"bash", "make", gcc, "git", "python3", "nasm", "iasl", "zip"}
+}
+
 // A Pin is one registry source the OpenCore build needs and the commit
 // its URL must name.
 type Pin struct{ Source, Commit string }

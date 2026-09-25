@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -101,6 +103,79 @@ func TestDoctorExitsZeroOnGO(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "vmavs doctor: GO") {
 		t.Fatalf("stderr=%s", stderr)
+	}
+}
+
+// TestDoctorHeaderProbeAsksTheCompiler: the real Host.Header runs
+// `<gcc> -fsyntax-only -x c -` through the Runner, feeding it a one-line
+// #include of the name asked about, the same probe firmware's own build
+// runs before doing anything else.
+func TestDoctorHeaderProbeAsksTheCompiler(t *testing.T) {
+	fake := &proc.Fake{Paths: map[string]string{"gcc": "/usr/bin/gcc"}, Handle: func(c proc.Cmd) error {
+		if c.Name != "gcc" || !reflectDeepEqualArgs(c.Args, []string{"-fsyntax-only", "-x", "c", "-"}) {
+			t.Fatalf("unexpected command: %+v", c)
+		}
+		src, _ := io.ReadAll(c.Stdin)
+		if !strings.Contains(string(src), "#include <good/h.h>") && !strings.Contains(string(src), "#include <bad/h.h>") {
+			t.Fatalf("stdin = %q, want an #include of the header asked about", src)
+		}
+		if strings.Contains(string(src), "bad/h.h") {
+			return &proc.ExitError{Cmd: c.String(), Code: 1}
+		}
+		return nil
+	}}
+	probe := doctorHeader(context.Background(), fake, "gcc")
+	if !probe("good/h.h") {
+		t.Fatalf("probe(good/h.h) = false, want true")
+	}
+	if probe("bad/h.h") {
+		t.Fatalf("probe(bad/h.h) = true, want false")
+	}
+}
+
+// TestDoctorHeaderProbeCannotTellWithNoCompiler: with no gcc on PATH the
+// probe says true -- the missing compiler is already its own row, and
+// "cannot tell" is not "missing".
+func TestDoctorHeaderProbeCannotTellWithNoCompiler(t *testing.T) {
+	fake := &proc.Fake{Handle: func(proc.Cmd) error { t.Fatal("ran a command though gcc is not on PATH"); return nil }}
+	probe := doctorHeader(context.Background(), fake, "gcc")
+	if !probe("uuid/uuid.h") {
+		t.Fatalf("probe with no gcc = false, want true (cannot tell)")
+	}
+}
+
+func reflectDeepEqualArgs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestDoctorSubcommandOrderIsFetchFirmwareRunSSHEmit: the SUBCOMMAND
+// table lists firmware right after fetch, before run.
+func TestDoctorSubcommandOrderIsFetchFirmwareRunSSHEmit(t *testing.T) {
+	home := t.TempDir()
+	host := fakeHost(goodCPUInfo, "Y", true, "qemu-system-x86_64", "qemu-img")
+	_, stdout, _ := runDoctor(t, host, map[string]string{"VMAVS_HOME": home})
+	var order []string
+	for _, line := range strings.Split(stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		switch fields[1] {
+		case "fetch", "firmware", "run", "ssh", "emit":
+			order = append(order, fields[1])
+		}
+	}
+	want := []string{"fetch", "firmware", "run", "ssh", "emit"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("subcommand order = %v, want %v", order, want)
 	}
 }
 

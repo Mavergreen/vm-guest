@@ -63,17 +63,30 @@ A Go rewrite of `vmavs` is underway, one subcommand at a time
 go build -o out/vmavs ./cmd/vmavs
 ```
 
-So far it has `fetch`, `run`, `ssh`, `emit packer`, `doctor` and `version`
--- the subcommands that fetch and verify Apple's installer, its
-post-10.9.5 updates, the guest's OpenSSH and the firmware's pinned
+So far it has `fetch`, `firmware`, `run`, `ssh`, `emit packer`, `doctor`
+and `version` -- the subcommands that fetch and verify Apple's installer,
+its post-10.9.5 updates, the guest's OpenSSH and the firmware's pinned
 sources (`fetch firmware`: OpenCorePkg, ocbuild's efibuild.sh, EDK II and
-its submodules, and the Lilu and VirtualSMC kext releases), boot a guest,
-reach it over SSH and report on the host, not the ones that build an
-image. `fetch` adopts the shell tree's own downloads (verified, never
-moved or deleted) when they are already there -- including its `build/`
-directory, where the firmware's downloads live -- so switching to the Go
-binary does not mean downloading Apple's 5 GB installer again. Point it
-at an image the shell pipeline already built:
+its submodules, and the Lilu and VirtualSMC kext releases), build what
+the guest boots before its kernel, boot a guest, reach it over SSH and
+report on the host, not the ones that build an image. `fetch` adopts the
+shell tree's own downloads (verified, never moved or deleted) when they
+are already there -- including its `build/` directory, where the
+firmware's downloads live -- so switching to the Go binary does not mean
+downloading Apple's 5 GB installer again.
+
+`vmavs firmware [opencore|ovmf|efi ...]` builds, from those pinned
+sources: `opencore` is OpenCore itself, built with upstream's
+`build_oc.tool` against acidanthera's EDK II; `ovmf` is the guest's UEFI
+firmware, from that same EDK II tree; `efi` is the OpenCore EFI image --
+the artifacts, the Lilu and VirtualSMC kexts and `config.plist` on a
+FAT32 EFI System Partition. It needs `bash`, `make`, a C compiler, `git`,
+`python3`, `nasm`, `iasl` and `zip` on `PATH`, and the `uuid/uuid.h` C
+header; `vmavs doctor` reports any of those that are missing. It needs
+neither `sgdisk` nor mtools: the GPT and FAT32 images are written in Go
+(`internal/diskimg`).
+
+Point `run` at an image the shell pipeline already built:
 
 ```sh
 export VMAVS_HOME="$HOME/.local/share/mavericks-qemu-guest"

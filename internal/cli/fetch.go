@@ -207,32 +207,12 @@ func parseFetchArgs(fs *flag.FlagSet, e *Env, help string, args []string) ([]str
 }
 
 // fetchTargets validates args against fetchOrder and returns the
-// requested targets in canonical order (esd, openssh, updates),
-// regardless of the order they were named in. No args means all three.
-//
-// A repeated target (e.g. "esd esd") is deduplicated, not an error:
-// naming the same target twice is redundant, not contradictory (unlike,
-// say, two different --updates values would be), and each target already
-// runs at most once regardless of how many times it appears -- there is
-// nothing here worth stopping the user over.
+// requested targets in canonical order (esd, openssh, updates, firmware),
+// regardless of the order they were named in. No args means all four.
+// orderedTargets (cli.go) does the same thing for "vmavs firmware"; this
+// is that shared helper, named for fetch's own messages.
 func fetchTargets(args []string) ([]string, error) {
-	if len(args) == 0 {
-		return fetchOrder, nil
-	}
-	want := map[string]bool{}
-	for _, a := range args {
-		if !slices.Contains(fetchOrder, a) {
-			return nil, usagef("unknown fetch target %q: choose from %s", a, strings.Join(fetchOrder, ", "))
-		}
-		want[a] = true
-	}
-	var out []string
-	for _, t := range fetchOrder {
-		if want[t] {
-			out = append(out, t)
-		}
-	}
-	return out, nil
+	return orderedTargets("fetch", args, fetchOrder)
 }
 
 // endpoints is e.Endpoints with every empty field filled with the real

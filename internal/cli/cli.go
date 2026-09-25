@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
 	"github.com/Mavergreen/vm-guest/internal/doctor"
@@ -68,6 +70,7 @@ func commandTable() []command {
 	return []command{
 		{"doctor", "What this host can do, subcommand by subcommand", cmdDoctor},
 		{"fetch", "Fetch and verify the pinned inputs (Apple's installer, updates, OpenSSH)", cmdFetch},
+		{"firmware", "Build OpenCore, OVMF and the OpenCore EFI image from pinned source", cmdFirmware},
 		{"run", "Boot a built image on a throwaway overlay", cmdRun},
 		{"ssh", "Open a shell in the running guest", cmdSSH},
 		{"emit", "Write a Packer template for this machine", cmdEmit},
@@ -192,15 +195,41 @@ func runner(e *Env) proc.Runner {
 	return proc.Exec{}
 }
 
-// environ is e.Environ(), or os.Environ(). Unused until the firmware
-// builds (phase 3's later tasks) hand it to proc.Cmd.Env.
-//
-//lint:ignore U1000 groundwork for the firmware builds, not yet called
+// environ is e.Environ(), or os.Environ(): what the firmware builds hand
+// their external tools as the whole environment (proc.Cmd.Env).
 func environ(e *Env) []string {
 	if e.Environ != nil {
 		return e.Environ()
 	}
 	return os.Environ()
+}
+
+// orderedTargets validates args against order and returns the requested
+// targets, deduplicated, in order's own order regardless of the order
+// they were named in: every one of order when args is empty (spec §2:
+// "all of" them), an error otherwise naming cmd and every choice.
+//
+// A repeated target ("esd esd") is not an error: naming the same target
+// twice is redundant, not contradictory, and each target already runs at
+// most once regardless of how many times it appears.
+func orderedTargets(cmd string, args, order []string) ([]string, error) {
+	if len(args) == 0 {
+		return order, nil
+	}
+	want := map[string]bool{}
+	for _, a := range args {
+		if !slices.Contains(order, a) {
+			return nil, usagef("unknown %s target %q; choose from %s", cmd, a, strings.Join(order, ", "))
+		}
+		want[a] = true
+	}
+	var out []string
+	for _, t := range order {
+		if want[t] {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 // logf writes one "vmavs <cmd>: ..." line to stderr.

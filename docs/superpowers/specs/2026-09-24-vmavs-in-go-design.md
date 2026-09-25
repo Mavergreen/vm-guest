@@ -49,8 +49,8 @@ app:
 
 ```
 vmavs doctor                          can this host do it, per subcommand
-vmavs fetch    [esd|openssh|updates] [--updates …] [--probe]   fetch pinned inputs (default: all of them)
-vmavs firmware                        OpenCore + OVMF + the EFI image, from pinned source
+vmavs fetch    [esd|openssh|updates|firmware] [--updates …] [--probe]   fetch pinned inputs (default: all of them)
+vmavs firmware [opencore|ovmf|efi ...] [--smbios MODEL] [--ccache] [--compiler 'NAME VERSION']   OpenCore, OVMF and the EFI image, from pinned source
 vmavs media                           installer media
 vmavs install                         target disk + unattended install
 vmavs image    [--describe] [--freshness] [--stage a,b,…]   the whole chain
@@ -95,7 +95,10 @@ Changes from the shell `vmavs`:
   - `VMAVS_QEMU`, the QEMU binary;
   - `VMAVS_SSH_KEY`.
 
-  The `MQG_*` names are not carried over.
+  The `MQG_*` names are not carried over: `MQG_SMBIOS`, `MQG_CCACHE` and
+  `MQG_COMPILER` became `vmavs firmware`'s `--smbios`, `--ccache` and
+  `--compiler` flags, and `GCC_BIN`, EDK II's own variable rather than
+  this project's, is still honoured.
 
 ## 3. Repository layout
 
@@ -158,11 +161,16 @@ plus a small subcommand table is enough.
 **External tools that remain:**
 
 - `qemu-system-x86_64` and `qemu-img`;
-- the EDK II toolchain (`make`, a C compiler, `nasm`, `iasl`, `python3` for
-  EDK II's own build scripts);
+- the EDK II toolchain: `make`, a C compiler, `nasm`, `iasl` and
+  `python3` for EDK II's own build scripts, and `bash`, `git` and `zip`,
+  which upstream's `build_oc.tool`, `efibuild.sh` and `edksetup.sh`
+  require. Patches are applied with `git apply`.
 - `mkfs.hfsplus` and `dmg2img`, until HFS+ and DMG reading are
   reconsidered;
 - `7z`, only for media verification.
+
+`sgdisk`, mtools, `tar`, `unzip` and `curl` are no longer needed by the Go
+path (`internal/diskimg`, `internal/firmware`, `internal/fetch`).
 
 `doctor` reports exactly this list, derived from the code that calls
 these tools.
@@ -234,7 +242,11 @@ the legacy algorithms that version needs. Today's `ssh_opts()` in
 
 ```
 images/   <name>.qcow2 and <name>.manifest — read-only once built
-build/    firmware outputs, the OpenCore/EDK II trees, kexts, ccache
+build/    firmware outputs, the OpenCore/EDK II trees, kexts, ccache,
+          and the OpenCore EFI image (opencore.img) — `firmware` names
+          everything under here, in the shell tree's own layout, so a
+          build either implementation started can be finished by the
+          other
 cache/    downloaded inputs, keyed by sha256: cache/<sha256>/<name>; an
           OpenSSH release's own SHA256SUMS sits next to them, at
           cache/openssh/<tag>/SHA256SUMS

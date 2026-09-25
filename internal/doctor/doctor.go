@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
+	"github.com/Mavergreen/vm-guest/internal/firmware"
 	"github.com/Mavergreen/vm-guest/internal/manifest"
 )
 
@@ -19,6 +20,12 @@ type Host struct {
 	Exists   func(string) bool
 	Writable func(string) bool
 	LookPath func(string) (string, error)
+	// GCCBin is EDK II's own GCC_BIN: the prefix on the compiler's name
+	// (DEF(GCC_X64_PREFIX)), usually empty.
+	GCCBin string
+	// Header says whether a C header compiles against this host's search
+	// path. nil means "not checked": no header goes missing because of it.
+	Header func(name string) bool
 }
 
 type Row struct{ Status, Check, Detail string }
@@ -97,6 +104,22 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 	// adopted instead -- is not something doctor can check in advance.
 	fetch := Readiness{Subcommand: "fetch",
 		Notes: []string{"needs the network, unless the shell tree's downloads can be adopted"}}
+
+	fw := Readiness{Subcommand: "firmware",
+		Notes: []string{"the compiler's range is checked when the build starts (vmavs firmware)"}}
+	for _, t := range firmware.Tools(h.GCCBin + "gcc") {
+		if _, err := h.LookPath(t); err != nil {
+			fw.Missing = append(fw.Missing, t)
+		}
+	}
+	if h.Header != nil {
+		for _, hdr := range firmware.Headers {
+			if !h.Header(hdr) {
+				fw.Missing = append(fw.Missing, hdr+" (a C header: the uuid development package)")
+			}
+		}
+	}
+
 	run := Readiness{Subcommand: "run"}
 	for _, t := range []string{qemu, "qemu-img"} {
 		if _, err := h.LookPath(t); err != nil {
@@ -106,16 +129,19 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 	if ms, _ := manifest.List(p.Images()); len(ms) == 0 {
 		run.Missing = append(run.Missing, "a built image -- bin/vmavs image (until it is ported)")
 	}
-	for _, f := range []string{p.OVMFCode(), p.OVMFVarsTemplate(), p.OpenCoreImage()} {
+	for _, f := range []string{p.OVMFCode(), p.OVMFVarsTemplate()} {
 		if !h.Exists(f) {
-			run.Missing = append(run.Missing, f)
+			run.Missing = append(run.Missing, f+" -- vmavs firmware ovmf")
 		}
+	}
+	if !h.Exists(p.OpenCoreImage()) {
+		run.Missing = append(run.Missing, p.OpenCoreImage()+" -- vmavs firmware efi")
 	}
 	emit := Readiness{Subcommand: "emit"}
 	if _, err := h.LookPath("packer"); err != nil {
 		emit.Notes = append(emit.Notes, "--check needs packer on PATH")
 	}
-	return []Readiness{fetch, run, {Subcommand: "ssh"}, emit}
+	return []Readiness{fetch, fw, run, {Subcommand: "ssh"}, emit}
 }
 
 func Verdict(host []Row, subs []Readiness) (bool, string) {

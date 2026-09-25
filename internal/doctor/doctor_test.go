@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Mavergreen/vm-guest/internal/config"
+	"github.com/Mavergreen/vm-guest/internal/firmware"
 )
 
 func linux(cpuinfo, msrs string, kvmWritable bool, tools ...string) Host {
@@ -147,5 +148,91 @@ func TestVerdictIsNoGoOnAHostFailure(t *testing.T) {
 	ok, line := Verdict([]Row{{"FAIL", "kvm-device", "x"}}, []Readiness{{Subcommand: "run"}})
 	if ok || !strings.HasPrefix(line, "NO-GO") {
 		t.Fatalf("ok=%v %s", ok, line)
+	}
+}
+
+// firmwareRow is the "firmware" Readiness among subs.
+func firmwareRow(subs []Readiness) Readiness {
+	for _, s := range subs {
+		if s.Subcommand == "firmware" {
+			return s
+		}
+	}
+	return Readiness{}
+}
+
+func TestDoctorFirmwareRow(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	h := linux(intel, "Y", true, firmware.Tools("gcc")...)
+	h.Header = func(string) bool { return true }
+	fw := firmwareRow(Subcommands(h, p, "qemu-system-x86_64"))
+	if !fw.Ready() {
+		t.Fatalf("firmware row missing %v, want READY with every tool present and Header true", fw.Missing)
+	}
+
+	tools := firmware.Tools("gcc")
+	var have []string
+	for _, tl := range tools {
+		if tl != "nasm" && tl != "zip" {
+			have = append(have, tl)
+		}
+	}
+	h = linux(intel, "Y", true, have...)
+	h.Header = func(string) bool { return false }
+	fw = firmwareRow(Subcommands(h, p, "qemu-system-x86_64"))
+	want := "nasm, zip, uuid/uuid.h (a C header: the uuid development package)"
+	if got := strings.Join(fw.Missing, ", "); got != want {
+		t.Fatalf("firmware.Missing = %q, want %q", got, want)
+	}
+}
+
+func TestDoctorFirmwareHonoursGCCBin(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	h := linux(intel, "Y", true, "bash", "make", "x86_64-elf-gcc", "git", "python3", "nasm", "iasl", "zip")
+	h.GCCBin = "x86_64-elf-"
+	h.Header = func(string) bool { return true }
+	fw := firmwareRow(Subcommands(h, p, "qemu-system-x86_64"))
+	if !fw.Ready() {
+		t.Fatalf("firmware row missing %v, want READY: GCCBin should make it look up x86_64-elf-gcc, not gcc", fw.Missing)
+	}
+}
+
+// TestRunNamesTheFirmwareCommandThatBuildsWhatItIsMissing: run's missing
+// OVMF files point at "vmavs firmware ovmf" and its missing OpenCore
+// image points at "vmavs firmware efi" -- each path first, so the
+// existing substring checks on the bare path still hold.
+func TestRunNamesTheFirmwareCommandThatBuildsWhatItIsMissing(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	subs := Subcommands(linux(intel, "Y", true, "qemu-system-x86_64", "qemu-img"), p, "qemu-system-x86_64")
+	var run Readiness
+	for _, s := range subs {
+		if s.Subcommand == "run" {
+			run = s
+		}
+	}
+	missing := strings.Join(run.Missing, "; ")
+	for _, want := range []string{
+		p.OVMFCode() + " -- vmavs firmware ovmf",
+		p.OVMFVarsTemplate() + " -- vmavs firmware ovmf",
+		p.OpenCoreImage() + " -- vmavs firmware efi",
+	} {
+		if !strings.Contains(missing, want) {
+			t.Errorf("run's missing list %q lacks %q", missing, want)
+		}
+	}
+}
+
+// TestDoctorOrderIsFetchFirmwareRunSSHEmit: the printed order, and the
+// order GO/NO-GO's "ready:" list draws from.
+func TestDoctorOrderIsFetchFirmwareRunSSHEmit(t *testing.T) {
+	p := config.Paths{Home: t.TempDir()}
+	subs := Subcommands(linux(intel, "Y", true), p, "qemu-system-x86_64")
+	var got []string
+	for _, s := range subs {
+		got = append(got, s.Subcommand)
+	}
+	want := []string{"fetch", "firmware", "run", "ssh", "emit"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Subcommands order = %v, want %v", got, want)
 	}
 }
