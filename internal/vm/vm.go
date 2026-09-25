@@ -100,13 +100,13 @@ func Prepare(ctx context.Context, r proc.Runner, p config.Paths, m manifest.Mani
 	}
 	spec := machine.ForRun(hw, fw, nvram, overlay, monitor)
 	spec.QEMU = qemu
+	// Create, lock, then write: a state file that exists but is not yet
+	// lockable (this window used to exist between WriteFile and Flock)
+	// would let a concurrent Reap or Live either delete a brand new run
+	// or misjudge it. O_EXCL also makes MkdirTemp's uniqueness redundant
+	// insurance -- two Prepares can never share a state file.
 	statePath := filepath.Join(dir, "state")
-	state := fmt.Sprintf("image\t%s\nport\t%d\npid\t%d\nkeep\t%t\n", m.Name, hw.SSHPort, pid, keep)
-	if err := os.WriteFile(statePath, []byte(state), 0o644); err != nil {
-		os.RemoveAll(dir)
-		return nil, err
-	}
-	sf, err := os.OpenFile(statePath, os.O_RDWR, 0o644)
+	sf, err := os.OpenFile(statePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 	if err != nil {
 		os.RemoveAll(dir)
 		return nil, err
@@ -116,12 +116,26 @@ func Prepare(ctx context.Context, r proc.Runner, p config.Paths, m manifest.Mani
 		os.RemoveAll(dir)
 		return nil, fmt.Errorf("%s: locking the state file: %w", statePath, err)
 	}
+	state := fmt.Sprintf("image\t%s\nport\t%d\npid\t%d\nkeep\t%t\n", m.Name, hw.SSHPort, pid, keep)
+	if _, err := sf.WriteString(state); err != nil {
+		sf.Close()
+		os.RemoveAll(dir)
+		return nil, err
+	}
 	return &Run{Dir: dir, Image: m, Spec: spec, state: sf}, nil
 }
 
+// Boot hands QEMU the run's own locked state file as an inherited fd (fd
+// 3 onward, os/exec's ExtraFiles convention): the flock is then held by
+// QEMU's copy of the open file description too, so it survives vmavs
+// being killed outright (a SIGKILL it cannot catch to release the lock
+// itself) for as long as QEMU keeps running.
 func (r *Run) Boot(ctx context.Context, run proc.Runner, stdin io.Reader, stdout, stderr io.Writer) error {
 	c := r.Spec.Command()
 	c.Stdin, c.Stdout, c.Stderr = stdin, stdout, stderr
+	if r.state != nil {
+		c.ExtraFiles = []*os.File{r.state}
+	}
 	return run.Run(ctx, c)
 }
 
@@ -144,7 +158,11 @@ func (r *Run) Remove() error {
 }
 
 // Live is every run directory whose state file's lock is still held: a
-// process (not necessarily this one) is still using it.
+// process (not necessarily this one) is still using it. The lock is
+// checked before the content is read: Prepare takes the lock before
+// writing the state (see the comment there), so a state file that exists
+// but cannot yet be parsed, in the narrow window before that write lands,
+// is still a live run -- just not one Live can describe yet.
 func Live(p config.Paths) ([]State, error) {
 	states, err := filepath.Glob(filepath.Join(p.Run(), "*", "state"))
 	if err != nil {
@@ -152,12 +170,12 @@ func Live(p config.Paths) ([]State, error) {
 	}
 	var out []State
 	for _, f := range states {
-		s, err := readState(f)
-		if err != nil {
-			continue
-		}
 		held, err := locked(f)
 		if err != nil || !held {
+			continue
+		}
+		s, err := readState(f)
+		if err != nil {
 			continue
 		}
 		out = append(out, s)
@@ -171,8 +189,14 @@ func Live(p config.Paths) ([]State, error) {
 const reapStaleAge = time.Minute
 
 // Reap deletes every dead run directory that is not meant to be kept:
-// its state says keep=false, or it has no state file yet and is older
-// than reapStaleAge. It returns the directories it removed.
+// its state says keep=false, or it has no state file yet (or one that
+// cannot be parsed) and is older than reapStaleAge. The lock is always
+// checked first, before anything about the state file's content is
+// judged: Prepare takes the lock before writing the state (see the
+// comment there), so a directory whose state file exists but is still
+// empty is exactly as live as one whose state is fully written -- Reap
+// must not delete a run out from under a Prepare that has not finished
+// yet. It returns the directories it removed.
 func Reap(p config.Paths) ([]string, error) {
 	entries, err := os.ReadDir(p.Run())
 	if err != nil {
@@ -188,6 +212,9 @@ func Reap(p config.Paths) ([]string, error) {
 		}
 		dir := filepath.Join(p.Run(), entry.Name())
 		statePath := filepath.Join(dir, "state")
+		if held, err := locked(statePath); err == nil && held {
+			continue
+		}
 		s, err := readState(statePath)
 		if err != nil {
 			info, statErr := os.Stat(dir)
@@ -198,8 +225,7 @@ func Reap(p config.Paths) ([]string, error) {
 			}
 			continue
 		}
-		held, err := locked(statePath)
-		if err != nil || held || s.Keep {
+		if s.Keep {
 			continue
 		}
 		if err := os.RemoveAll(dir); err == nil {

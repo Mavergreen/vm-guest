@@ -2,10 +2,12 @@ package vm
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -191,5 +193,61 @@ func TestReapRemovesDeadNonKeepRunsAndKeepsTheRest(t *testing.T) {
 	}
 	if _, err := os.Stat(live.Dir); err != nil {
 		t.Fatal("a live run's directory must survive Reap")
+	}
+}
+
+// TestReapDoesNotRemoveALockedButEmptyStateFile guards the window Prepare
+// now closes by locking before writing: a state file that exists but has
+// not been written to yet is still a live run (locked), not an abandoned
+// one, and Reap must not delete it out from under the Prepare that is
+// still running.
+func TestReapDoesNotRemoveALockedButEmptyStateFile(t *testing.T) {
+	p, _ := home(t)
+	if err := os.MkdirAll(p.Run(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(p.Run(), "img-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "state")
+	sf, err := os.OpenFile(statePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sf.Close()
+	if err := syscall.Flock(int(sf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := Reap(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(removed, dir) {
+		t.Fatalf("removed a locked-but-empty (mid-Prepare) run: %v", removed)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal("a locked-but-empty run directory must survive Reap")
+	}
+}
+
+// TestBootHandsQEMUTheLockedStateFile guards against a SIGKILLed vmavs
+// releasing the lock while QEMU keeps running: Boot must pass the state
+// file through as an inherited fd, so QEMU's own copy of the open file
+// description keeps the flock held even once vmavs's is gone.
+func TestBootHandsQEMUTheLockedStateFile(t *testing.T) {
+	p, m := home(t)
+	r, err := Prepare(context.Background(), &proc.Fake{}, p, m, m.Hardware(), "q", 4242, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Remove()
+	f := &proc.Fake{}
+	if err := r.Boot(context.Background(), f, nil, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Calls) != 1 || len(f.Calls[0].ExtraFiles) != 1 {
+		t.Fatalf("calls=%+v, want the state file passed through ExtraFiles", f.Calls)
 	}
 }

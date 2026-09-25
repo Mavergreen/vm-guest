@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -20,6 +21,12 @@ type Cmd struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+	// ExtraFiles are inherited by the child starting at fd 3, the way
+	// os/exec.Cmd.ExtraFiles works. vm.Run.Boot uses this to hand QEMU
+	// the run's own locked state file: an inherited fd keeps the flock
+	// held for as long as QEMU runs, even if vmavs itself is killed
+	// before it can release it deliberately.
+	ExtraFiles []*os.File
 }
 
 // String is the command as a shell would need it typed, for logs and
@@ -60,6 +67,7 @@ type Exec struct{ GracePeriod time.Duration }
 func (x Exec) Run(ctx context.Context, c Cmd) error {
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = c.Dir, c.Stdin, c.Stdout, c.Stderr
+	cmd.ExtraFiles = c.ExtraFiles
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = x.GracePeriod
 	if cmd.WaitDelay == 0 {
