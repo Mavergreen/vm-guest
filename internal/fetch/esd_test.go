@@ -7,7 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Mavergreen/vm-guest/internal/pins"
@@ -91,10 +94,69 @@ func TestAnAdoptedInstallerNeedsNoHandshake(t *testing.T) {
 	if err := writeAtomic(old, asset); err != nil {
 		t.Fatal(err)
 	}
+	g := getter(t)
 	// An unreachable recovery server proves no handshake happened.
-	p, err := getter(t).InstallESD(context.Background(), reg, Recovery{Base: "http://127.0.0.1:1"}, []string{old})
+	p, err := g.InstallESD(context.Background(), reg, Recovery{Base: "http://127.0.0.1:1"}, []string{old})
 	if err != nil || p == "" {
 		t.Fatalf("%q %v", p, err)
+	}
+	src, err := reg.Lookup(ESDSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn, err := Filename(src.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := g.Paths.CacheFile(src.SHA256, fn); p != want {
+		t.Fatalf("p = %q, want the cache path %q", p, want)
+	}
+	if b, err := os.ReadFile(p); err != nil || string(b) != string(asset) {
+		t.Fatalf("adopted content = %q, %v", b, err)
+	}
+	// The original may share an inode with the cache copy: it must be
+	// untouched, not just "still present".
+	if b, err := os.ReadFile(old); err != nil || string(b) != string(asset) {
+		t.Fatalf("adoption disturbed the original: %q, %v", b, err)
+	}
+}
+
+// TestInstallESDWithARottenCacheNeverHandshakes: a rotten cached file
+// must be an error before any network call to osrecovery, not a reason to
+// re-handshake and re-download 5 GB.
+func TestInstallESDWithARottenCacheNeverHandshakes(t *testing.T) {
+	asset := []byte("good bytes")
+	_, reg := fakeApple(t, asset)
+	var contacted atomic.Bool
+	recovery := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contacted.Store(true)
+		w.WriteHeader(500)
+	}))
+	defer recovery.Close()
+
+	g := getter(t)
+	src, err := reg.Lookup(ESDSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn, err := Filename(src.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := g.Paths.CacheFile(src.SHA256, fn)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest, []byte("rotted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = g.InstallESD(context.Background(), reg, Recovery{Base: recovery.URL}, nil)
+	if err == nil || !strings.Contains(err.Error(), dest) {
+		t.Fatalf("err = %v, want it to name %s", err, dest)
+	}
+	if contacted.Load() {
+		t.Fatal("a rotten cache entry must not trigger a handshake")
 	}
 }
 

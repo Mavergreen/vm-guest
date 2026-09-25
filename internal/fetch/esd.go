@@ -82,12 +82,18 @@ func (rc Recovery) Handshake(ctx context.Context) (assetURL, token string, err e
 	}
 	clientID := strings.ToUpper(hex.EncodeToString(cid))
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rc.base()+"/", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rc.base()+"/", nil)
+	if err != nil {
+		return "", "", err
+	}
 	resp, err := rc.client().Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("cannot reach osrecovery for a session id: %w", err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("osrecovery refused the session request: %s", resp.Status)
+	}
 	serverID := ""
 	for _, c := range resp.Cookies() {
 		serverID = c.Value // the shell took the jar's last cookie; prefer "session"
@@ -100,7 +106,10 @@ func (rc Recovery) Handshake(ctx context.Context) (assetURL, token string, err e
 		return "", "", err
 	}
 	body := fmt.Sprintf("cid=%s\nsn=%s\nbid=%s\nk=%s", clientID, boardSerial, boardID, key)
-	req, _ = http.NewRequestWithContext(ctx, http.MethodPost, rc.base()+"/InstallationPayload/OSInstaller", strings.NewReader(body))
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, rc.base()+"/InstallationPayload/OSInstaller", strings.NewReader(body))
+	if err != nil {
+		return "", "", err
+	}
 	req.Header.Set("Content-Type", "text/plain")
 	req.AddCookie(&http.Cookie{Name: "session", Value: serverID})
 	resp, err = rc.client().Do(req)
@@ -119,6 +128,9 @@ func (rc Recovery) Handshake(ctx context.Context) (assetURL, token string, err e
 		if v, ok := strings.CutPrefix(sc.Text(), "AT: "); ok {
 			token = v
 		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", "", fmt.Errorf("reading Apple's installation payload: %w", err)
 	}
 	if assetURL == "" || token == "" {
 		return "", "", fmt.Errorf("apple's installation payload had no asset URL or token")
@@ -162,7 +174,7 @@ func (g *Getter) InstallESD(ctx context.Context, reg *pins.Registry, rc Recovery
 		return p, nil
 	}
 	if !errors.Is(err, errNotCached) {
-		return "", err
+		return "", withNothingRenamed(err)
 	}
 	_, token, err := rc.offer(ctx, reg)
 	if err != nil {
@@ -171,7 +183,25 @@ func (g *Getter) InstallESD(ctx context.Context, reg *pins.Registry, rc Recovery
 	h := http.Header{}
 	h.Set("Cookie", "AssetToken="+token)
 	g.logf("downloading InstallESD.dmg (about 5.2 GB, over plain HTTP)")
-	return g.Get(ctx, Item{Name: ESDSource, URL: src.URL, SHA256: src.SHA256, Filename: fn, Header: h})
+	p, err = g.Get(ctx, Item{Name: ESDSource, URL: src.URL, SHA256: src.SHA256, Filename: fn, Header: h})
+	if err != nil {
+		return "", withNothingRenamed(err)
+	}
+	return p, nil
+}
+
+// withNothingRenamed makes an error from a download explicit about the
+// invariant Get already guarantees: nothing unverified is ever renamed to
+// its final name. 5.2 GB failing partway through is exactly when that
+// reassurance matters most.
+func withNothingRenamed(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "nothing was renamed into place") {
+		return err
+	}
+	return fmt.Errorf("%w (nothing was renamed into place)", err)
 }
 
 // Probe performs the handshake and asks the CDN for the size, downloading
@@ -181,7 +211,10 @@ func (rc Recovery) Probe(ctx context.Context, reg *pins.Registry, c *http.Client
 	if err != nil {
 		return "", 0, err
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodHead, src.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, src.URL, nil)
+	if err != nil {
+		return "", 0, err
+	}
 	req.Header.Set("Cookie", "AssetToken="+token)
 	if c == nil {
 		c = rc.client()
@@ -193,6 +226,9 @@ func (rc Recovery) Probe(ctx context.Context, reg *pins.Registry, c *http.Client
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return "", 0, fmt.Errorf("HEAD %s: %s", src.URL, resp.Status)
+	}
+	if resp.ContentLength < 0 {
+		return "", 0, fmt.Errorf("HEAD %s: no Content-Length in the response", src.URL)
 	}
 	return src.URL, resp.ContentLength, nil
 }
