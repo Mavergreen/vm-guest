@@ -35,6 +35,7 @@ type command struct {
 // commandTable is every subcommand, in the order help lists them.
 func commandTable() []command {
 	return []command{
+		{"doctor", "What this host can do, subcommand by subcommand", cmdDoctor},
 		{"run", "Boot a built image on a throwaway overlay", cmdRun},
 		{"ssh", "Open a shell in the running guest", cmdSSH},
 		{"emit", "Write a Packer template for this machine", cmdEmit},
