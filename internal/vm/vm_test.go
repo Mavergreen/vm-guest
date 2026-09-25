@@ -356,3 +356,32 @@ func TestPrepareLocksTheStateFileBeforeAnythingElse(t *testing.T) {
 		t.Fatal("qemu-img never ran")
 	}
 }
+
+// TestCloseLeavesTheLockToAnyOtherHolder guards Close against LOCK_UN: a
+// flock belongs to the open file description, which QEMU shares once Boot
+// has passed it the state file, so an explicit unlock would release
+// QEMU's lock too. A dup'd descriptor stands in for QEMU's copy.
+func TestCloseLeavesTheLockToAnyOtherHolder(t *testing.T) {
+	p, m := home(t)
+	r, err := Prepare(context.Background(), &proc.Fake{}, p, m, m.Hardware(), "q", 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(r.Dir)
+	fd, err := syscall.Dup(int(r.state.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemu := os.NewFile(uintptr(fd), "qemu's copy")
+	defer qemu.Close()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := locked(filepath.Join(r.Dir, "state")); err != nil || !held {
+		t.Fatalf("after Close, with another descriptor still open: held=%v err=%v, want held", held, err)
+	}
+	qemu.Close()
+	if held, err := locked(filepath.Join(r.Dir, "state")); err != nil || held {
+		t.Fatalf("after the last descriptor closed: held=%v err=%v, want released", held, err)
+	}
+}

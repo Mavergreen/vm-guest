@@ -240,8 +240,11 @@ lock can be taken over, as the media lock does today.
 
 A run has its own kind of lock: `run/<name>-<random>/state` (a
 `key<TAB>value` file naming the image, the forwarded port, the pid, and
-whether `--keep` was given) is held with an exclusive, non-blocking
-`flock` for as long as the run is alive. `vmavs ssh` and a reaper (below)
+whether `--keep` was given) is held with an exclusive `flock` for as
+long as the run is alive. `vmavs run` takes it blocking: the only thing
+that can contend for a brand-new file's lock is another `vmavs`'s
+momentary probe (below), and a non-blocking attempt would fail the run
+for losing that race. `vmavs ssh` and a reaper (below)
 tell a live run from a dead one by whether that lock is still held, not
 by whether its recorded pid is running: a pid can be recycled, and
 checking for one (`kill(pid, 0)`) cannot tell "no such process" apart
@@ -249,11 +252,14 @@ from "a different process now has it". The state file is created, locked,
 and only then written to (in that order), so a concurrent reader never
 sees a state file that exists but is not yet lockable, and all of that
 happens before anything else goes into the run directory, so every run
-directory `vmavs` made has a state file from its first slow step on. Once QEMU is
-running, the run passes it the locked file as an inherited descriptor, so
-the lock survives `vmavs run` itself being killed outright (a `SIGKILL`
-it has no chance to release the lock for) for as long as QEMU keeps
-running.
+directory `vmavs` made has a state file from its first slow step on.
+Once QEMU is running, the run passes it the locked file as an inherited
+descriptor, so the lock survives `vmavs run` itself being killed
+outright (a `SIGKILL` it has no chance to release the lock for) for as
+long as QEMU keeps running. For the same reason `vmavs run` never
+unlocks the file explicitly: the lock belongs to the open file
+description QEMU shares, so `LOCK_UN` would release QEMU's hold too; it
+only closes its own descriptor.
 
 There is no separate reaper process. `vmavs run` and `vmavs ssh` each
 remove every dead run directory that is not `--keep` before doing

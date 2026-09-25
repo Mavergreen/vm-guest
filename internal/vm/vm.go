@@ -32,12 +32,12 @@ type Run struct {
 	Spec  machine.Spec
 
 	// state is open for as long as this run is alive: it holds an
-	// exclusive, non-blocking flock (LOCK_EX|LOCK_NB) that Live and Reap
-	// test for. A pid is not
+	// exclusive flock (LOCK_EX) that Live and Reap test for. A pid is not
 	// enough (they can be recycled, and a signal-0 check against one has
 	// no way to tell "no such process" apart from "a different process now
-	// has it"); a lock held by an open file descriptor is released the
-	// moment this process's copy of it closes, however that happens.
+	// has it"); a flock is released the moment the last descriptor for
+	// its open file description closes -- this process's, and QEMU's once
+	// Boot has handed it over -- however that happens.
 	state *os.File
 }
 
@@ -85,7 +85,10 @@ func Prepare(ctx context.Context, r proc.Runner, p config.Paths, m manifest.Mani
 	// guess about one without it. Create-then-lock leaves no window in
 	// which the file exists but is unlockable; O_EXCL also makes
 	// MkdirTemp's uniqueness redundant insurance -- two Prepares can never
-	// share a state file.
+	// share a state file. The lock is a blocking LOCK_EX: nothing but a
+	// momentary probe (Live or Reap in a concurrent vmavs, which takes the
+	// lock and releases it at once) can hold a brand new file's lock, and
+	// a non-blocking one would fail this run for losing that race.
 	statePath := filepath.Join(dir, "state")
 	sf, err := os.OpenFile(statePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 	if err != nil {
@@ -97,7 +100,7 @@ func Prepare(ctx context.Context, r proc.Runner, p config.Paths, m manifest.Mani
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	if err := syscall.Flock(int(sf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := syscall.Flock(int(sf.Fd()), syscall.LOCK_EX); err != nil {
 		return fail(fmt.Errorf("%s: locking the state file: %w", statePath, err))
 	}
 	state := fmt.Sprintf("image\t%s\nport\t%d\npid\t%d\nkeep\t%t\n", m.Name, hw.SSHPort, pid, keep)
@@ -138,19 +141,23 @@ func (r *Run) Boot(ctx context.Context, run proc.Runner, stdin io.Reader, stdout
 	return run.Run(ctx, c)
 }
 
-// Close releases this run's lock on its state file without deleting
-// anything; Reap, in some later process, then sees it as dead.
+// Close closes this process's copy of the state file without deleting
+// anything. It does not LOCK_UN: a flock belongs to the open file
+// description, which QEMU shares once Boot has handed it over, so an
+// explicit unlock here would release QEMU's lock too if Close ever ran
+// while QEMU was still up. Closing only drops this process's reference;
+// the lock goes once the last one (QEMU's, if it was booted) is gone, and
+// Reap, in some later process, then sees the run as dead.
 func (r *Run) Close() error {
 	if r.state == nil {
 		return nil
 	}
-	syscall.Flock(int(r.state.Fd()), syscall.LOCK_UN)
 	err := r.state.Close()
 	r.state = nil
 	return err
 }
 
-// Remove releases the lock and deletes the run directory.
+// Remove closes the state file and deletes the run directory.
 func (r *Run) Remove() error {
 	r.Close()
 	return os.RemoveAll(r.Dir)
