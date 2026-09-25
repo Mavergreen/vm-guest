@@ -33,12 +33,16 @@ func main() {
 		sigs = append(sigs, syscall.SIGHUP)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
-	// Only the first signal is caught: once it has cancelled ctx, stop
-	// hands every signal back to its default action, so a second Ctrl-C
-	// kills a vmavs that is stuck somewhere a context cannot reach (a
-	// read that never returns, say). A run killed this way before it
-	// cleaned up is swept up like any other, as above.
-	context.AfterFunc(ctx, stop)
+	// Once the first signal has cancelled ctx, SIGINT alone goes back to
+	// its default action, so a second Ctrl-C kills a vmavs that is stuck
+	// somewhere a context cannot reach (a read that never returns, say);
+	// a run killed that way before it cleaned up is swept up like any
+	// other, as above. SIGTERM and SIGHUP stay caught (and, after the
+	// first, ignored): a terminal that hangs up twice, or a second kill,
+	// must not stop `run` before it has removed its run directory (spec
+	// §2). signal.Reset restores SIGINT's disposition from before vmavs
+	// started, so an ignored SIGINT (a background job) stays ignored.
+	context.AfterFunc(ctx, func() { signal.Reset(os.Interrupt) })
 	code := cli.Run(ctx, os.Args[1:], &cli.Env{
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
