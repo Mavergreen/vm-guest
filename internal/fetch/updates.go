@@ -65,7 +65,11 @@ func (g *Getter) Updates(ctx context.Context, reg *pins.Registry, selection, ado
 		if err != nil {
 			return nil, err
 		}
-		if ok, err := HasXarMagic(path); err != nil || !ok {
+		ok, err := HasXarMagic(path)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		if !ok {
 			return nil, fmt.Errorf("%s is not a flat package (no xar magic)", path)
 		}
 		out = append(out, Update{Name: n, Path: path, Staged: StagedName(i+1, path)})
