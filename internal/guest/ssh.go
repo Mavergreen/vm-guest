@@ -41,6 +41,13 @@ func (t Target) ClientConfig() *ssh.ClientConfig {
 		sup, ins := ssh.SupportedAlgorithms(), ssh.InsecureAlgorithms()
 		cfg.HostKeyAlgorithms = append(append([]string{}, sup.HostKeys...), ins.HostKeys...)
 		cfg.KeyExchanges = append(append([]string{}, sup.KeyExchanges...), ins.KeyExchanges...)
+		// Apple's sshd (OpenSSH_6.2p2 on OSSLShim 0.9.8r) advertises
+		// aes128-gcm/aes256-gcm@openssh.com but cannot run them: it dies
+		// pre-auth ("fatal: matching cipher is not supported") and the
+		// client sees only EOF. MEASURED 2026-09-25 against the real
+		// guest (mavericks-a's sshd log). Go prefers GCM, so offer only
+		// CTR, which both sides implement.
+		cfg.Ciphers = []string{ssh.CipherAES128CTR, ssh.CipherAES192CTR, ssh.CipherAES256CTR}
 		if as, ok := signer.(ssh.AlgorithmSigner); ok && signer.PublicKey().Type() == ssh.KeyAlgoRSA {
 			if s, err := ssh.NewSignerWithAlgorithms(as, []string{ssh.KeyAlgoRSA}); err == nil {
 				signer = s

@@ -3,12 +3,16 @@
 package guesttest
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -56,6 +60,8 @@ func Start(t testing.TB, o Options) string {
 		}
 		cfg.KeyExchanges = []string{"diffie-hellman-group14-sha1"}
 		cfg.PublicKeyAuthAlgorithms = []string{ssh.KeyAlgoRSA}
+		// What Apple's sshd advertises that x/crypto implements, in its order.
+		cfg.Ciphers = []string{"aes128-ctr", "aes192-ctr", "aes256-ctr", "aes128-gcm@openssh.com", "aes256-gcm@openssh.com"}
 	}
 	cfg.AddHostKey(host)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -68,6 +74,9 @@ func Start(t testing.TB, o Options) string {
 			c, err := ln.Accept()
 			if err != nil {
 				return
+			}
+			if o.Legacy {
+				c = &gcmTrap{Conn: c, serverCiphers: cfg.Ciphers}
 			}
 			go serve(c, cfg, o)
 		}
@@ -137,4 +146,69 @@ func handleSession(ch ssh.Channel, in <-chan *ssh.Request, o Options) {
 			req.Reply(false, nil)
 		}
 	}
+}
+
+// gcmTrap does what Apple's OpenSSH_6.2p2 (OSSLShim) does when the client
+// picks the aes*-gcm@openssh.com it advertises: "fatal: matching cipher is
+// not supported" pre-auth, i.e. the connection just closes. On the first
+// Read it takes the client's version line and KEXINIT, works out the
+// client->server cipher as RFC 4253 7.1 does (the client's first that the
+// server offers), and either closes or replays the bytes to the server.
+type gcmTrap struct {
+	net.Conn
+	serverCiphers []string
+	r             io.Reader
+}
+
+func (c *gcmTrap) Read(b []byte) (int, error) {
+	if c.r == nil {
+		r, err := c.inspect()
+		if err != nil {
+			c.Conn.Close()
+			return 0, err
+		}
+		c.r = r
+	}
+	return c.r.Read(b)
+}
+
+var errAppleGCM = errors.New("matching cipher is not supported (Apple sshd + GCM)")
+
+func (c *gcmTrap) inspect() (io.Reader, error) {
+	br := bufio.NewReader(c.Conn)
+	var seen bytes.Buffer
+	line, err := br.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	seen.WriteString(line)
+	var hdr [5]byte
+	if _, err := io.ReadFull(br, hdr[:]); err != nil {
+		return nil, err
+	}
+	body := make([]byte, binary.BigEndian.Uint32(hdr[:4])-1)
+	if _, err := io.ReadFull(br, body); err != nil {
+		return nil, err
+	}
+	seen.Write(hdr[:])
+	seen.Write(body)
+	p := body[1+16:]    // msg type, cookie
+	var lists [3]string // kex, host keys, ciphers client->server
+	for i := range lists {
+		n := binary.BigEndian.Uint32(p)
+		lists[i], p = string(p[4:4+n]), p[4+n:]
+	}
+	offered := map[string]bool{}
+	for _, s := range c.serverCiphers {
+		offered[s] = true
+	}
+	for _, name := range strings.Split(lists[2], ",") {
+		if offered[name] {
+			if strings.Contains(name, "-gcm@") {
+				return nil, errAppleGCM
+			}
+			break
+		}
+	}
+	return io.MultiReader(&seen, br), nil
 }
