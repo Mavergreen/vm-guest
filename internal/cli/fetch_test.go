@@ -358,3 +358,30 @@ func TestAFetchWithVMAVS_HOMESetGivesNoLegacyHint(t *testing.T) {
 		t.Fatalf("stderr=%s, want no hint", errb.String())
 	}
 }
+
+// TestACancelledFetchExitsNonZero: a signal cancels the command in
+// progress (spec §2), and a cancelled fetch has not fetched anything --
+// exit 0 would tell a script it had.
+func TestACancelledFetchExitsNonZero(t *testing.T) {
+	asset := []byte("not really Apple's installer")
+	_, reg := fakeAppleCDN(t, asset)
+	home := t.TempDir()
+	media := filepath.Join(home, "media", "InstallESD.dmg")
+	if err := os.MkdirAll(filepath.Dir(media), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(media, asset, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e, out, errb := fetchEnv(map[string]string{"VMAVS_HOME": home, "HOME": t.TempDir()})
+	e.Registry = reg
+	e.Endpoints = &Endpoints{Recovery: "http://127.0.0.1:1"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if code := Run(ctx, []string{"fetch", "esd"}, e); code != 1 {
+		t.Fatalf("code=%d stdout=%q stderr=%s, want 1", code, out.String(), errb.String())
+	}
+	if out.String() != "" {
+		t.Fatalf("stdout=%q, want no path from a cancelled fetch", out.String())
+	}
+}

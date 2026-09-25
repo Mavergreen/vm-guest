@@ -33,6 +33,12 @@ func main() {
 		sigs = append(sigs, syscall.SIGHUP)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
+	// Only the first signal is caught: once it has cancelled ctx, stop
+	// hands every signal back to its default action, so a second Ctrl-C
+	// kills a vmavs that is stuck somewhere a context cannot reach (a
+	// read that never returns, say). A run killed this way before it
+	// cleaned up is swept up like any other, as above.
+	context.AfterFunc(ctx, stop)
 	code := cli.Run(ctx, os.Args[1:], &cli.Env{
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,

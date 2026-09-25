@@ -111,7 +111,15 @@ func Filename(url string) (string, error) {
 // every directory it created, if still empty, when it fails: a failed
 // fetch leaves nothing behind, not even an empty home that would look
 // like one in use.
+//
+// A done ctx (a signal, spec §2) stops Get with ctx's error wherever it
+// is: before it starts, before each adoption candidate, every few MiB of
+// hashing or copying (ctxReader), and mid-download. A cancelled Get never
+// reports success, and removes whatever temp it had made.
 func (g *Getter) Get(ctx context.Context, it Item) (path string, err error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("%s: %w", it.Name, err)
+	}
 	name := it.Filename
 	if name == "" {
 		if name, err = Filename(it.URL); err != nil {
@@ -128,7 +136,7 @@ func (g *Getter) Get(ctx context.Context, it Item) (path string, err error) {
 	dir := filepath.Dir(dest)
 
 	if _, err := os.Stat(dest); err == nil {
-		got, err := SHA256File(dest)
+		got, err := sha256File(ctx, dest)
 		if err != nil {
 			return "", err
 		}
@@ -161,9 +169,15 @@ func (g *Getter) Get(ctx context.Context, it Item) (path string, err error) {
 
 	g.cleanStaleTemps(it, dir, name)
 	for _, old := range it.Adopt {
-		if g.adoptCandidate(it, old, dest, dir, name, prepare) {
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("%s: %w", it.Name, err)
+		}
+		if g.adoptCandidate(ctx, it, old, dest, dir, name, prepare) {
 			return dest, nil
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("%s: %w", it.Name, err)
 	}
 
 	if it.noFetch {
@@ -296,7 +310,7 @@ var testAdoptHook func()
 // whole Get: an adoption candidate is an optimization, and one candidate
 // being unusable says nothing about whether the next one, or a download,
 // will work.
-func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string, prepare func() error) bool {
+func (g *Getter) adoptCandidate(ctx context.Context, it Item, old, dest, dir, name string, prepare func() error) bool {
 	real, err := filepath.EvalSymlinks(old)
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -304,9 +318,9 @@ func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string, prepare fu
 		}
 		return false
 	}
-	got, err := SHA256File(real)
+	got, err := sha256File(ctx, real)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !os.IsNotExist(err) && ctx.Err() == nil {
 			g.logf("%s: cannot check %s for adoption: %v", it.Name, old, err)
 		}
 		return false
@@ -332,14 +346,20 @@ func (g *Getter) adoptCandidate(it Item, old, dest, dir, name string, prepare fu
 	tmp := filepath.Join(tmpDir, name)
 
 	if err := os.Link(real, tmp); err != nil {
-		if err := copyFile(real, tmp); err != nil {
+		if err := copyFile(ctx, real, tmp); err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
 			g.logf("%s: cannot adopt %s: %v", it.Name, old, err)
 			return false
 		}
 	}
 
-	got2, err := SHA256File(tmp)
+	got2, err := sha256File(ctx, tmp)
 	if err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
 		g.logf("%s: cannot verify the adopted copy of %s: %v", it.Name, old, err)
 		return false
 	}
@@ -610,17 +630,53 @@ func (g *Getter) logf(format string, a ...any) {
 	}
 }
 
+// SHA256File is path's SHA-256, as lowercase hex.
 func SHA256File(path string) (string, error) {
+	return sha256File(context.Background(), path)
+}
+
+// sha256File is SHA256File, giving up with ctx's error once ctx is done:
+// hashing InstallESD.dmg reads 5.2 GB, and a Ctrl-C should not have to
+// wait for it.
+func sha256File(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, &ctxReader{ctx: ctx, r: f}); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ctxCheckEvery is how many bytes ctxReader reads between looks at its
+// context: a few MiB is a few milliseconds of hashing or copying.
+const ctxCheckEvery = 4 << 20
+
+// ctxReader is r, failing with ctx's error once ctx is done. It looks at
+// ctx before its first read and then every ctxCheckEvery bytes. A read
+// that blocks forever still blocks: that is what a second Ctrl-C is for
+// (cmd/vmavs).
+type ctxReader struct {
+	ctx   context.Context
+	r     io.Reader
+	since int
+}
+
+func (c *ctxReader) Read(b []byte) (int, error) {
+	if c.since == 0 {
+		if err := c.ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
+	n, err := c.r.Read(b)
+	c.since += n
+	if c.since >= ctxCheckEvery {
+		c.since = 0
+	}
+	return n, err
 }
 
 // HasXarMagic reports whether path starts with "xar!", the flat-package
@@ -641,17 +697,21 @@ func HasXarMagic(path string) (bool, error) {
 	return string(b) == "xar!", nil
 }
 
-func copyFile(src, dst string) error {
+// copyFile copies src to dst, a name that must not exist yet (O_EXCL:
+// nothing is ever written through a name that might already point at
+// someone else's file), syncing it before it returns. It gives up with
+// ctx's error once ctx is done.
+func copyFile(ctx context.Context, src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
+	if _, err := io.Copy(out, &ctxReader{ctx: ctx, r: in}); err != nil {
 		out.Close()
 		return err
 	}
