@@ -1,12 +1,11 @@
 package vmguest
 
 import (
-	"bufio"
 	"bytes"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -69,40 +68,47 @@ func TestEveryPatchOnDiskIsEmbedded(t *testing.T) {
 // lib/privops-qemu-linux.sh (Ruling 7 of phase 4). The two must not
 // drift: the Go backend and the shell one boot the same guest.
 func TestInitIsTheShellTreesHeredoc(t *testing.T) {
-	f, err := os.Open("lib/privops-qemu-linux.sh")
+	src, err := os.ReadFile("lib/privops-qemu-linux.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	const start = `    cat > "$root/init" <<'INIT'`
-	var heredoc bytes.Buffer
-	in, found, closed := false, false, false
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		switch {
-		case !in && !found && line == start:
-			in, found = true, true
-		case in && line == "INIT":
-			in, closed = false, true
-		case in:
-			heredoc.WriteString(line + "\n")
-		}
-	}
-	if err := sc.Err(); err != nil {
+	heredoc, err := initHeredoc(src)
+	if err != nil {
 		t.Fatal(err)
-	}
-	if !found || !closed {
-		t.Fatalf("no complete <<'INIT' heredoc in lib/privops-qemu-linux.sh (start %v, end %v)", found, closed)
 	}
 	emb, err := fs.ReadFile(Files, "assets/privops/init.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(emb, heredoc.Bytes()) {
-		t.Fatalf("assets/privops/init.sh (%d bytes) differs from the heredoc (%d bytes)", len(emb), heredoc.Len())
+	if !bytes.Equal(emb, heredoc) {
+		t.Fatalf("assets/privops/init.sh (%d bytes) differs from the heredoc (%d bytes)", len(emb), len(heredoc))
 	}
-	if !strings.HasPrefix(heredoc.String(), "#!/bin/busybox sh\n") {
-		t.Fatalf("the heredoc does not start with the busybox shebang: %q", heredoc.String()[:min(40, heredoc.Len())])
+	if !bytes.HasPrefix(heredoc, []byte("#!/bin/busybox sh\n")) {
+		t.Fatalf("the heredoc does not start with the busybox shebang: %q", heredoc[:min(40, len(heredoc))])
 	}
+}
+
+// initHeredoc is the lines strictly between the <<'INIT' line and the
+// next line that is exactly INIT, each with its newline. The source is
+// split on raw "\n" bytes, not scanned by bufio's lines, which drop a
+// trailing "\r": a carriage return in either copy is a difference.
+func initHeredoc(src []byte) ([]byte, error) {
+	start := []byte(`    cat > "$root/init" <<'INIT'`)
+	var heredoc bytes.Buffer
+	in, found, closed := false, false, false
+	for _, line := range bytes.Split(src, []byte("\n")) {
+		switch {
+		case !in && !found && bytes.Equal(line, start):
+			in, found = true, true
+		case in && bytes.Equal(line, []byte("INIT")):
+			in, closed = false, true
+		case in:
+			heredoc.Write(line)
+			heredoc.WriteByte('\n')
+		}
+	}
+	if !found || !closed {
+		return nil, fmt.Errorf("no complete <<'INIT' heredoc in lib/privops-qemu-linux.sh (start %v, end %v)", found, closed)
+	}
+	return heredoc.Bytes(), nil
 }
