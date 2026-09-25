@@ -6,8 +6,10 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -167,4 +169,24 @@ func flatPackage(postinstall []byte, identifier, version string) ([]byte, error)
 		{Name: "PackageInfo", Mode: 0o644, Data: packageInfo(identifier, version)},
 		{Name: "Scripts", Mode: 0o644, Data: scripts},
 	})
+}
+
+// hasXarMagic reports whether path starts with "xar!", the magic every
+// flat package (and so every package Build is handed) carries. fetch
+// checks the same for what it downloads, with its own HasXarMagic: payload
+// does not import fetch.
+func hasXarMagic(path string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	b := make([]byte, 4)
+	if _, err := io.ReadFull(f, b); err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		return false, err
+	}
+	return string(b) == "xar!", nil
 }

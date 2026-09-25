@@ -3,17 +3,19 @@ package payload
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	vmguest "github.com/Mavergreen/vm-guest"
 	"github.com/Mavergreen/vm-guest/internal/config"
-	"github.com/Mavergreen/vm-guest/internal/fetch"
 	"github.com/Mavergreen/vm-guest/internal/proc"
 )
 
@@ -315,15 +317,6 @@ func keyLines(key []byte) []string {
 	return out
 }
 
-func matchesAny(s string, choices ...string) bool {
-	for _, c := range choices {
-		if s == c {
-			return true
-		}
-	}
-	return false
-}
-
 // validateKey applies build-firstboot-pkg.sh's SSH key rules to an
 // already-read key file, given by path only for error messages.
 //
@@ -367,10 +360,10 @@ func validateKey(path string, key []byte, hasOpenSSH bool, tag string, log func(
 		typ := strings.Fields(line)[0]
 		var ok bool
 		if hasOpenSSH {
-			ok = matchesAny(typ, "ssh-ed25519", "ssh-rsa", "ssh-dss") ||
+			ok = slices.Contains([]string{"ssh-ed25519", "ssh-rsa", "ssh-dss"}, typ) ||
 				strings.HasPrefix(typ, "ecdsa-sha2-") || strings.HasPrefix(typ, "sk-")
 		} else {
-			ok = matchesAny(typ, "ssh-rsa", "ssh-dss") || strings.HasPrefix(typ, "ecdsa-sha2-")
+			ok = slices.Contains([]string{"ssh-rsa", "ssh-dss"}, typ) || strings.HasPrefix(typ, "ecdsa-sha2-")
 		}
 		if ok || log == nil {
 			continue
@@ -393,7 +386,7 @@ func validatePkgs(field string, pkgs []string) error {
 		if _, err := os.Stat(p); err != nil {
 			return fieldErrorf(field, "no such package: %s", p)
 		}
-		ok, err := fetch.HasXarMagic(p)
+		ok, err := hasXarMagic(p)
 		if err != nil {
 			return fieldErrorf(field, "%s: %w", p, err)
 		}
@@ -459,7 +452,7 @@ func validateConfig(c Config, log func(string, ...any)) ([]byte, error) {
 	if err := validateMediaFiles("UpdatePkgs", c.UpdatePkgs); err != nil {
 		return nil, err
 	}
-	if !matchesAny(c.Updates, config.UpdateChoices...) {
+	if !slices.Contains(config.UpdateChoices, c.Updates) {
 		return nil, fieldErrorf("Updates", "unknown %q: choose one of %s", c.Updates, strings.Join(config.UpdateChoices, ", "))
 	}
 	if len(c.UpdatePkgs) > 0 && c.Updates == "none" {
@@ -526,16 +519,14 @@ func Build(ctx context.Context, r proc.Runner, c Config, out string, log func(st
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
-	if err := writeAtomic(out, pkg); err != nil {
+	if err := writeOutput(out, pkg); err != nil {
 		return "", err
 	}
 
-	sum, err := fetch.SHA256File(out)
-	if err != nil {
-		return "", err
-	}
+	h := sha256.Sum256(pkg)
+	sum := hex.EncodeToString(h[:])
 	sidecar := fmt.Sprintf("%s  %s\n", sum, filepath.Base(out))
-	if err := writeAtomic(out+".sha256", []byte(sidecar)); err != nil {
+	if err := writeOutput(out+".sha256", []byte(sidecar)); err != nil {
 		return "", err
 	}
 
@@ -555,32 +546,36 @@ func Build(ctx context.Context, r proc.Runner, c Config, out string, log func(st
 	return sum, nil
 }
 
-// writeAtomic writes data to path by creating path+".tmp", syncing it,
-// and renaming it into place: a reader never sees a partial file. Build
-// uses this for both the package itself and its out.sha256 sidecar.
-func writeAtomic(path string, data []byte) error {
-	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+// writeOutput writes data to path through a fresh, uniquely named temp
+// in path's own directory (os.CreateTemp: O_EXCL, so nothing already at
+// some fixed temp name is ever opened and written through), synced, made
+// 0644, then renamed into place: a reader never sees a partial file. The
+// temp is removed on any failure. Build uses this for both the package
+// and its out.sha256 sidecar. (fetch has its own writer for the cache,
+// writeCacheFile: payload does not import fetch.)
+func writeOutput(path string, data []byte) (err error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
+	defer func() {
+		if err != nil {
+			f.Close()
+			os.Remove(tmp)
+		}
+	}()
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
+		return err
+	}
+	if err := f.Chmod(0o644); err != nil {
 		return err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return os.Rename(tmp, path)
 }

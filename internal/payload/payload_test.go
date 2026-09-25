@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -572,13 +573,53 @@ func TestBuildWritesThePackageAndSidecarDeterministically(t *testing.T) {
 		t.Fatalf("sidecar = %q, want %q", sidecar, want)
 	}
 
-	// Fix round 1, minor 4: the sidecar is written the same tmp-then-rename
-	// way as the package itself, so no .tmp file is left behind.
-	if _, err := os.Stat(out1 + ".sha256.tmp"); !os.IsNotExist(err) {
-		t.Fatalf("a sidecar .tmp file was left behind: %v", err)
+	// The sidecar is written the same temp-then-rename way as the package
+	// itself, and no temp of either is left behind.
+	entries, err := os.ReadDir(filepath.Dir(out2))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(out1 + ".tmp"); !os.IsNotExist(err) {
-		t.Fatalf("a package .tmp file was left behind: %v", err)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{"mqg-firstboot.pkg", "mqg-firstboot.pkg.sha256"}; !slices.Equal(names, want) {
+		t.Fatalf("%s holds %v, want exactly %v", filepath.Dir(out2), names, want)
+	}
+	for _, f := range []string{out1, out1 + ".sha256"} {
+		if fi, err := os.Stat(f); err != nil || fi.Mode().Perm() != 0o644 {
+			t.Fatalf("%s: mode %v (%v), want 0644", f, fi.Mode().Perm(), err)
+		}
+	}
+}
+
+// TestBuildNeverWritesThroughAFixedTempName: a fixed out+".tmp" temp
+// would be opened, truncated and written through if something already
+// sat at that name -- here a hard link to a file that is not Build's to
+// touch. Every temp is a fresh, uniquely named file.
+func TestBuildNeverWritesThroughAFixedTempName(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "id_rsa.pub")
+	if err := os.WriteFile(keyPath, rsaPubKey(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := DefaultConfig()
+	c.SSHKey = keyPath
+	out := filepath.Join(dir, "mqg-firstboot.pkg")
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("not yours"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixed := range []string{out + ".tmp", out + ".sha256.tmp"} {
+		if err := os.Link(victim, fixed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Build(context.Background(), proc.Exec{}, c, out, t.Logf); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(victim); err != nil || string(b) != "not yours" {
+		t.Fatalf("Build wrote through a pre-existing temp name: victim = %q, %v", b, err)
 	}
 }
 
