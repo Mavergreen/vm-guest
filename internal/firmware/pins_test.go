@@ -52,7 +52,7 @@ func TestPinsMatchTheScripts(t *testing.T) {
 		{"--udk-commit", []string{AudkCommit}, script(t, "boot/build-opencore.sh", "--udk-commit")},
 		{"--build-options", []string{strings.ReplaceAll(BuildOptions(), "\t", " ")}, script(t, "boot/build-opencore.sh", "--build-options")},
 		{"ovmf --list-artifacts", OVMFFiles, script(t, "boot/build-ovmf.sh", "--list-artifacts")},
-		{"ovmf --show-build", []string{OVMFDsc + "\t" + Arch + "\t" + Toolchain + "\t" + Target}, script(t, "boot/build-ovmf.sh", "--show-build")},
+		{"ovmf --show-build", []string{OVMFDsc + "\t" + Arch + "\t" + EDKToolchain + "\t" + Target}, script(t, "boot/build-ovmf.sh", "--show-build")},
 		{"fetch-kexts --list", kextNames(), script(t, "boot/fetch-kexts.sh", "--list")},
 		{"fetch-opencorepkg --show-version", []string{"OpenCorePkg " + OCVersion}, script(t, "boot/fetch-opencorepkg.sh", "--show-version")},
 		{"build-efi-image --list-contents", efiContents(), script(t, "boot/build-efi-image.sh", "--list-contents")},

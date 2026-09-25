@@ -25,9 +25,9 @@ const (
 	OCBuildCommit = "e9ed49cb7a4f7fa2830c024a13d63de27c2e0d1a"
 	AudkCommit    = "0672a009e9ca85753d240324d761341adf0291b3"
 
-	Arch      = "X64"     // a 64-bit guest; IA32 would double the build for nothing
-	Toolchain = "GCC"     // CLANGPDB needs clang, which the hosts do not have
-	Target    = "RELEASE" // DEBUG logs on every boot and is slower
+	Arch         = "X64"     // a 64-bit guest; IA32 would double the build for nothing
+	EDKToolchain = "GCC"     // CLANGPDB needs clang, which the hosts do not have
+	Target       = "RELEASE" // DEBUG logs on every boot and is slower
 
 	// CStd is the C dialect every firmware file is compiled in. EDK II
 	// sets none, and GCC 15 defaults to gnu23, where OpenCorePkg 1.0.7's
