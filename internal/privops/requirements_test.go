@@ -1,0 +1,278 @@
+package privops
+
+import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/Mavergreen/vm-guest/internal/proc"
+)
+
+const testKVer = "6.1.0-test"
+
+// fixtureBackend is a Backend looking at root/boot and root/modules for
+// release 6.1.0-test, with nothing on its fake PATH.
+func fixtureBackend(root string) Backend {
+	return Backend{
+		Runner:     &proc.Fake{Paths: map[string]string{}},
+		QEMU:       "qemu-system-x86_64",
+		BootDir:    filepath.Join(root, "boot"),
+		ModulesDir: filepath.Join(root, "modules"),
+		KVer:       testKVer,
+		Modules:    DefaultModules,
+		MemMiB:     512,
+		GOOS:       "linux",
+	}
+}
+
+// Where distributions put the kernel (tests/privops.bats): each layout
+// alone is found, and a kernel keyed to the running release beats a
+// generic name even when both are there.
+func TestKernelDiscovery(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files []string
+		want  string // "" means no kernel
+	}{
+		{"Debian", []string{"boot/vmlinuz-6.1.0-test"}, "boot/vmlinuz-6.1.0-test"},
+		{"Arch", []string{"boot/vmlinuz-linux"}, "boot/vmlinuz-linux"},
+		{"Arch's copy under the modules", []string{"modules/6.1.0-test/vmlinuz"}, "modules/6.1.0-test/vmlinuz"},
+		{"Gentoo", []string{"boot/kernel-6.1.0-test"}, "boot/kernel-6.1.0-test"},
+		{"Alpine", []string{"boot/vmlinuz"}, "boot/vmlinuz"},
+		{"Gentoo, another release", []string{"boot/kernel-other"}, "boot/kernel-other"},
+		{"none", nil, ""},
+		{"keyed beats generic", []string{"boot/vmlinuz-linux", "boot/vmlinuz-6.1.0-test"}, "boot/vmlinuz-6.1.0-test"},
+		{"the modules' copy beats generic", []string{"boot/vmlinuz", "modules/6.1.0-test/vmlinuz"}, "modules/6.1.0-test/vmlinuz"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, f := range tc.files {
+				write(t, filepath.Join(root, f), []byte("kernel"), 0o644)
+			}
+			b := fixtureBackend(root)
+			got, err := b.Kernel()
+			if tc.want == "" {
+				if err == nil || got != "" {
+					t.Fatalf("found %q with no kernel present", got)
+				}
+				if !strings.Contains(err.Error(), "6.1.0-test") {
+					t.Errorf("error does not name the release: %v", err)
+				}
+				return
+			}
+			if err != nil || got != filepath.Join(root, tc.want) {
+				t.Fatalf("Kernel() = %q, %v; want %s", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// A kernel image nobody can read is not a kernel this backend can boot.
+func TestAnUnreadableKernelIsSkipped(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-0 file")
+	}
+	root := t.TempDir()
+	write(t, filepath.Join(root, "boot/vmlinuz-6.1.0-test"), []byte("kernel"), 0)
+	write(t, filepath.Join(root, "boot/vmlinuz"), []byte("kernel"), 0o644)
+	got, err := fixtureBackend(root).Kernel()
+	if err != nil || got != filepath.Join(root, "boot/vmlinuz") {
+		t.Fatalf("Kernel() = %q, %v", got, err)
+	}
+}
+
+// The candidates, and the kernel chosen from them, are the shell's own:
+// lib/privops-qemu-linux.sh run over the same fixture root.
+func TestKernelCandidatesMatchTheShell(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not installed")
+	}
+	for _, tc := range []struct {
+		name  string
+		files []string
+	}{
+		{"nothing, so the glob stays literal", nil},
+		{"the glob expands", []string{"boot/kernel-other", "boot/kernel-zzz"}},
+		{"keyed and generic", []string{"boot/vmlinuz-linux", "boot/kernel-6.1.0-test", "boot/vmlinuz"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, f := range tc.files {
+				write(t, filepath.Join(root, f), []byte("kernel"), 0o644)
+			}
+			b := fixtureBackend(root)
+			shell := func(fn string) (string, error) {
+				var out bytes.Buffer
+				cmd := exec.Command("bash", "-c", ". lib/common.sh; . lib/privops.sh; . lib/privops-qemu-linux.sh; "+fn)
+				cmd.Dir = repo(t)
+				cmd.Env = append(os.Environ(),
+					"MQG_PRIVOPS_BOOT_DIR="+b.BootDir,
+					"MQG_PRIVOPS_MODULES_DIR="+b.ModulesDir,
+					"MQG_PRIVOPS_KVER="+b.KVer)
+				cmd.Stdout = &out
+				err := cmd.Run()
+				return out.String(), err
+			}
+			out, err := shell("privops_qemu_linux_kernel_candidates")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+			if got := b.KernelCandidates(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("candidates\n got %q\nwant %q", got, want)
+			}
+			kernel, err := shell("privops_qemu_linux_kernel")
+			got, gerr := b.Kernel()
+			if (err != nil) != (gerr != nil) || strings.TrimSuffix(kernel, "\n") != got {
+				t.Fatalf("kernel: shell %q (%v), Go %q (%v)", kernel, err, got, gerr)
+			}
+		})
+	}
+}
+
+// Only a path carrying the running release counts as keyed: a generic
+// name may be another build, whose modules would not load.
+func TestOnlyKeyedPathsCountAsKeyed(t *testing.T) {
+	root := t.TempDir()
+	b := fixtureBackend(root)
+	for p, want := range map[string]bool{
+		"boot/vmlinuz-6.1.0-test":    true,
+		"modules/6.1.0-test/vmlinuz": true,
+		"boot/kernel-6.1.0-test":     true,
+		"boot/vmlinuz-linux":         false,
+		"boot/vmlinuz":               false,
+		"boot/kernel-other":          false,
+	} {
+		if got := b.KernelIsKeyed(filepath.Join(root, p)); got != want {
+			t.Errorf("KernelIsKeyed(%s) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+// Linkage is read from the ELF headers (Ruling 4): PT_INTERP is dynamic,
+// none is static, and anything else is unknown.
+func TestBusyboxLinkage(t *testing.T) {
+	if got := BusyboxLinkage(staticELF(t)); got != "static" {
+		t.Errorf("static fixture: %s", got)
+	}
+	if got := BusyboxLinkage(dynamicELF(t)); got != "dynamic" {
+		t.Errorf("dynamic fixture: %s", got)
+	}
+	text := filepath.Join(t.TempDir(), "busybox")
+	write(t, text, []byte("#!/bin/sh\necho I am not busybox\n"), 0o755)
+	if got := BusyboxLinkage(text); got != "unknown" {
+		t.Errorf("a script: %s", got)
+	}
+	if got := BusyboxLinkage(filepath.Join(t.TempDir(), "nothing")); got != "unknown" {
+		t.Errorf("a missing file: %s", got)
+	}
+}
+
+// Every unmet requirement is named, not just the first: a report naming
+// one of several costs a round trip per guess.
+func TestMissingNamesEveryRequirement(t *testing.T) {
+	root := t.TempDir()
+	b := fixtureBackend(root)
+	want := []string{
+		"qemu-system-x86_64 (not on PATH)",
+		"busybox (not on PATH)",
+		"a readable kernel image for 6.1.0-test (looked for: " + strings.Join(b.KernelCandidates(), " ") + ")",
+	}
+	if got := b.Missing(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Missing()\n got %q\nwant %q", got, want)
+	}
+	for _, l := range b.Missing() {
+		if strings.Contains(l, "cpio") {
+			t.Errorf("cpio is no longer a requirement (Ruling 5): %q", l)
+		}
+	}
+	if !strings.Contains(want[2], filepath.Join(root, "boot", "kernel-*")) {
+		t.Errorf("the kernel line does not list the glob: %q", want[2])
+	}
+}
+
+// A dynamic busybox passes every other check and then cannot exec /init
+// inside the microVM: it is named as the wrong busybox, not a missing one.
+func TestMissingReportsADynamicBusyboxAsTheWrongOne(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "boot/vmlinuz-6.1.0-test"), []byte("kernel"), 0o644)
+	dyn := dynamicELF(t)
+	b := fixtureBackend(root)
+	b.Runner = &proc.Fake{Paths: map[string]string{"qemu-system-x86_64": "/usr/bin/qemu-system-x86_64", "busybox": dyn}}
+	want := []string{"a statically linked busybox: " + dyn + " is dynamically linked, and the initramfs has no loader or libraries for it (Debian: busybox-static)"}
+	if got := b.Missing(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Missing()\n got %q\nwant %q", got, want)
+	}
+}
+
+// A busybox whose linkage cannot be read is not reported: refusing to
+// build on a guess would be a worse failure than the one this catches.
+func TestMissingDoesNotGuessAtAnUnknownBusybox(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "boot/vmlinuz-6.1.0-test"), []byte("kernel"), 0o644)
+	script := filepath.Join(root, "busybox")
+	write(t, script, []byte("#!/bin/sh\n"), 0o755)
+	b := fixtureBackend(root)
+	b.Runner = &proc.Fake{Paths: map[string]string{"qemu-system-x86_64": "/q", "busybox": script}}
+	if got := b.Missing(); len(got) != 0 {
+		t.Fatalf("Missing() = %q", got)
+	}
+}
+
+func TestNothingIsMissingWhenAllIsMet(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "boot/vmlinuz-6.1.0-test"), []byte("kernel"), 0o644)
+	b := fixtureBackend(root)
+	b.Runner = &proc.Fake{Paths: map[string]string{"qemu-system-x86_64": "/usr/bin/qemu-system-x86_64", "busybox": staticELF(t)}}
+	if got := b.Missing(); len(got) != 0 {
+		t.Fatalf("Missing() = %q", got)
+	}
+}
+
+// The backend boots a Linux kernel with its own modules: on another OS
+// that is the one thing missing, and nothing else is probed.
+func TestMissingOnAnotherOS(t *testing.T) {
+	f := &proc.Fake{}
+	b := fixtureBackend(t.TempDir())
+	b.Runner = f
+	b.GOOS = "darwin"
+	want := []string{"the qemu-linux privops backend (it boots a Linux kernel with its own modules; this host is darwin)"}
+	if got := b.Missing(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Missing() = %q", got)
+	}
+	if len(f.Calls) != 0 {
+		t.Fatalf("probed on darwin: %v", f.Calls)
+	}
+}
+
+// NewBackend asks uname for the running release and fills the defaults
+// the shell's MQG_PRIVOPS_* variables had (Ruling 3).
+func TestNewBackendReadsTheReleaseFromUname(t *testing.T) {
+	f := &proc.Fake{Handle: func(c proc.Cmd) error {
+		if c.Name == "uname" && reflect.DeepEqual(c.Args, []string{"-r"}) {
+			_, _ = c.Stdout.Write([]byte("6.1.0-test\n"))
+		}
+		return nil
+	}}
+	b, err := NewBackend(f, "qemu-system-x86_64", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.GOOS != "linux" {
+		if len(f.Calls) != 0 {
+			t.Fatalf("asked uname on %s: %v", b.GOOS, f.Calls)
+		}
+		return
+	}
+	if b.KVer != "6.1.0-test" || b.BootDir != "/boot" || b.ModulesDir != "/lib/modules" ||
+		b.MemMiB != 512 || b.Timeout.Minutes() != 15 || !reflect.DeepEqual(b.Modules, DefaultModules) {
+		t.Fatalf("%+v", b)
+	}
+	if strings.Join(DefaultModules, " ") != "nls_base nls_utf8 hfsplus virtio virtio_ring virtio_pci virtio_blk" {
+		t.Fatalf("DefaultModules = %v", DefaultModules)
+	}
+}
