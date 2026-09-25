@@ -96,7 +96,7 @@ cmd/vmavs/main.go     argv → cli.Run, exit code; nothing else
 internal/
   cli/        subcommand table, shared flag parsing, help text, exit codes, logging
   config/     every default; VMAVS_HOME and the path layout (§5); machine options
-  run/        the one interface to external commands (Runner), with a
+  proc/       the one interface to external commands (Runner), with a
               recording fake for tests; timeouts via context
   pins/       sources.tsv parsing, fetch + sha256 verification, the download cache
   fetch/      esd, openssh, updates, kexts, edk2, opencorepkg
@@ -106,6 +106,8 @@ internal/
   media/      installer media assembly; the privops microVM driver
   payload/    the first-boot flat .pkg, including a xar writer (replaces mkflatpkg.py)
   machine/    THE machine definition (§4)
+  manifest/   built-image manifests: parse, find, hardware, SSH facts
+  vm/         run directories: overlay, NVRAM, state
   guest/      SSH client (x/crypto/ssh), screenshots over the QEMU monitor
   pipeline/   stages, input-hash freshness, manifest, ingredient fingerprint, locks
   emit/       Packer HCL from machine.Spec via hashicorp/hcl/v2/hclwrite
@@ -126,6 +128,7 @@ binary. Renovate's managers and CI's pin checks point at their new paths.
 
 - the standard library;
 - `golang.org/x/crypto`, for SSH;
+- `golang.org/x/term`, for the interactive shell's raw mode;
 - `github.com/hashicorp/hcl/v2`, for `hclwrite` (MPL-2.0).
 
 Nothing from Packer core (BUSL-1.1). There is no CLI framework: `flag`
@@ -245,14 +248,14 @@ subcommands (`fetch`, `firmware`, `media`, `install`) are named groups of
 these stages. The manifest keeps today's fields, in `MANIFEST_FIELDS`
 order, so existing manifests stay comparable.
 
-**External processes** run through `run.Runner` with a `context`
+**External processes** run through `proc.Runner` with a `context`
 deadline. A VM stage supervises QEMU and the SSH wait concurrently, and
 cleanup is `defer`, not traps.
 
 ## 7. Testing
 
 - **Unit tests per package** (`go test ./...`). Everything external goes
-  through `run.Runner`, temp dirs and `httptest`, so no test needs QEMU,
+  through `proc.Runner`, temp dirs and `httptest`, so no test needs QEMU,
   KVM, packer or Apple's bytes.
 - **Golden files for generated artifacts:**
   - QEMU command lines per `Spec` role;

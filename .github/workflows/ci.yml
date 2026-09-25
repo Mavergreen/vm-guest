@@ -110,3 +110,31 @@ jobs:
               ./bin/vmavs emit packer --profile "$p" --out "$out" --check
               echo "::endgroup::"
           done
+
+  # The Go vmavs (docs/superpowers/specs/2026-09-24-vmavs-in-go-design.md).
+  # Builds for every host the tool targets, not only the one CI runs on:
+  # a darwin or netbsd build break is found here, not by a user.
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
+
+      - name: Cross-build
+        run: |
+          set -eu
+          for target in linux/amd64 darwin/amd64 darwin/arm64 netbsd/amd64; do
+              GOOS=${target%/*} GOARCH=${target#*/} go build -o /dev/null ./cmd/vmavs
+          done
