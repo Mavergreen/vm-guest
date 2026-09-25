@@ -131,7 +131,9 @@ func Prepare(ctx context.Context, r proc.Runner, p config.Paths, m manifest.Mani
 // 3 onward, os/exec's ExtraFiles convention): the flock is then held by
 // QEMU's copy of the open file description too, so it survives vmavs
 // being killed outright (a SIGKILL it cannot catch to release the lock
-// itself) for as long as QEMU keeps running.
+// itself) for as long as QEMU keeps running. REASONED from flock(2):
+// TestBootHandsQEMUTheLockedStateFile checks only that the command is
+// handed the file.
 func (r *Run) Boot(ctx context.Context, run proc.Runner, stdin io.Reader, stdout, stderr io.Writer) error {
 	c := r.Spec.Command()
 	c.Stdin, c.Stdout, c.Stderr = stdin, stdout, stderr

@@ -267,10 +267,15 @@ directory `vmavs` made has a state file from its first slow step on.
 Once QEMU is running, the run passes it the locked file as an inherited
 descriptor, so the lock survives `vmavs run` itself being killed
 outright (a `SIGKILL` it has no chance to release the lock for) for as
-long as QEMU keeps running. For the same reason `vmavs run` never
+long as QEMU keeps running. That is REASONED from `flock(2)`'s
+semantics: the unit test checks only that the (fake) QEMU command is
+handed the file, and no real `vmavs run` has been killed to see it. For the same reason `vmavs run` never
 unlocks the file explicitly: the lock belongs to the open file
 description QEMU shares, so `LOCK_UN` would release QEMU's hold too; it
-only closes its own descriptor.
+only closes its own descriptor. A `VMAVS_HOME` on NFS may not give
+`flock` these semantics (depending on the client, it is emulated with
+POSIX locks, or local to one machine), so liveness there is not
+guaranteed; REASONED, not tried.
 
 There is no separate reaper process. `vmavs run` and `vmavs ssh` each
 remove every dead run directory that is not `--keep` before doing
