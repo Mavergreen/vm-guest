@@ -11,7 +11,7 @@ import (
 	vmguest "github.com/Mavergreen/vm-guest"
 )
 
-func config(t *testing.T) []byte {
+func embeddedConfig(t *testing.T) []byte {
 	t.Helper()
 	b, err := fs.ReadFile(vmguest.Files, "boot/config/config.plist")
 	if err != nil {
@@ -31,8 +31,8 @@ func TestTheTableIsTheLibrarysWordForWord(t *testing.T) {
 }
 
 func TestTheDefaultIsWhatConfigPlistShips(t *testing.T) {
-	if DefaultSMBIOS != "iMac14,2" || ProductName(config(t)) != DefaultSMBIOS {
-		t.Fatalf("default %s, config.plist %s", DefaultSMBIOS, ProductName(config(t)))
+	if DefaultSMBIOS != "iMac14,2" || ProductName(embeddedConfig(t)) != DefaultSMBIOS {
+		t.Fatalf("default %s, config.plist %s", DefaultSMBIOS, ProductName(embeddedConfig(t)))
 	}
 }
 
@@ -70,7 +70,7 @@ func TestSetProductNameMatchesTheLibraryByteForByte(t *testing.T) {
 		t.Skip("bash not installed")
 	}
 	for _, m := range []string{"MacPro5,1", "iMac14,2"} {
-		got, err := SetProductName(config(t), m)
+		got, err := SetProductName(embeddedConfig(t), m)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +84,7 @@ func TestSetProductNameMatchesTheLibraryByteForByte(t *testing.T) {
 // This needs no shell: SetProductName is pure Go. It must not be gated
 // behind the bash skip above, or it never runs on a host without bash.
 func TestSettingTheModelAlreadyThereChangesNoByte(t *testing.T) {
-	if same, _ := SetProductName(config(t), DefaultSMBIOS); string(same) != string(config(t)) {
+	if same, _ := SetProductName(embeddedConfig(t), DefaultSMBIOS); string(same) != string(embeddedConfig(t)) {
 		t.Fatal("setting the model already there must not change a byte")
 	}
 }
@@ -136,10 +136,10 @@ func TestSetProductNameRefusesWhenKeyAndValueShareALine(t *testing.T) {
 }
 
 func TestSetProductNameRefusesWhatItCannotDoSafely(t *testing.T) {
-	if _, err := SetProductName(config(t), "a<b"); err == nil {
+	if _, err := SetProductName(embeddedConfig(t), "a<b"); err == nil {
 		t.Fatal("a malformed model must be refused")
 	}
-	two := strings.Replace(string(config(t)), "<key>SystemProductName</key>",
+	two := strings.Replace(string(embeddedConfig(t)), "<key>SystemProductName</key>",
 		"<key>SystemProductName</key>\n<string>x</string>\n<key>SystemProductName</key>", 1)
 	if _, err := SetProductName([]byte(two), "MacPro5,1"); err == nil || !strings.Contains(err.Error(), "2 SystemProductName keys") {
 		t.Fatalf("err = %v", err)
