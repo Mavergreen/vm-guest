@@ -2,6 +2,10 @@ package diskimg
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
+	"hash/crc32"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,11 +20,63 @@ func espOn(sectors uint64) []Partition {
 		FirstLBA: AlignLBA, LastLBA: LastUsableLBA(sectors)}}
 }
 
-// image is an in-memory disk of n sectors.
+// image is an in-memory disk of n sectors. Like a file, it says so when
+// a write or a read runs past its end.
 type image []byte
 
-func (m image) WriteAt(p []byte, off int64) (int, error) { return copy(m[off:], p), nil }
-func (m image) ReadAt(p []byte, off int64) (int, error)  { return copy(p, m[off:]), nil }
+func (m image) WriteAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, errors.New("image: negative offset")
+	}
+	if off >= int64(len(m)) {
+		return 0, io.ErrShortWrite
+	}
+	if n := copy(m[off:], p); n < len(p) {
+		return n, io.ErrShortWrite
+	}
+	return len(p), nil
+}
+
+func (m image) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, errors.New("image: negative offset")
+	}
+	if off >= int64(len(m)) {
+		return 0, io.EOF
+	}
+	if n := copy(p, m[off:]); n < len(p) {
+		return n, io.EOF
+	}
+	return len(p), nil
+}
+
+// The in-memory disk keeps io.WriterAt's and io.ReaderAt's promises, so
+// that a test cannot pass by writing or reading past its end unnoticed.
+func TestImageHonoursWriterAtAndReaderAt(t *testing.T) {
+	m := make(image, 8)
+	if n, err := m.WriteAt([]byte("abcd"), 6); n != 2 || err != io.ErrShortWrite {
+		t.Errorf("a write across the end: %d, %v", n, err)
+	}
+	if n, err := m.WriteAt([]byte("x"), 100); n != 0 || err != io.ErrShortWrite {
+		t.Errorf("a write past the end: %d, %v", n, err)
+	}
+	buf := make([]byte, 4)
+	if n, err := m.ReadAt(buf, 6); n != 2 || err != io.EOF || string(buf[:2]) != "ab" {
+		t.Errorf("a read across the end: %d, %v, %q", n, err, buf[:n])
+	}
+	if n, err := m.ReadAt(buf, 100); n != 0 || err != io.EOF {
+		t.Errorf("a read past the end: %d, %v", n, err)
+	}
+	if _, err := m.ReadAt(buf, -1); err == nil {
+		t.Error("a negative offset must fail")
+	}
+	if _, err := m.WriteAt(buf, -1); err == nil {
+		t.Error("a negative offset must fail")
+	}
+	if n, err := m.ReadAt(buf, 0); n != 4 || err != nil {
+		t.Errorf("a read inside: %d, %v", n, err)
+	}
+}
 
 func TestGUIDTextRoundTrips(t *testing.T) {
 	g := MustGUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B")
@@ -101,6 +157,44 @@ func TestReadGPTRefusesACorruptTable(t *testing.T) {
 	img[2*SectorSize+100] ^= 0xFF // inside the primary partition entries
 	if _, _, err := ReadGPT(img, mib192); err == nil || !strings.Contains(err.Error(), "CRC") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// ReadGPT refuses a table whose CRCs hold but whose numbers cannot: a
+// primary header that says it lives elsewhere, and entries that end
+// before they start or past the disk.
+func TestReadGPTRefusesATableThatCannotBe(t *testing.T) {
+	le := binary.LittleEndian
+	// reseal recomputes the primary entries' CRC and the header's.
+	reseal := func(img image) {
+		h := img[SectorSize : 2*SectorSize]
+		le.PutUint32(h[88:], crc32.ChecksumIEEE(img[2*SectorSize:34*SectorSize]))
+		le.PutUint32(h[16:], 0)
+		le.PutUint32(h[16:], crc32.ChecksumIEEE(h[:92]))
+	}
+	entry := 2 * SectorSize
+	for name, c := range map[string]struct {
+		patch func(img image)
+		want  string
+	}{
+		"a header that says it is at LBA 2": {func(img image) { le.PutUint64(img[SectorSize+24:], 2) }, "LBA"},
+		"an entry that ends before it starts": {func(img image) {
+			le.PutUint64(img[entry+32:], 5000)
+			le.PutUint64(img[entry+40:], 4000)
+		}, "ends"},
+		"an entry that ends past the disk": {func(img image) { le.PutUint64(img[entry+40:], mib192) }, "past"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			img := make(image, mib192*SectorSize)
+			if err := WriteGPT(img, mib192, DerivedGUID("d"), espOn(mib192)); err != nil {
+				t.Fatal(err)
+			}
+			c.patch(img)
+			reseal(img)
+			if _, _, err := ReadGPT(img, mib192); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want one naming %q", err, c.want)
+			}
+		})
 	}
 }
 

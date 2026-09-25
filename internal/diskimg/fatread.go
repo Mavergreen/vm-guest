@@ -70,7 +70,11 @@ func OpenFAT(r io.ReaderAt, off int64) (*FATReader, error) {
 		return nil, fmt.Errorf("implausible boot sector: %d reserved and FAT sectors in a filesystem of %d", meta, g.Sectors)
 	}
 	g.Clusters = (g.Sectors - uint32(meta)) / g.SectorsPerCluster
-	if uint64(g.Clusters+2)*4 > uint64(g.FATSectors)*SectorSize {
+	if g.Clusters > fat32MaxClusters {
+		return nil, fmt.Errorf("implausible boot sector: %d clusters, and FAT32 numbers at most %d clusters", g.Clusters, fat32MaxClusters)
+	}
+	fatBytes := (int64(g.Clusters) + 2) * 4 // the part of the FAT that maps a cluster
+	if fatBytes > int64(g.FATSectors)*SectorSize {
 		return nil, fmt.Errorf("implausible boot sector: a FAT of %d sectors cannot map %d clusters", g.FATSectors, g.Clusters)
 	}
 	fr := &FATReader{
@@ -85,8 +89,14 @@ func OpenFAT(r io.ReaderAt, off int64) (*FATReader, error) {
 	if fr.root < rootCluster || fr.root > g.Clusters+1 {
 		return nil, fmt.Errorf("root cluster %d is outside clusters 2-%d", fr.root, g.Clusters+1)
 	}
-	raw := make([]byte, (g.Clusters+2)*4)
-	if _, err := r.ReadAt(raw, off+int64(g.ReservedSectors)*SectorSize); err != nil {
+	// Before allocating the FAT, make sure r holds all of it: a crafted
+	// boot sector must not buy a gigabyte of memory with 4 KiB of input.
+	fatAt := off + int64(g.ReservedSectors)*SectorSize
+	if _, err := r.ReadAt(make([]byte, 1), fatAt+fatBytes-1); err != nil {
+		return nil, fmt.Errorf("the FAT's %d bytes are not all there: %w", fatBytes, err)
+	}
+	raw := make([]byte, fatBytes)
+	if _, err := r.ReadAt(raw, fatAt); err != nil {
 		return nil, fmt.Errorf("reading the FAT: %w", err)
 	}
 	fr.fat = make([]uint32, g.Clusters+2)
@@ -97,23 +107,36 @@ func OpenFAT(r io.ReaderAt, off int64) (*FATReader, error) {
 }
 
 // chain is the clusters of the chain that starts at first: none when
-// first is 0.
+// first is 0. Every entry up to the end-of-chain mark must name another
+// cluster of the filesystem: a free (0) or reserved (1) entry, or one
+// past the last cluster, cuts the chain, and is an error, never the end.
 func (fr *FATReader) chain(first uint32) ([]uint32, error) {
+	if first == 0 {
+		return nil, nil
+	}
+	last := fr.G.Clusters + 1
+	if first < rootCluster || first > last {
+		return nil, fmt.Errorf("a chain starts at cluster %d, outside clusters 2-%d", first, last)
+	}
 	var cs []uint32
-	for c := first; c != 0; {
-		switch {
-		case c < rootCluster || c > fr.G.Clusters+1:
-			return nil, fmt.Errorf("the chain from cluster %d reaches cluster %d, outside clusters 2-%d", first, c, fr.G.Clusters+1)
-		case uint32(len(cs)) >= fr.G.Clusters:
+	for c := first; ; {
+		if uint32(len(cs)) >= fr.G.Clusters {
 			return nil, fmt.Errorf("the chain from cluster %d is a loop", first)
 		}
 		cs = append(cs, c)
-		if fr.fat[c] >= fatEnd {
-			break
+		n := fr.fat[c]
+		switch {
+		case n >= fatEnd:
+			return cs, nil
+		case n == 0:
+			return nil, fmt.Errorf("the chain from cluster %d is cut: cluster %d's FAT entry is 0, a free cluster, not the end-of-chain mark", first, c)
+		case n == 1:
+			return nil, fmt.Errorf("the chain from cluster %d is cut: cluster %d's FAT entry is 1, a reserved value", first, c)
+		case n > last:
+			return nil, fmt.Errorf("the chain from cluster %d is cut: cluster %d's FAT entry is %#x, outside clusters 2-%d", first, c, n, last)
 		}
-		c = fr.fat[c]
+		c = n
 	}
-	return cs, nil
 }
 
 // readChain is the bytes of the chain from first, a run of contiguous

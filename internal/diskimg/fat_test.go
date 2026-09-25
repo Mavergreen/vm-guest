@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -376,9 +377,11 @@ func TestFATReaderRefusesBrokenChains(t *testing.T) {
 		patch func(img image, r *FATReader, first uint32)
 		want  string
 	}{
-		"a loop":                 {func(img image, _ *FATReader, c uint32) { setFAT(img, c+2, c) }, "loop"},
-		"a free cluster":         {func(img image, _ *FATReader, c uint32) { setFAT(img, c+1, 0) }, "cluster"},
-		"a cluster past the end": {func(img image, r *FATReader, c uint32) { setFAT(img, c, r.G.Clusters+2) }, "cluster"},
+		"a loop": {func(img image, _ *FATReader, c uint32) { setFAT(img, c+2, c) }, "loop"},
+		// /F's last entry freed: the three clusters still hold its size,
+		// so only the chain itself can tell that it is cut.
+		"a free entry ending the chain": {func(img image, _ *FATReader, c uint32) { setFAT(img, c+2, 0) }, "free"},
+		"a cluster past the end":        {func(img image, r *FATReader, c uint32) { setFAT(img, c, r.G.Clusters+2) }, "cluster"},
 		"a size past the chain": {func(img image, r *FATReader, _ uint32) {
 			img[r.G.clusterOffset(rootCluster)+2*dirEntrySize+28] = 0xFF // /F's size (slot 2): 0x6FF, more than 3 clusters
 			img[r.G.clusterOffset(rootCluster)+2*dirEntrySize+29] = 0x06
@@ -395,6 +398,24 @@ func TestFATReaderRefusesBrokenChains(t *testing.T) {
 				t.Fatalf("err = %v, want it to mention %q", err, c.want)
 			}
 		})
+	}
+
+	// /D's one cluster, its chain cut by a free entry: an error, not
+	// a directory listed as far as the cut.
+	{
+		img, r, _ := fresh(t)
+		es, _ := r.ReadDir("/")
+		setFAT(img, es[0].Cluster, 0)
+		r, err := OpenFAT(img, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if es, err := r.ReadDir("/D"); err == nil || es != nil || !strings.Contains(err.Error(), "free") {
+			t.Errorf("a directory whose chain is cut: %+v, %v", es, err)
+		}
+		if err := r.Walk(func(string, DirEntry) error { return nil }); err == nil || !strings.Contains(err.Error(), "free") {
+			t.Errorf("Walk over a cut directory: %v", err)
+		}
 	}
 
 	img, r, _ := fresh(t)
@@ -447,6 +468,18 @@ func TestFATWriteToRefusesABadGeometry(t *testing.T) {
 		"a FAT too small":             func() Geometry { g := good; g.FATSectors = 1; return g }(),
 		"more clusters than it holds": func() Geometry { g := good; g.Clusters += 100; return g }(),
 		"no reserved sectors":         func() Geometry { g := good; g.ReservedSectors = 0; return g }(),
+		// Within a uint32 end to end, but more clusters than a 28-bit
+		// entry numbers.
+		"more clusters than FAT32 numbers": {Sectors: 0xFFFFFFFF, SectorsPerCluster: 1, ReservedSectors: 32, FATs: 1,
+			FATSectors: 0x200000, Clusters: fat32MaxClusters + 1},
+		// FATSectors*512 wraps a uint32 to 0.
+		"a FAT whose size wraps": {Sectors: 0xFFFFFFFF, SectorsPerCluster: 1, ReservedSectors: 32, FATs: 2,
+			FATSectors: 0x800000, Clusters: 1000},
+		// The boot sector holds these in 16 and 8 bits.
+		"reserved sectors past 16 bits":        func() Geometry { g := good; g.ReservedSectors = 0x10020; g.Sectors += 0x10000; return g }(),
+		"256 sectors per cluster":              func() Geometry { g := good; g.SectorsPerCluster = 256; g.Clusters /= 256; return g }(),
+		"sectors per cluster not a power of 2": func() Geometry { g := good; g.SectorsPerCluster = 3; g.Clusters /= 3; return g }(),
+		"256 FATs":                             func() Geometry { g := good; g.FATs = 256; g.FATSectors = 1; g.Clusters = 100; return g }(),
 	} {
 		err := func() (err error) {
 			defer func() {
@@ -456,8 +489,81 @@ func TestFATWriteToRefusesABadGeometry(t *testing.T) {
 			}()
 			return mustFAT(t).WriteTo(make(image, 41<<20), 0, g)
 		}()
-		if err == nil || strings.Contains(err.Error(), "panicked") {
-			t.Errorf("%s: err = %v", name, err)
+		if err == nil || !strings.Contains(err.Error(), "geometry") {
+			t.Errorf("%s: err = %v, want Geometry.valid's refusal", name, err)
 		}
+	}
+}
+
+// OpenFAT refuses a boot sector whose numbers would have it allocate
+// gigabytes, or overflow into a panic, before it allocates anything
+// large: a FAT that a 28-bit entry cannot number, or one the reader does
+// not hold.
+func TestOpenFATRefusesACraftedBootSector(t *testing.T) {
+	craft := func(size int, spc byte, fats byte, fatSectors, clusters uint32) []byte {
+		b := make([]byte, size)
+		copy(b[3:11], "CRAFTED ")
+		b[11], b[12] = 0x00, 0x02 // 512 bytes per sector
+		b[13] = spc
+		b[14], b[15] = 32, 0 // reserved
+		b[16] = fats
+		put := func(at int, v uint32) {
+			for i := 0; i < 4; i++ {
+				b[at+i] = byte(v >> (8 * i))
+			}
+		}
+		put(32, 32+uint32(fats)*fatSectors+clusters*uint32(spc))
+		put(36, fatSectors)
+		put(44, rootCluster)
+		b[510], b[511] = 0x55, 0xAA
+		return b
+	}
+	for name, c := range map[string]struct {
+		img  []byte
+		want string
+	}{
+		// Clusters+2 is 0x40000000: times four, it wraps a uint32 to 0.
+		"a FAT whose size wraps, on 20 KiB": {craft(20<<10, 1, 1, 0x800001, 0x3FFFFFFE), "clusters"},
+		// Within FAT32's numbering, but a 1 GiB FAT on 4 KiB of input.
+		"a FAT the input does not hold, on 4 KiB": {craft(4<<10, 1, 1, 0x200000, 0x0FFFFFF0), "FAT"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			err := func() (err error) {
+				defer func() {
+					if p := recover(); p != nil {
+						err = fmt.Errorf("panicked: %v", p)
+					}
+				}()
+				_, err = OpenFAT(bytes.NewReader(c.img), 0)
+				return err
+			}()
+			runtime.ReadMemStats(&after)
+			if err == nil || strings.Contains(err.Error(), "panicked") || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err = %v, want one naming %q", err, c.want)
+			}
+			if grew := after.TotalAlloc - before.TotalAlloc; grew > 64<<20 {
+				t.Errorf("allocated %d MiB on the way", grew>>20)
+			}
+		})
+	}
+}
+
+// A file's size is 32 bits in its directory entry.
+func TestWriteFileRefusesMoreThanADirectoryEntrySizes(t *testing.T) {
+	if err := checkFileSize(1 << 32); err == nil || !strings.Contains(err.Error(), "4294967295") {
+		t.Errorf("4 GiB: %v", err)
+	}
+	if err := checkFileSize(1<<32 - 1); err != nil {
+		t.Errorf("4 GiB less a byte: %v", err)
+	}
+	// And the largest size it takes must not wrap when rounded up to
+	// whole clusters.
+	if got := clustersFor(0xFFFFFFFF, 4096); got != 0x100000 {
+		t.Errorf("0xFFFFFFFF bytes in 4 KiB clusters: %#x clusters, want 0x100000", got)
+	}
+	if got := clustersFor(0, 512); got != 0 {
+		t.Errorf("an empty file: %d clusters", got)
 	}
 }

@@ -26,6 +26,8 @@ const (
 	// fat32MaxClusters is the most a 28-bit FAT entry can number: cluster
 	// 0x0FFFFFF6 on are reserved, and 0x0FFFFFF7 marks a bad cluster.
 	fat32MaxClusters = 0x0FFFFFF5
+	// fatMaxSectors is the largest FAT that numbering needs: 1 GiB.
+	fatMaxSectors    = ((fat32MaxClusters+2)*4 + SectorSize - 1) / SectorSize
 	rootCluster      = 2
 	fsInfoSector     = 1
 	backupBootSector = 6
@@ -73,9 +75,17 @@ func (g Geometry) valid() error {
 	switch {
 	case g.SectorsPerCluster == 0 || g.FATs == 0:
 		return fmt.Errorf("geometry %+v: no clusters or no FATs", g)
+	case g.SectorsPerCluster > 128 || g.SectorsPerCluster&(g.SectorsPerCluster-1) != 0:
+		return fmt.Errorf("geometry %+v: %d sectors per cluster; the boot sector holds a power of 2 from 1 to 128", g, g.SectorsPerCluster)
+	case g.FATs > 0xFF || g.ReservedSectors > 0xFFFF:
+		return fmt.Errorf("geometry %+v: the boot sector holds at most 255 FATs and 65535 reserved sectors", g)
+	case g.Clusters > fat32MaxClusters:
+		return fmt.Errorf("geometry %+v: %d clusters, and FAT32 numbers at most %d clusters", g, g.Clusters, fat32MaxClusters)
+	case g.FATSectors > fatMaxSectors:
+		return fmt.Errorf("geometry %+v: a FAT of %d sectors, more than the %d that number every cluster FAT32 can", g, g.FATSectors, fatMaxSectors)
 	case g.ReservedSectors <= backupBootSector:
 		return fmt.Errorf("geometry %+v: %d reserved sectors cannot hold the backup boot sector at %d", g, g.ReservedSectors, backupBootSector)
-	case uint64(g.Clusters+2)*4 > uint64(g.FATSectors)*SectorSize:
+	case (uint64(g.Clusters)+2)*4 > uint64(g.FATSectors)*SectorSize:
 		return fmt.Errorf("geometry %+v: a FAT of %d sectors cannot map %d clusters", g, g.FATSectors, g.Clusters)
 	case end > uint64(g.Sectors):
 		return fmt.Errorf("geometry %+v: the layout ends at sector %d, past the filesystem's %d", g, end, g.Sectors)
@@ -87,7 +97,7 @@ func (g Geometry) clusterBytes() uint32 { return g.SectorsPerCluster * SectorSiz
 
 // clusterOffset is cluster c's byte offset within the filesystem.
 func (g Geometry) clusterOffset(c uint32) int64 {
-	return int64(g.ReservedSectors+g.FATs*g.FATSectors+(c-2)*g.SectorsPerCluster) * SectorSize
+	return (int64(g.ReservedSectors) + int64(g.FATs)*int64(g.FATSectors) + (int64(c)-2)*int64(g.SectorsPerCluster)) * SectorSize
 }
 
 // A FAT is a FAT32 filesystem put together in memory and written in one
@@ -134,6 +144,9 @@ func (f *FAT) Mkdir(path string) error { return f.add(path, &fnode{dir: true}) }
 
 // WriteFile adds a file holding data. Its parent must exist; it must not.
 func (f *FAT) WriteFile(path string, data []byte) error {
+	if err := checkFileSize(int64(len(data))); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
 	return f.add(path, &fnode{data: append([]byte(nil), data...)})
 }
 
@@ -192,7 +205,7 @@ func (f *FAT) WriteTo(w io.WriterAt, off int64, g Geometry) error {
 	cb := g.clusterBytes()
 	next := uint32(rootCluster)
 	alloc := func(n *fnode, bytes uint32) {
-		n.nclust = (bytes + cb - 1) / cb
+		n.nclust = clustersFor(bytes, cb)
 		if n.dir && n.nclust == 0 {
 			n.nclust = 1
 		}
@@ -220,7 +233,7 @@ func (f *FAT) WriteTo(w io.WriterAt, off int64, g Geometry) error {
 		return fmt.Errorf("the files need %d clusters; a filesystem of %d sectors has %d", used, g.Sectors, g.Clusters)
 	}
 
-	fat := make([]byte, g.FATSectors*SectorSize)
+	fat := make([]byte, int(g.FATSectors)*SectorSize)  // at most 1 GiB: valid bounds FATSectors
 	binary.LittleEndian.PutUint32(fat[0:], 0x0FFFFFF8) // the media byte, 0xF8
 	binary.LittleEndian.PutUint32(fat[4:], 0xFFFFFFFF) // clean, no errors: all ones, as mformat writes it
 	var chain func(n *fnode)
@@ -238,7 +251,7 @@ func (f *FAT) WriteTo(w io.WriterAt, off int64, g Geometry) error {
 	}
 	chain(f.root)
 
-	reserved := make([]byte, g.ReservedSectors*SectorSize)
+	reserved := make([]byte, int(g.ReservedSectors)*SectorSize)
 	boot := bootSector(g, f.label, f.serial)
 	// FSInfo's "next free" hint holds the last cluster allocated, as
 	// mformat writes it and the Linux driver reads it (it searches from the
@@ -251,7 +264,7 @@ func (f *FAT) WriteTo(w io.WriterAt, off int64, g Geometry) error {
 
 	writes := []write{{0, reserved}}
 	for i := uint32(0); i < g.FATs; i++ {
-		writes = append(writes, write{int64(g.ReservedSectors+i*g.FATSectors) * SectorSize, fat})
+		writes = append(writes, write{(int64(g.ReservedSectors) + int64(i)*int64(g.FATSectors)) * SectorSize, fat})
 	}
 	var dirs func(d *fnode)
 	dirs = func(d *fnode) {
@@ -397,4 +410,19 @@ func fsInfo(free, last uint32) []byte {
 	binary.LittleEndian.PutUint32(b[492:], last)
 	binary.LittleEndian.PutUint32(b[508:], 0xAA550000)
 	return b
+}
+
+// checkFileSize refuses a file larger than a directory entry's 32-bit
+// size can say.
+func checkFileSize(n int64) error {
+	if n > 0xFFFFFFFF {
+		return fmt.Errorf("%d bytes; a FAT file holds at most 4294967295", n)
+	}
+	return nil
+}
+
+// clustersFor is how many clusters of cb bytes hold n bytes, rounded up
+// without wrapping for the largest n.
+func clustersFor(n, cb uint32) uint32 {
+	return uint32((uint64(n) + uint64(cb) - 1) / uint64(cb))
 }

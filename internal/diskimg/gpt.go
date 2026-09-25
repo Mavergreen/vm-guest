@@ -152,6 +152,9 @@ func ReadGPT(r io.ReaderAt, sectors uint64) (GUID, []Partition, error) {
 	if crc32.ChecksumIEEE(c) != want {
 		return disk, nil, errors.New("GPT header CRC mismatch")
 	}
+	if my := binary.LittleEndian.Uint64(h[24:]); my != 1 {
+		return disk, nil, fmt.Errorf("the GPT header at LBA 1 says it is at LBA %d", my)
+	}
 	copy(disk[:], h[56:72])
 	lba := binary.LittleEndian.Uint64(h[72:])
 	n := binary.LittleEndian.Uint32(h[80:])
@@ -177,6 +180,12 @@ func ReadGPT(r io.ReaderAt, sectors uint64) (GUID, []Partition, error) {
 		copy(p.GUID[:], e[16:32])
 		p.FirstLBA = binary.LittleEndian.Uint64(e[32:])
 		p.LastLBA = binary.LittleEndian.Uint64(e[40:])
+		switch {
+		case p.LastLBA < p.FirstLBA:
+			return disk, nil, fmt.Errorf("GPT entry %d ends (LBA %d) before it starts (LBA %d)", i+1, p.LastLBA, p.FirstLBA)
+		case p.LastLBA > sectors-1:
+			return disk, nil, fmt.Errorf("GPT entry %d ends at LBA %d, past the disk's last, %d", i+1, p.LastLBA, sectors-1)
+		}
 		var u []uint16
 		for j := 0; j < 36; j++ {
 			c := binary.LittleEndian.Uint16(e[56+2*j:])
