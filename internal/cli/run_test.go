@@ -156,6 +156,16 @@ func TestRunWithNoImagesNamesACommandThatExists(t *testing.T) {
 	}
 }
 
+// TestRunRejectsABadMachineFlagBeforeLookingForAnImage: a flag mistake is
+// a usage error (2) whatever VMAVS_HOME holds, not "no built images" (1).
+func TestRunRejectsABadMachineFlagBeforeLookingForAnImage(t *testing.T) {
+	home := shortTempDir(t)
+	code, stderr := runVmavs(t, &proc.Fake{}, map[string]string{"VMAVS_HOME": home}, "run", "--nic", "bogus")
+	if code != 2 || !strings.Contains(stderr, "no such NIC") {
+		t.Fatalf("code=%d stderr=%s", code, stderr)
+	}
+}
+
 func TestRunStopsCleanlyWhenCtxIsCancelled(t *testing.T) {
 	h := shellHome(t)
 	br := blockingRunner{create: &proc.Fake{}}

@@ -37,6 +37,12 @@ func cmdRun(ctx context.Context, e *Env, args []string) error {
 	if fs.NArg() != 0 {
 		return usagef("run takes no arguments (got %q)", fs.Args())
 	}
+	// flagged is the defaults with only the given flags changed, so this
+	// checks exactly what was typed: a flag mistake is a usage error
+	// whatever VMAVS_HOME holds, reported before anything looks there.
+	if err := flagged.Validate(); err != nil {
+		return usagef("%v", err)
+	}
 	p, err := paths(e)
 	if err != nil {
 		return err
@@ -51,7 +57,7 @@ func cmdRun(ctx context.Context, e *Env, args []string) error {
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 	hw.Override(flagged, func(n string) bool { return set[n] })
 	if err := hw.Validate(); err != nil {
-		return usagef("%v", err)
+		return fmt.Errorf("image %s: %w", m.Name, err)
 	}
 	if err := portFree(hw.SSHPort); err != nil {
 		return err
