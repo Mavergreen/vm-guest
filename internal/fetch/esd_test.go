@@ -155,6 +155,9 @@ func TestInstallESDWithARottenCacheNeverHandshakes(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), dest) {
 		t.Fatalf("err = %v, want it to name %s", err, dest)
 	}
+	if strings.Contains(err.Error(), "nothing was renamed into place") {
+		t.Fatalf("err = %v: a rotten file IS at the final name -- this claim is false here", err)
+	}
 	if contacted.Load() {
 		t.Fatal("a rotten cache entry must not trigger a handshake")
 	}

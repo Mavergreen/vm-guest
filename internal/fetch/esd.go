@@ -174,7 +174,10 @@ func (g *Getter) InstallESD(ctx context.Context, reg *pins.Registry, rc Recovery
 		return p, nil
 	}
 	if !errors.Is(err, errNotCached) {
-		return "", withNothingRenamed(err)
+		// A file already sits at the final name here (rotten, or the check
+		// itself failed) -- "nothing was renamed" would be false, not
+		// reassuring, so this error is returned as Get gave it.
+		return "", err
 	}
 	_, token, err := rc.offer(ctx, reg)
 	if err != nil {
