@@ -94,6 +94,8 @@ type Builder struct {
 	Log    func(string, ...any)
 
 	baseMiB int // tests only: the partition before ExtraSpaceMiB, when not BasePartMiB
+	// afterMediaRename, tests only, runs once the media is in place.
+	afterMediaRename func()
 }
 
 func (b *Builder) logf(f string, a ...any) {
@@ -122,8 +124,13 @@ const (
 
 var workFiles = []string{workESD, workBSDmg, workBSImg, workTar, workConsole}
 
-// Describe prints the layout Build would create. It touches nothing.
-func (b *Builder) Describe(w io.Writer, esd string, o Options) {
+// Describe prints the layout Build would create. It touches nothing, and
+// refuses what Build would refuse before it, as the shell validates
+// --extra-space-mib before --describe.
+func (b *Builder) Describe(w io.Writer, esd string, o Options) error {
+	if err := checkSpace(o); err != nil {
+		return err
+	}
 	part := b.partMiB(o)
 	fmt.Fprintf(w, `installer media layout
   output              %s
@@ -153,7 +160,7 @@ func (b *Builder) Describe(w io.Writer, esd string, o Options) {
 		part, int64(part)<<20, ReferencePartitionBytes, MarginMiB, o.ExtraSpaceMiB,
 		part+2, int64(part+2)<<20, VolumeName)
 	if !o.Enabled() {
-		return
+		return nil
 	}
 	fmt.Fprint(w, "\n  unattended-install hooks (--autoinstall)\n")
 	for _, f := range AutoinstallFiles {
@@ -187,7 +194,20 @@ func (b *Builder) Describe(w io.Writer, esd string, o Options) {
     run against a real booted OS.
 `)
 	}
+	return nil
 }
+
+func checkSpace(o Options) error {
+	if o.ExtraSpaceMiB < 0 {
+		return fmt.Errorf("--extra-space-mib wants a whole number of MiB, not %d", o.ExtraSpaceMiB)
+	}
+	return nil
+}
+
+// sidecarTempPrefix is the name, within build/, of a sidecar this
+// package stages before renaming it into place: any file with it is one
+// a killed build left.
+func sidecarTempPrefix(out string) string { return "." + filepath.Base(out) + ".sha256.tmp-" }
 
 // Build makes the installer media from esd and returns its path,
 // Paths.InstallerMedia(), with a .sha256 sidecar beside it:
@@ -211,8 +231,8 @@ func (b *Builder) Describe(w io.Writer, esd string, o Options) {
 func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, err error) {
 	started := time.Now()
 	out := b.Paths.InstallerMedia()
-	if o.ExtraSpaceMiB < 0 {
-		return "", fmt.Errorf("--extra-space-mib wants a whole number of MiB, not %d", o.ExtraSpaceMiB)
+	if err := checkSpace(o); err != nil {
+		return "", err
 	}
 	// Asked before five gigabytes of dmg2img, not when the microVM is
 	// first needed: a host that cannot boot it should find out in a
@@ -284,12 +304,9 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 		if !o.Force {
 			return "", fmt.Errorf("%s exists; pass --force to replace it", out)
 		}
-		b.logf("--force: removing the existing %s", out)
-		for _, p := range []string{out, out + ".sha256"} {
-			if rerr := os.Remove(p); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-				return "", rerr
-			}
-		}
+		// Kept until the new media is verified, and then replaced by one
+		// rename: a forced build that fails leaves what was there.
+		b.logf("--force: %s will be replaced once the new media is verified", out)
 	}
 
 	work := b.Paths.MediaWork()
@@ -300,7 +317,11 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	// stale or half-written one silently becoming media that then costs
 	// an hour of booting. The .building file is only ever a killed build.
 	building := out + ".building"
-	for _, p := range append(wp(work, workFiles...), building, building+".hfs-tmp") {
+	stale, err := filepath.Glob(filepath.Join(filepath.Dir(out), sidecarTempPrefix(out)+"*"))
+	if err != nil {
+		return "", err
+	}
+	for _, p := range append(append(wp(work, workFiles...), building, building+".hfs-tmp"), stale...) {
 		if rerr := os.Remove(p); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 			return "", rerr
 		}
@@ -320,7 +341,7 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	// the volume header, so the first mount after this -- a microVM, a
 	// guest booting the media -- changes the file. That is the media, not
 	// corruption. (sha256sum -c ignores the # lines.)
-	side, err := os.CreateTemp(filepath.Dir(out), "."+filepath.Base(out)+".sha256.tmp-*")
+	side, err := os.CreateTemp(filepath.Dir(out), sidecarTempPrefix(out)+"*")
 	if err != nil {
 		return "", err
 	}
@@ -329,6 +350,9 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 		"# Mounting the image invalidates this: HFS+ records the mount\n"+
 		"# in its volume header, and a read-write mount rewrites it.\n"+
 		"%s  %s\n", filepath.Base(out), time.Now().UTC().Format("2006-01-02T15:04:05Z"), sum, filepath.Base(out))
+	if err == nil {
+		err = side.Sync()
+	}
 	if cerr := side.Close(); err == nil {
 		err = cerr
 	}
@@ -338,28 +362,39 @@ func (b *Builder) Build(ctx context.Context, esd string, o Options) (_ string, e
 	if err != nil {
 		return "", err
 	}
+	// The old sidecar goes first, so that no sidecar ever describes an
+	// image it was not written for; the rename then replaces any old
+	// media in one step.
+	if err := os.Remove(out + ".sha256"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
 	if err := os.Rename(building, out); err != nil {
 		return "", err
 	}
+	if b.afterMediaRename != nil {
+		b.afterMediaRename()
+	}
 	if err := os.Rename(side.Name(), out+".sha256"); err != nil {
-		return "", err
+		return out, fmt.Errorf("%s is in place, but its sidecar is missing: %w -- its sha256 is %s", out, err, sum)
 	}
 
+	// The media is built and in place: nothing after this can fail the
+	// build, only warn.
 	if !o.KeepWork {
 		b.logf("removing the raw conversions (--keep-work keeps them)")
 		for _, p := range wp(work, workFiles...) {
 			if rerr := os.Remove(p); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-				return "", rerr
+				b.logf("warning: cannot remove %s: %v", p, rerr)
 			}
 		}
 		os.Remove(work) // only if empty: what else is there is not ours
 	}
-	fi, err := os.Stat(out)
-	if err != nil {
-		return "", err
-	}
 	b.logf("built %s in %s", out, time.Since(started).Round(time.Second))
-	b.logf("size %d bytes, sha256 %s", fi.Size(), sum)
+	if fi, serr := os.Stat(out); serr != nil {
+		b.logf("warning: cannot read %s back: %v", out, serr)
+	} else {
+		b.logf("size %d bytes, sha256 %s", fi.Size(), sum)
+	}
 	return out, nil
 }
 
@@ -394,7 +429,7 @@ func (b *Builder) build(ctx context.Context, esd string, o Options, work, buildi
 	if err := truncateNew(bsDmg, esdSize); err != nil {
 		return "", err
 	}
-	console, err := b.pass(ctx, "extract-basesystem", building, work,
+	console, err := b.pass(ctx, 1, "extract-basesystem", building, work,
 		privops.Disk{Role: "ro", Path: esdImg}, privops.Disk{Role: "raw", Path: bsDmg})
 	if err != nil {
 		return "", err
@@ -440,7 +475,7 @@ func (b *Builder) build(ctx context.Context, esd string, o Options, work, buildi
 		disks = append(disks, privops.Disk{Role: "raw", Path: tarPath})
 	}
 	b.logf("assembling the media inside the microVM (pass 2 of 4)")
-	if console, err = b.pass(ctx, "assemble", building, work, disks...); err != nil {
+	if console, err = b.pass(ctx, 2, "assemble", building, work, disks...); err != nil {
 		return "", err
 	}
 	// Checked against a constant, not against the source: a bad byte out
@@ -454,7 +489,7 @@ func (b *Builder) build(ctx context.Context, esd string, o Options, work, buildi
 		return "", err
 	}
 	b.logf("restoring root ownership (microVM pass 3 of 4)")
-	if _, err := b.pass(ctx, "fix-ownership", building, work); err != nil {
+	if _, err := b.pass(ctx, 3, "fix-ownership", building, work); err != nil {
 		return "", err
 	}
 
@@ -463,7 +498,7 @@ func (b *Builder) build(ctx context.Context, esd string, o Options, work, buildi
 	// this host's file. A check through the cache that did the writing
 	// once passed media that was corrupt.
 	b.logf("reading the finished media back in a microVM of its own (pass 4 of 4)")
-	if console, err = b.pass(ctx, "verify-packages", building, work); err != nil {
+	if console, err = b.pass(ctx, 4, "verify-packages", building, work); err != nil {
 		return "", err
 	}
 	if err := b.checkSums(console, "MQG-SUM-MEDIA", "the finished media, read by a fresh guest",
@@ -479,7 +514,7 @@ func (b *Builder) build(ctx context.Context, esd string, o Options, work, buildi
 
 // pass runs one embedded payload in the microVM, keeping its console in
 // the work area for whoever has to find out what went wrong.
-func (b *Builder) pass(ctx context.Context, name, target, work string, disks ...privops.Disk) ([]byte, error) {
+func (b *Builder) pass(ctx context.Context, n int, name, target, work string, disks ...privops.Disk) ([]byte, error) {
 	payload, err := fs.ReadFile(vmguest.Files, "media/privops/"+name+".sh")
 	if err != nil {
 		return nil, err
@@ -490,7 +525,10 @@ func (b *Builder) pass(ctx context.Context, name, target, work string, disks ...
 			err = werr
 		}
 	}
-	return console, err
+	if err != nil {
+		return console, fmt.Errorf("pass %d (%s): %w", n, name, err)
+	}
+	return console, nil
 }
 
 // checkSums holds a pass's checksum markers against Apple's pinned

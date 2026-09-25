@@ -41,6 +41,7 @@ type fakeVM struct {
 	reportSHA  string // extract's reported sha, when not the true one
 	badESD     string // a package whose ESD sum assemble gets wrong
 	dropMedia  string // a package verify does not find
+	failPass   string // a payload whose run fails outright
 
 	digest func(disks []privops.Disk) string // content-digest's console
 }
@@ -56,12 +57,23 @@ func (v *fakeVM) Run(_ context.Context, target string, payload []byte, disks []p
 		}
 	}
 	call := vmCall{name: name, target: target, disks: append([]privops.Disk(nil), disks...)}
+	if name == v.failPass {
+		v.calls = append(v.calls, call)
+		return []byte("[    1.0] Kernel panic\r\n"), errors.New("qemu-system-x86_64: exit status 1")
+	}
 	var con strings.Builder
 	// A serial console's carriage returns and a kernel line, which the
 	// markers must be read through.
 	con.WriteString("[    0.123456] booting\r\n")
 	switch name {
 	case "extract-basesystem":
+		// The raw disk is as large as the ESD image, as the real one must
+		// be to hold whatever BaseSystem.dmg the ESD carries.
+		esdSize, rawSize := statSize(t, disks[0].Path), statSize(t, disks[1].Path)
+		if rawSize != esdSize {
+			t.Errorf("the raw disk is %d bytes and esd.img %d", rawSize, esdSize)
+			return nil, errors.New("the raw disk is the wrong size")
+		}
 		f, err := os.OpenFile(disks[1].Path, os.O_RDWR, 0)
 		if err != nil {
 			return nil, err
@@ -89,11 +101,13 @@ func (v *fakeVM) Run(_ context.Context, target string, payload []byte, disks []p
 			}
 		}
 		v.sums(&con, "MQG-SUM-ESD", v.badESD, "")
+		writeAt(t, target, assembledAt, "assembled by pass 2")
 	case "verify-packages":
 		v.sums(&con, "MQG-SUM-MEDIA", "", v.dropMedia)
 	case "content-digest":
 		con.WriteString(v.digest(disks))
 	case "fix-ownership":
+		writeAt(t, target, ownedAt, "owned by pass 3")
 	default:
 		t.Fatalf("an unknown payload was run on %s", target)
 	}
@@ -123,6 +137,34 @@ func (v *fakeVM) sums(w *strings.Builder, marker, bad, drop string) {
 	}
 }
 
+// Where the fake passes 2 and 3 write on the target: inside the
+// partition, clear of the volume header at 1 MiB + 1024.
+const (
+	assembledAt = 2 << 20
+	ownedAt     = 2<<20 + 4096
+)
+
+func writeAt(t *testing.T, path string, off int64, data string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteAt([]byte(data), off); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func statSize(t *testing.T, path string) int64 {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Size()
+}
+
 func (v *fakeVM) names() []string {
 	var n []string
 	for _, c := range v.calls {
@@ -132,7 +174,9 @@ func (v *fakeVM) names() []string {
 }
 
 // fakeTools is a Runner with dmg2img and mkfs.hfsplus on its PATH:
-// dmg2img writes a few bytes to its -o, and mkfs.hfsplus writes a volume
+// dmg2img writes a few bytes to its -o -- 64 KiB for esd.img, larger
+// than the BaseSystem fixture, so that a basesystem.dmg left at the ESD
+// image's size is caught -- and mkfs.hfsplus writes a volume
 // signature, after telling mkfs (if set) the size it was given.
 func fakeTools(mkfs func(size int64) error) *proc.Fake {
 	return &proc.Fake{
@@ -143,7 +187,11 @@ func fakeTools(mkfs func(size int64) error) *proc.Fake {
 				if len(c.Args) != 5 || c.Args[0] != "-s" || c.Args[1] != "-i" || c.Args[3] != "-o" {
 					return fmt.Errorf("unexpected %s", c)
 				}
-				return os.WriteFile(c.Args[4], []byte("raw of "+c.Args[2]), 0o644)
+				data := []byte("raw of " + c.Args[2])
+				if filepath.Base(c.Args[4]) == "esd.img" {
+					data = bytes.Repeat([]byte("raw ESD "), 8192)
+				}
+				return os.WriteFile(c.Args[4], data, 0o644)
 			case "mkfs.hfsplus":
 				f, err := os.OpenFile(c.Args[len(c.Args)-1], os.O_RDWR, 0)
 				if err != nil {
@@ -253,6 +301,12 @@ $`)
 		t.Fatalf("build/ holds %q", names)
 	}
 	absent(t, out+".building", out+".lock", g.b.Paths.MediaWork())
+	img, _ := os.ReadFile(out)
+	for off, want := range map[int]string{assembledAt: "assembled by pass 2", ownedAt: "owned by pass 3"} {
+		if got := string(img[off : off+len(want)]); got != want {
+			t.Errorf("the media holds %q at %d, want %q", got, off, want)
+		}
+	}
 	for _, l := range []string{"converting InstallESD.dmg to raw (about 5 GB)",
 		"bringing BaseSystem.dmg out of the ESD (microVM pass 1 of 4)",
 		"assembling the media inside the microVM (pass 2 of 4)",
@@ -623,7 +677,9 @@ func TestDescribeTouchesNothing(t *testing.T) {
 	var buf bytes.Buffer
 	o := Options{Injectables: Injectables{Autoinstall: true, FirstbootPkg: "/pkgs/fb-built.pkg",
 		ExtraPkgs: []string{"/pkgs/a/openssh.pkg", "/pkgs/b/other.pkg"}}}
-	b.Describe(&buf, "/somewhere/InstallESD.dmg", o)
+	if err := b.Describe(&buf, "/somewhere/InstallESD.dmg", o); err != nil {
+		t.Fatal(err)
+	}
 	text := buf.String()
 	want := []string{
 		"  output              " + filepath.Join(home, "build", "installer-media.img"),
@@ -655,7 +711,9 @@ func TestDescribeTouchesNothing(t *testing.T) {
 	}
 
 	buf.Reset()
-	b.Describe(&buf, "/somewhere/InstallESD.dmg", Options{ExtraSpaceMiB: 300})
+	if err := b.Describe(&buf, "/somewhere/InstallESD.dmg", Options{ExtraSpaceMiB: 300}); err != nil {
+		t.Fatal(err)
+	}
 	if strings.Contains(buf.String(), "unattended-install") {
 		t.Fatalf("hooks described without --autoinstall:\n%s", buf.String())
 	}
@@ -686,4 +744,118 @@ func TestTheLockNamesThisProcessWhenPIDIsUnset(t *testing.T) {
 	if want := strconv.Itoa(os.Getpid()) + "\n"; seen != want {
 		t.Fatalf("the lock named %q during the build, want %q", seen, want)
 	}
+}
+
+// The shell validates --extra-space-mib before --describe, so a layout
+// it could not build is never described.
+func TestDescribeRefusesNegativeSpace(t *testing.T) {
+	b := &Builder{Paths: config.Paths{Home: t.TempDir()}}
+	var buf bytes.Buffer
+	err := b.Describe(&buf, "/somewhere/InstallESD.dmg", Options{ExtraSpaceMiB: -1})
+	if err == nil || !strings.Contains(err.Error(), "--extra-space-mib wants a whole number of MiB, not -1") {
+		t.Fatalf("err = %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("described anyway:\n%s", buf.String())
+	}
+}
+
+// --force replaces the media only with media that has been verified: a
+// forced build that fails leaves the old media and its sidecar exactly
+// as they were.
+func TestAFailedForcedBuildKeepsTheOldMedia(t *testing.T) {
+	g := newRig(t)
+	writeFile(t, g.out, "the old media")
+	writeFile(t, g.out+".sha256", "the old sidecar\n")
+	g.vm.dropMedia = "BSD.pkg"
+	_, err := g.b.Build(context.Background(), g.esd, Options{Force: true})
+	if err == nil || !strings.HasPrefix(err.Error(), "the media does not contain what Apple shipped") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(g.out); string(b) != "the old media" {
+		t.Fatalf("the old media was touched: %q", b)
+	}
+	if b, _ := os.ReadFile(g.out + ".sha256"); string(b) != "the old sidecar\n" {
+		t.Fatalf("the old sidecar was touched: %q", b)
+	}
+	absent(t, g.out+".building", g.out+".lock")
+	if !g.logged("--force: " + g.out + " will be replaced once the new media is verified") {
+		t.Errorf("the replacement was not announced:\n%s", strings.Join(g.logs, "\n"))
+	}
+}
+
+func TestAPassThatFailsIsNamed(t *testing.T) {
+	g := newRig(t)
+	g.vm.failPass = "fix-ownership"
+	_, err := g.b.Build(context.Background(), g.esd, Options{})
+	if err == nil || !strings.Contains(err.Error(), "pass 3 (fix-ownership): qemu-system-x86_64: exit status 1") {
+		t.Fatalf("err = %v", err)
+	}
+	absent(t, g.out, g.out+".building", g.out+".sha256", g.out+".lock")
+	if n := g.vm.names(); strings.Join(n, " ") != "extract-basesystem assemble fix-ownership" {
+		t.Fatalf("passes %q", n)
+	}
+}
+
+// A sidecar temp is only ever one this package staged and a killed build
+// left: its own prefix, and nothing else in build/, is swept.
+func TestStaleSidecarTempsAreSwept(t *testing.T) {
+	g := newRig(t)
+	dir := filepath.Dir(g.out)
+	stale := writeFile(t, filepath.Join(dir, ".installer-media.img.sha256.tmp-12345"), "stale")
+	other := writeFile(t, filepath.Join(dir, "installer-media.img.sha256.tmp-notours"), "not ours")
+	if _, err := g.b.Build(context.Background(), g.esd, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	absent(t, stale)
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("a file that is not ours was removed: %v", err)
+	}
+}
+
+// Once the verified media is in place, the build has succeeded: tidying
+// up after it can only warn. A sidecar that could not follow it is an
+// error that says the media is there.
+func TestAfterTheMediaIsInPlace(t *testing.T) {
+	t.Run("cleanup", func(t *testing.T) {
+		g := newRig(t)
+		g.b.afterMediaRename = func() {
+			esdImg := filepath.Join(g.b.Paths.MediaWork(), "esd.img")
+			if err := os.Remove(esdImg); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(esdImg, "in the way"), "x")
+		}
+		out, err := g.b.Build(context.Background(), g.esd, Options{})
+		if err != nil || out != g.out {
+			t.Fatalf("Build = %q, %v", out, err)
+		}
+		warned := false
+		for _, l := range g.logs {
+			warned = warned || strings.HasPrefix(l, "warning: cannot remove "+filepath.Join(g.b.Paths.MediaWork(), "esd.img"))
+		}
+		if !warned {
+			t.Errorf("no warning:\n%s", strings.Join(g.logs, "\n"))
+		}
+		if _, err := os.Stat(g.out + ".sha256"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("sidecar", func(t *testing.T) {
+		g := newRig(t)
+		g.b.afterMediaRename = func() {
+			temps, _ := filepath.Glob(filepath.Join(filepath.Dir(g.out), ".installer-media.img.sha256.tmp-*"))
+			for _, p := range temps {
+				os.Remove(p)
+			}
+		}
+		out, err := g.b.Build(context.Background(), g.esd, Options{})
+		if out != g.out || err == nil || !strings.Contains(err.Error(), g.out+" is in place, but its sidecar is missing") {
+			t.Fatalf("Build = %q, %v", out, err)
+		}
+		if _, err := os.Stat(g.out); err != nil {
+			t.Fatal(err)
+		}
+		absent(t, g.out+".lock")
+	})
 }
