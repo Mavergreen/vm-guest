@@ -36,6 +36,7 @@ type command struct {
 func commandTable() []command {
 	return []command{
 		{"run", "Boot a built image on a throwaway overlay", cmdRun},
+		{"ssh", "Open a shell in the running guest", cmdSSH},
 		{"version", "Print this vmavs's version", cmdVersion},
 	}
 }
