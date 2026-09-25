@@ -242,6 +242,8 @@ func extractKext(ctx context.Context, archive, name, dest string) (err error) {
 
 	if _, err := os.Lstat(dest); err == nil {
 		return fmt.Errorf("cannot unpack %s: %s already exists", archive, dest)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return err

@@ -154,6 +154,12 @@ func TestCheckRefusesBelowTheFloorAndWarnsAbove(t *testing.T) {
 	if !strings.Contains(log.String(), "NOT tested") || !strings.Contains(log.String(), "--compiler") {
 		t.Fatalf("below log: %s", log.String())
 	}
+	// lib/compiler.sh's BELOW warning explains that -Werror is no longer
+	// inherited, so a diagnostic this compiler spells differently is not
+	// fatal -- restored after fix round 1 dropped it.
+	if !strings.Contains(log.String(), "no longer inherit") || !strings.Contains(log.String(), "no longer fatal") {
+		t.Fatalf("below log missing the -Werror sentence: %s", log.String())
+	}
 
 	log.Reset()
 	if err := (Toolchain{Runner: gccFake("gcc (GCC) 17.1.0", "x")}).Check(ctx, logf); err != nil {
@@ -161,6 +167,13 @@ func TestCheckRefusesBelowTheFloorAndWarnsAbove(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "above the ceiling") || !strings.Contains(log.String(), "not proof") {
 		t.Fatalf("above log: %s", log.String())
+	}
+	// lib/compiler.sh's ABOVE warning names the two concrete checksums and
+	// says to compare against what was built -- restored after fix round 1
+	// dropped them.
+	if !strings.Contains(log.String(), "3373692a") || !strings.Contains(log.String(), "195c4dcf") ||
+		!strings.Contains(log.String(), "compare its checksums against what you built") {
+		t.Fatalf("above log missing the concrete evidence: %s", log.String())
 	}
 
 	log.Reset()

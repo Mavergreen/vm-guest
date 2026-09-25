@@ -2,7 +2,9 @@ package firmware
 
 import (
 	"io/fs"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -77,8 +79,59 @@ func TestSetProductNameMatchesTheLibraryByteForByte(t *testing.T) {
 			t.Errorf("%s: the edit differs from smbios_plist_set", m)
 		}
 	}
+}
+
+// This needs no shell: SetProductName is pure Go. It must not be gated
+// behind the bash skip above, or it never runs on a host without bash.
+func TestSettingTheModelAlreadyThereChangesNoByte(t *testing.T) {
 	if same, _ := SetProductName(config(t), DefaultSMBIOS); string(same) != string(config(t)) {
 		t.Fatal("setting the model already there must not change a byte")
+	}
+}
+
+// A comment (or anything else starting with "<") between the SystemProductName
+// key and its <string> value defeats awk's `sub(/^[^<]*<string>/, ...)`:
+// the substitution silently fails, and both smbios_plist_product_name and
+// smbios_plist_set fall back to weaker behaviour. ProductName and
+// SetProductName must mirror that exactly, byte for byte, rather than
+// doing the sensible thing.
+func TestProductNameAndSetProductNameMirrorAWKWhenACommentPrecedesTheStringTag(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not installed")
+	}
+	dir := t.TempDir()
+	fixture := "<key>SystemProductName</key>\n\t<!-- c --><string>iMac14,2</string>\n"
+	path := filepath.Join(dir, "fixture.plist")
+	if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := ProductName([]byte(fixture))+"\n", shellLib(t, []string{"smbios.sh"}, "smbios_plist_product_name '"+path+"'"); got != want {
+		t.Errorf("ProductName:\n go:    %q\n shell: %q", got, want)
+	}
+
+	got, err := SetProductName([]byte(fixture), "MacPro5,1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := shellLib(t, []string{"smbios.sh"}, "smbios_plist_set '"+path+"' 'MacPro5,1'")
+	if string(got) != want {
+		t.Errorf("SetProductName:\n go:    %q\n shell: %q", got, want)
+	}
+}
+
+// Named deviation (ruling, fix round 1): the shell's awk has a latent bug
+// here. Its first pattern matches ANY line containing the SystemProductName
+// key -- including one that also carries a <string> on the same line -- and
+// "next"s past it, so its second pattern (which rewrites the next line that
+// contains <string>) fires on whatever key/value follows, not on
+// SystemProductName's own value. Rather than port that bug, SetProductName
+// refuses this shape outright.
+func TestSetProductNameRefusesWhenKeyAndValueShareALine(t *testing.T) {
+	plist := "<key>SystemProductName</key><string>x</string>\n"
+	_, err := SetProductName([]byte(plist), "MacPro5,1")
+	if err == nil || !strings.Contains(err.Error(), "share a line") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

@@ -6,8 +6,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -299,6 +303,28 @@ func TestExtractKextFindsTheBundleWhereverItIs(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dest, "dSYM")); err == nil {
 		t.Fatal("dSYM must not be extracted")
 	}
+
+	var got []string
+	if err := filepath.WalkDir(dest, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == dest {
+			return nil
+		}
+		rel, err := filepath.Rel(dest, path)
+		if err != nil {
+			return err
+		}
+		got = append(got, filepath.ToSlash(rel))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Contents", "Contents/Info.plist", "Contents/MacOS", "Contents/MacOS/VirtualSMC"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dest contents = %v, want %v (nothing from dSYM or Tools)", got, want)
+	}
 }
 
 func TestExtractKextTakesTheFirstBundleAndItsNestedContents(t *testing.T) {
@@ -365,5 +391,38 @@ func TestExtractKextRefusesSymlinksAndClimbingNames(t *testing.T) {
 	dest2 := filepath.Join(dir2, "out")
 	if err := extractKext(context.Background(), a2, "Lilu", dest2); err == nil {
 		t.Fatal("a climbing name must fail")
+	}
+}
+
+// TestExtractKextPropagatesALstatErrorThatIsNotNotExist is untarGz's own
+// rule (an Lstat(dest) failure that is not "does not exist" is returned as
+// itself, not swallowed) mirrored onto extractKext: a dest whose parent is
+// unreadable makes Lstat(dest) fail with EACCES, which is not
+// fs.ErrNotExist. Before this fix, extractKext ignored that error and kept
+// going, so the eventual failure came from a much later step (MkdirTemp)
+// instead of naming the real cause.
+func TestExtractKextPropagatesALstatErrorThatIsNotNotExist(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission bits do not work this way on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("permission checks do not apply as root")
+	}
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(blocked, 0o755)
+
+	a := makeZip(t, dir, "Lilu.zip", entry{name: "Lilu.kext/Contents/Info.plist", body: "x"})
+	dest := filepath.Join(blocked, "out")
+	err := extractKext(context.Background(), a, "Lilu", dest)
+	var pe *fs.PathError
+	if !errors.As(err, &pe) || pe.Op != "lstat" {
+		t.Fatalf("must propagate the Lstat error itself: %v", err)
 	}
 }

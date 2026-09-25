@@ -107,6 +107,14 @@ func SMBIOSCheck(model string, logf func(string, ...any)) {
 	}
 }
 
+// productNameStringPrefix is awk's `/^[^<]*<string>/`: the target line's
+// leading run of non-`<` characters, immediately followed by "<string>".
+// It only matches when nothing but that run precedes the tag -- a `<`
+// anywhere before "<string>" (a comment, say) makes it fail to match at
+// all, which is a latent bug in lib/smbios.sh that ProductName mirrors on
+// purpose: see TestProductNameAndSetProductNameMirrorAWKWhenACommentPrecedesTheStringTag.
+var productNameStringPrefix = regexp.MustCompile(`^[^<]*<string>`)
+
 // ProductName is the SystemProductName currently in plist, or "" (the
 // port of lib/smbios.sh's smbios_plist_product_name).
 func ProductName(plist []byte) string {
@@ -121,9 +129,14 @@ func ProductName(plist []byte) string {
 		}
 		if strings.Contains(line, "<string>") {
 			s := line
-			if i := strings.Index(s, "<string>"); i >= 0 {
-				s = s[i+len("<string>"):]
+			// awk: sub(/^[^<]*<string>/, "", line) -- only strip the
+			// prefix when it actually matches; otherwise leave line
+			// untouched, exactly as a failed sub() would.
+			if m := productNameStringPrefix.FindString(s); m != "" {
+				s = s[len(m):]
 			}
+			// awk: sub(/<\/string>.*$/, "", line) -- always tried,
+			// regardless of whether the first substitution matched.
 			if i := strings.Index(s, "</string>"); i >= 0 {
 				s = s[:i]
 			}
@@ -161,12 +174,30 @@ func SetProductName(plist []byte, model string) ([]byte, error) {
 	for _, line := range lines {
 		switch {
 		case !done && !want && strings.Contains(line, keyLine):
+			// Named deviation (ruling, fix round 1): the shell's awk
+			// pattern here matches any line containing the key --
+			// including one that also carries a <string> -- and "next"s
+			// past it. Its second pattern then fires on the NEXT line
+			// that contains <string>, which may belong to a different
+			// key entirely, silently corrupting it. Refuse instead of
+			// porting that bug.
+			if strings.Contains(line, "<string>") {
+				return nil, fmt.Errorf("smbios: SystemProductName's key and value share a line; refusing to edit a neighbouring key instead")
+			}
 			want = true
 			out.WriteString(line)
 			out.WriteByte('\n')
 		case want && strings.Contains(line, "<string>"):
-			i := strings.Index(line, "<string>")
-			out.WriteString(line[:i])
+			// awk: match($0, /^[^<]*/); printf "%s<string>%s</string>\n",
+			// substr($0, 1, RLENGTH), model -- the leading run of
+			// non-`<` characters, not the text up to "<string>": anything
+			// from the first `<` onward (a comment, the old tag, ...) is
+			// replaced wholesale.
+			j := strings.IndexByte(line, '<')
+			if j < 0 {
+				j = len(line)
+			}
+			out.WriteString(line[:j])
 			out.WriteString("<string>")
 			out.WriteString(model)
 			out.WriteString("</string>\n")

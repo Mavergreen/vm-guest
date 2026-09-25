@@ -178,10 +178,11 @@ func (tc Toolchain) Check(ctx context.Context, logf func(string, ...any)) error 
 			"A new compiler's new warnings no longer stop the firmware build (upstream's",
 			"-Werror is not inherited -- decisions/0004). They are still printed, and up",
 			"here they are worth reading. Up here the failure mode is usually not an error:",
-			"OvmfPkg compiled clean under C23 and produced different firmware bytes. So a",
-			"green build is not proof you got the artifacts decisions/0004 describes:",
-			"compare its checksums. Either answer is worth reporting -- that is how the",
-			"ceiling moves.",
+			"OvmfPkg compiled clean under C23 and produced different firmware bytes",
+			"(OVMF_CODE.fd 3373692a..., where docs/decisions/0004 records 195c4dcf...).",
+			"So a green build is not proof you got the artifacts decisions/0004 describes:",
+			"compare its checksums against what you built. Either answer is worth",
+			"reporting -- that is how the ceiling moves.",
 		} {
 			logf("warning: %s", l)
 		}
@@ -192,8 +193,10 @@ func (tc Toolchain) Check(ctx context.Context, logf func(string, ...any)) error 
 		logf("warning: compiler: %s", d)
 		for _, l := range []string{
 			"This project has NOT tested it. That is not the same as knowing it fails:",
-			"nobody has ever tried. Its code generation would be a different artifact",
-			"than the checksums in docs/decisions/0004 describe.",
+			"nobody has ever tried. The firmware builds no longer inherit upstream's",
+			"-Werror, so a diagnostic this compiler spells differently is no longer fatal",
+			"-- but its code generation is still a different artifact than the checksums",
+			"in docs/decisions/0004 describe.",
 			fmt.Sprintf("To build anyway, say what to believe: --compiler '%s %s'.", CCFamily, CCVerified),
 			"The manifest still records the real compiler, so the two lines will disagree",
 			"where anyone can see them.",
