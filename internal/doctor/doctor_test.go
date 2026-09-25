@@ -265,13 +265,21 @@ func TestDoctorMediaRow(t *testing.T) {
 		t.Fatalf("media = %+v, want READY with the tools present and the microVM available", m)
 	}
 
-	// The microVM runs under KVM (qemu -enable-kvm), which Missing does
-	// not ask about: the media row does.
+	// The KVM device the microVM runs under is Missing's to report
+	// (privops.Backend.KVMDevice): the row repeats what it says, and asks
+	// nothing of its own. The host rows still judge /dev/kvm for run.
 	h = linux(intel, "Y", false, "dmg2img", "mkfs.hfsplus")
 	h.Privops = func() []string { return nil }
-	m = mediaRow(Subcommands(h, p, "qemu-system-x86_64"))
-	if strings.Join(m.Missing, "; ") != "a writable /dev/kvm (the privops microVM runs under KVM)" {
-		t.Fatalf("media.Missing = %q, want the KVM device", m.Missing)
+	if m := mediaRow(Subcommands(h, p, "qemu-system-x86_64")); !m.Ready() {
+		t.Fatalf("media.Missing = %q: the row asked about KVM itself", m.Missing)
+	}
+	if row(HostRows(h), "kvm-device").Status != "FAIL" {
+		t.Fatal("the kvm-device host row no longer judges /dev/kvm")
+	}
+	kvm := "/dev/kvm is not writable by this user (is this user in group kvm? on a VM, is nested virtualisation on?)"
+	h.Privops = func() []string { return []string{kvm} }
+	if m := mediaRow(Subcommands(h, p, "qemu-system-x86_64")); strings.Join(m.Missing, "; ") != kvm {
+		t.Fatalf("media.Missing = %q, want Missing's KVM line once", m.Missing)
 	}
 
 	// No Privops: the microVM is not checked, and nothing goes missing

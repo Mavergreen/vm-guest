@@ -33,6 +33,7 @@ type recordingMediaBuilder struct {
 	buildErr     error
 	describeErr  error
 	preflightErr error
+	validateErr  error
 	digestImg    string
 	digest       media.Digest
 	listing      string
@@ -42,6 +43,12 @@ func (r *recordingMediaBuilder) Build(_ context.Context, esd string, o media.Opt
 	r.calls = append(r.calls, "Build")
 	r.esd, r.opts = esd, o
 	return r.buildPath, r.buildErr
+}
+
+func (r *recordingMediaBuilder) Validate(o media.Options) error {
+	r.calls = append(r.calls, "Validate")
+	r.opts = o
+	return r.validateErr
 }
 
 func (r *recordingMediaBuilder) Preflight() error {
@@ -128,8 +135,8 @@ func TestMediaBuildsWithTheFlagsItWasGiven(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, errb.String())
 	}
-	if !slices.Equal(rec.calls, []string{"Preflight", "Build"}) {
-		t.Fatalf("calls=%v, want Preflight, then Build", rec.calls)
+	if !slices.Equal(rec.calls, []string{"Validate", "Preflight", "Build"}) {
+		t.Fatalf("calls=%v, want Validate, Preflight, then Build", rec.calls)
 	}
 	if rec.esd != esd {
 		t.Fatalf("Build got esd %q, want the adopted %q", rec.esd, esd)
@@ -368,6 +375,36 @@ func TestMediaPrivopsTimeout(t *testing.T) {
 	}
 }
 
+// TestMediaDigestTakesAPrivopsTimeout: the digest is a microVM pass too,
+// and a slow host needs the same bound raised.
+func TestMediaDigestTakesAPrivopsTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want time.Duration
+	}{
+		{[]string{"media", "digest", "--privops-timeout", "45m", "img"}, 45 * time.Minute},
+		{[]string{"media", "--privops-timeout", "2h", "digest", "img"}, 2 * time.Hour},
+		{[]string{"media", "digest", "img"}, privops.DefaultTimeout},
+	} {
+		rec := &recordingMediaBuilder{}
+		stubMediaBuilder(t, rec)
+		e, _, errb, _, _ := mediaFixture(t)
+		if code := Run(context.Background(), tc.args, e); code != 0 {
+			t.Fatalf("%v: code=%d stderr=%s", tc.args, code, errb.String())
+		}
+		be, ok := rec.captured.VM.(privops.Backend)
+		if !ok || be.Timeout != tc.want || rec.digestImg != "img" {
+			t.Fatalf("%v: VM %T timeout %v img %q; want %v", tc.args, rec.captured.VM, be.Timeout, rec.digestImg, tc.want)
+		}
+	}
+	rec := &recordingMediaBuilder{}
+	stubMediaBuilder(t, rec)
+	e, _, errb, _, _ := mediaFixture(t)
+	if code := Run(context.Background(), []string{"media", "digest", "--privops-timeout", "0", "img"}, e); code != 2 || len(rec.calls) != 0 {
+		t.Fatalf("a zero timeout: code=%d calls=%v stderr=%s", code, rec.calls, errb.String())
+	}
+}
+
 func TestMediaHelpBeginsUsage(t *testing.T) {
 	e, out, _ := fetchEnv(map[string]string{})
 	if code := Run(context.Background(), []string{"media", "--help"}, e); code != 0 {
@@ -380,15 +417,34 @@ func TestMediaHelpBeginsUsage(t *testing.T) {
 	}
 }
 
+// fixtureBackend makes cmdMedia's privops backend the real one pointed at
+// root: its kernels in root/boot (empty unless the test puts one there),
+// its modules in root/modules, and its KVM device at root/kvm. Nothing
+// the test's host has -- a readable /boot/vmlinuz-linux, a writable
+// /dev/kvm, root's permissions -- can change what it reports.
+func fixtureBackend(t *testing.T, root string) {
+	t.Helper()
+	orig := newPrivopsBackend
+	newPrivopsBackend = func(r proc.Runner, qemu string, log func(string, ...any)) (privops.Backend, error) {
+		b, err := orig(r, qemu, log)
+		b.BootDir, b.ModulesDir, b.KVMDevice = filepath.Join(root, "boot"), filepath.Join(root, "modules"), filepath.Join(root, "kvm")
+		return b, err
+	}
+	t.Cleanup(func() { newPrivopsBackend = orig })
+}
+
 // TestMediaPreflightsBeforeItFetches: a host that cannot build media
 // hears so, naming everything it lacks, before 5.2 GB is downloaded --
 // the osrecovery server sees no request at all. This is the real
-// builder and the real backend, on a Runner that knows no program.
+// builder and the real backend, on a Runner that knows no program, and
+// on a fixture host with no kernel and no KVM device.
 func TestMediaPreflightsBeforeItFetches(t *testing.T) {
 	asset := []byte("not really Apple's installer")
 	srv, reg := fakeAppleCDN(t, asset)
 	requests := trackRequests(srv)
 	home := t.TempDir()
+	root := t.TempDir()
+	fixtureBackend(t, root)
 	e, out, errb := fetchEnv(map[string]string{"VMAVS_HOME": home, "HOME": t.TempDir()})
 	e.Registry, e.Endpoints, e.Runner = reg, &Endpoints{Recovery: srv.URL}, unameRunner()
 	if code := Run(context.Background(), []string{"media"}, e); code != 1 {
@@ -399,7 +455,9 @@ func TestMediaPreflightsBeforeItFetches(t *testing.T) {
 	}
 	want := []string{"dmg2img (not on PATH)", "mkfs.hfsplus (not on PATH)"}
 	if runtime.GOOS == "linux" {
-		want = append(want, "qemu-system-x86_64 (not on PATH)", "busybox (not on PATH)", "a readable kernel image for 6.1.0-test")
+		want = append(want, "qemu-system-x86_64 (not on PATH)", "busybox (not on PATH)",
+			"a readable kernel image for 6.1.0-test (looked for: "+filepath.Join(root, "boot", "vmlinuz-6.1.0-test"),
+			filepath.Join(root, "kvm")+" does not exist")
 	} else {
 		want = append(want, "the qemu-linux privops backend")
 	}
@@ -416,6 +474,103 @@ func TestMediaPreflightsBeforeItFetches(t *testing.T) {
 	}
 }
 
+// TestMediaWithAnUnusableKVMDeviceFetchesNothing: everything else is
+// there, and the KVM device alone is missing or not writable -- the
+// microVM would fail at -enable-kvm, so the ESD is not fetched.
+func TestMediaWithAnUnusableKVMDeviceFetchesNothing(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the privops backend asks about KVM on Linux only")
+	}
+	for _, tc := range []struct {
+		name, want string
+		make       func(t *testing.T, dev string)
+	}{
+		{"absent", " does not exist (is the kvm module loaded?", func(*testing.T, string) {}},
+		{"not writable", " is not writable by this user (is this user in group kvm?", func(t *testing.T, dev string) {
+			if os.Geteuid() == 0 {
+				t.Skip("root writes a mode-0444 file")
+			}
+			if err := os.WriteFile(dev, nil, 0o444); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			asset := []byte("not really Apple's installer")
+			srv, reg := fakeAppleCDN(t, asset)
+			requests := trackRequests(srv)
+			root := t.TempDir()
+			fixtureBackend(t, root)
+			tc.make(t, filepath.Join(root, "kvm"))
+			if err := os.MkdirAll(filepath.Join(root, "boot"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "boot", "vmlinuz-6.1.0-test"), []byte("kernel"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			r := unameRunner()
+			// busybox names no file here, so its linkage is unknown, which
+			// is not reported: only the KVM device is missing.
+			r.Paths = map[string]string{"qemu-system-x86_64": "/q", "busybox": filepath.Join(root, "busybox"),
+				"dmg2img": "/d", "mkfs.hfsplus": "/m"}
+			e, out, errb := fetchEnv(map[string]string{"VMAVS_HOME": t.TempDir(), "HOME": t.TempDir()})
+			e.Registry, e.Endpoints, e.Runner = reg, &Endpoints{Recovery: srv.URL}, r
+			if code := Run(context.Background(), []string{"media"}, e); code != 1 {
+				t.Fatalf("code=%d stderr=%s", code, errb.String())
+			}
+			if len(*requests) != 0 {
+				t.Fatalf("fetched with no usable KVM device: %v", *requests)
+			}
+			if w := filepath.Join(root, "kvm") + tc.want; !strings.Contains(errb.String(), w) {
+				t.Fatalf("stderr does not name %q:\n%s", w, errb.String())
+			}
+			if strings.Contains(errb.String(), "busybox") || strings.Contains(errb.String(), "kernel image") || out.String() != "" {
+				t.Fatalf("stdout=%q stderr=%s, want the KVM device alone", out.String(), errb.String())
+			}
+		})
+	}
+}
+
+// TestMediaValidatesBeforeItFetches: a package that is not there is
+// refused before the ESD is fetched, by the real builder, in Build's own
+// words.
+func TestMediaValidatesBeforeItFetches(t *testing.T) {
+	asset := []byte("not really Apple's installer")
+	srv, reg := fakeAppleCDN(t, asset)
+	requests := trackRequests(srv)
+	fixtureBackend(t, t.TempDir())
+	home := t.TempDir()
+	e, out, errb := fetchEnv(map[string]string{"VMAVS_HOME": home, "HOME": t.TempDir()})
+	e.Registry, e.Endpoints, e.Runner = reg, &Endpoints{Recovery: srv.URL}, unameRunner()
+	pkg := filepath.Join(t.TempDir(), "nonexistent.pkg")
+	if code := Run(context.Background(), []string{"media", "--firstboot-pkg", pkg}, e); code != 1 {
+		t.Fatalf("code=%d stderr=%s", code, errb.String())
+	}
+	if len(*requests) != 0 {
+		t.Fatalf("fetched before validating: %v", *requests)
+	}
+	if want := "no first-boot package at " + pkg; !strings.Contains(errb.String(), want) || out.String() != "" {
+		t.Fatalf("stdout=%q stderr=%s, want %q", out.String(), errb.String(), want)
+	}
+	if _, err := os.Stat(filepath.Join(home, "cache")); err == nil {
+		t.Fatal("a cache was made: something was fetched")
+	}
+}
+
+// TestMediaAFailedValidationStopsTheBuild: with the builder stubbed, a
+// refused option is the command's error, and nothing follows it.
+func TestMediaAFailedValidationStopsTheBuild(t *testing.T) {
+	rec := &recordingMediaBuilder{validateErr: errors.New("no such --extra-pkg: /x.pkg")}
+	stubMediaBuilder(t, rec)
+	e, _, errb, _, _ := mediaFixture(t)
+	if code := Run(context.Background(), []string{"media", "--extra-pkg", "/x.pkg"}, e); code != 1 {
+		t.Fatalf("code=%d", code)
+	}
+	if !slices.Equal(rec.calls, []string{"Validate"}) || !strings.Contains(errb.String(), "no such --extra-pkg: /x.pkg") {
+		t.Fatalf("calls=%v stderr=%s", rec.calls, errb.String())
+	}
+}
+
 // TestMediaAFailedPreflightStopsTheBuild: with the builder stubbed, a
 // preflight refusal is the command's error, and neither Build nor a fetch
 // follows.
@@ -426,7 +581,7 @@ func TestMediaAFailedPreflightStopsTheBuild(t *testing.T) {
 	if code := Run(context.Background(), []string{"media"}, e); code != 1 {
 		t.Fatalf("code=%d", code)
 	}
-	if !slices.Equal(rec.calls, []string{"Preflight"}) || !strings.Contains(errb.String(), "dmg2img (not on PATH)") {
+	if !slices.Equal(rec.calls, []string{"Validate", "Preflight"}) || !strings.Contains(errb.String(), "dmg2img (not on PATH)") {
 		t.Fatalf("calls=%v stderr=%s", rec.calls, errb.String())
 	}
 	if strings.Contains(errb.String(), "adopted") {

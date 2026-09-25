@@ -18,7 +18,7 @@ import (
 const mediaHelp = `usage: vmavs media [--autoinstall] [--firstboot-pkg PATH] [--extra-pkg PATH]...
                   [--extra-space-mib N] [--force] [--keep-work] [--describe]
                   [--privops-timeout DURATION]
-       vmavs media digest [--list] IMAGE
+       vmavs media digest [--list] [--privops-timeout DURATION] IMAGE
 
 Build the installer media: a GPT disk image with one HFS+ volume, "OS X
 Base System", holding what a Mac's own installer USB stick holds --
@@ -29,11 +29,13 @@ with a .sha256 sidecar beside it, and its path is printed on stdout;
 progress goes to stderr. The scratch, several gigabytes of raw
 conversions, goes in $VMAVS_HOME/work/media/.
 
-It first checks that this host can build media at all -- dmg2img,
-mkfs.hfsplus and the privops microVM's requirements, as 'vmavs doctor'
-reports them -- and only then fetches and verifies the ESD, as
-'vmavs fetch esd' does, adopting the shell tree's download
-(media/InstallESD.dmg) where it can. dmg2img converts it here, mkfs.hfsplus makes the empty volume, and every
+It first checks the packages the flags name, and that this host can
+build media at all -- dmg2img, mkfs.hfsplus and the privops microVM's
+requirements, a writable /dev/kvm among them, as 'vmavs doctor' reports
+them -- and only then fetches and verifies the ESD, as 'vmavs fetch esd'
+does, adopting the shell tree's download (media/InstallESD.dmg) where it
+can.
+dmg2img converts it here, mkfs.hfsplus makes the empty volume, and every
 read and write of an HFS+ volume happens in the privops microVM -- the
 host's own kernel and a static busybox, booted under QEMU with the images
 as its disks, where the build is root and the host is not -- in four
@@ -72,12 +74,13 @@ vmavs media digest IMAGE prints what is ON an image as one checksum --
 the sha256 of a sorted "<sha256>  <path>" list, one line per file -- which
 two builds of the same ESD agree on though their images' own checksums
 never will. The image is read, read-only, in the microVM. --list prints
-the per-file list first.
+the per-file list first; --privops-timeout bounds the microVM here too.
 `
 
 // mediaBuilder is what cmdMedia needs of *media.Builder: the one seam a
 // test replaces, to record what cmdMedia asked for without building.
 type mediaBuilder interface {
+	Validate(o media.Options) error
 	Preflight() error
 	Build(ctx context.Context, esd string, o media.Options) (string, error)
 	Describe(w io.Writer, esd string, o media.Options) error
@@ -85,6 +88,10 @@ type mediaBuilder interface {
 }
 
 var newMediaBuilder = func(b *media.Builder) mediaBuilder { return b }
+
+// newPrivopsBackend is privops.NewBackend: the other seam, through which a
+// test points the real backend at a fixture host's kernels and KVM device.
+var newPrivopsBackend = privops.NewBackend
 
 // pathList is a package flag's values, in the order given: every
 // --extra-pkg, and --firstboot-pkg, of which the last one given counts,
@@ -148,25 +155,25 @@ func cmdMedia(ctx context.Context, e *Env, args []string) error {
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
 
+	if *timeout <= 0 {
+		return usagef("--privops-timeout wants a positive duration, such as 30m, not %v", *timeout)
+	}
 	if len(targets) > 0 {
 		if targets[0] != "digest" {
 			return usagef("unknown media action %q: the one action is digest", targets[0])
 		}
-		for _, n := range []string{"autoinstall", "firstboot-pkg", "extra-pkg", "extra-space-mib", "force", "keep-work", "describe", "privops-timeout"} {
+		for _, n := range []string{"autoinstall", "firstboot-pkg", "extra-pkg", "extra-space-mib", "force", "keep-work", "describe"} {
 			if set[n] {
-				return usagef("--%s does not go with digest, which takes only --list", n)
+				return usagef("--%s does not go with digest, which takes only --list and --privops-timeout", n)
 			}
 		}
 		if len(targets) != 2 {
 			return usagef("digest takes one IMAGE")
 		}
-		return mediaDigest(ctx, e, targets[1], *list)
+		return mediaDigest(ctx, e, targets[1], *list, *timeout)
 	}
 	if *list {
 		return usagef("--list goes with digest only")
-	}
-	if *timeout <= 0 {
-		return usagef("--privops-timeout wants a positive duration, such as 30m, not %v", *timeout)
 	}
 
 	p, err := paths(e)
@@ -212,8 +219,12 @@ func cmdMedia(ctx context.Context, e *Env, args []string) error {
 		return err
 	}
 	mb := newMediaBuilder(b)
-	// Before the fetch: a host that cannot build media must not download
-	// 5.2 GB to find that out. Build asks again, as it always does.
+	// Before the fetch: a missing package, or a host that cannot build
+	// media, must not cost a 5.2 GB download to find out. Build asks both
+	// again, as it always does.
+	if err := mb.Validate(o); err != nil {
+		return err
+	}
 	if err := mb.Preflight(); err != nil {
 		return err
 	}
@@ -222,8 +233,10 @@ func cmdMedia(ctx context.Context, e *Env, args []string) error {
 		return err
 	}
 	out, err := mb.Build(ctx, esd, o)
-	// A path with an error is media in place without its sidecar: the
-	// output exists, so it is printed, and the error still fails this.
+	// A path with an error is media in place that something went wrong
+	// after: its sidecar could not be put beside it, or the build lock
+	// could not be released. The output exists, so it is printed, and the
+	// error still fails this.
 	if out != "" {
 		fmt.Fprintln(e.Stdout, out)
 	}
@@ -233,7 +246,7 @@ func cmdMedia(ctx context.Context, e *Env, args []string) error {
 // mediaBackend is the privops microVM on this host, bounded per pass by
 // timeout.
 func mediaBackend(e *Env, timeout time.Duration) (privops.Backend, error) {
-	be, err := privops.NewBackend(runner(e), config.QEMU(e.Getenv), func(f string, a ...any) { logf(e, "media", f, a...) })
+	be, err := newPrivopsBackend(runner(e), config.QEMU(e.Getenv), func(f string, a ...any) { logf(e, "media", f, a...) })
 	if err != nil {
 		return be, err
 	}
@@ -241,12 +254,12 @@ func mediaBackend(e *Env, timeout time.Duration) (privops.Backend, error) {
 	return be, nil
 }
 
-func mediaDigest(ctx context.Context, e *Env, img string, list bool) error {
+func mediaDigest(ctx context.Context, e *Env, img string, list bool, timeout time.Duration) error {
 	p, err := paths(e)
 	if err != nil {
 		return err
 	}
-	be, err := mediaBackend(e, privops.DefaultTimeout)
+	be, err := mediaBackend(e, timeout)
 	if err != nil {
 		return err
 	}

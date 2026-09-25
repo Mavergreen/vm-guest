@@ -137,14 +137,11 @@ func Subcommands(h Host, p config.Paths, qemu string) []Readiness {
 			med.Missing = append(med.Missing, t)
 		}
 	}
+	// The microVM's own requirements, a writable KVM device among them,
+	// are what the backend's Missing says: the same lines Build refuses
+	// with, asked nowhere else.
 	if h.Privops != nil {
 		med.Missing = append(med.Missing, h.Privops()...)
-		// The microVM boots with -enable-kvm, which Missing does not ask
-		// about. Off Linux, Missing has already said the backend cannot
-		// run at all.
-		if h.GOOS == "linux" && !h.Writable("/dev/kvm") {
-			med.Missing = append(med.Missing, "a writable /dev/kvm (the privops microVM runs under KVM)")
-		}
 	}
 
 	run := Readiness{Subcommand: "run"}
